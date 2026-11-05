@@ -290,6 +290,92 @@ func TestCompetitiveWinnerTakeAll(t *testing.T) {
 	}
 }
 
+// TestAutoSettleCompetitiveDoesNotPickWinner advances the clock past review_deadline.
+// review_hours is 1 so the test does not sleep the default 72h. The rule is the same
+// one the background worker uses: winner_take_all with more than one submission stays
+// in_review until the publisher confirms a submission_id.
+func TestAutoSettleCompetitiveDoesNotPickWinner(t *testing.T) {
+	ctx := context.Background()
+	eng, st, clk := newEngine(t, 1_000_000)
+	req := exclusiveReq(clk)
+	req.Kind = model.KindCompetitive
+	req.Acceptance.ReviewHours = 1
+	req.Competitive = &types.Competitive{Slots: 2}
+	created, err := eng.CreateTask(ctx, "usr_publisher", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.FundTask(ctx, "usr_publisher", &types.FundTaskReq{TaskId: created.Id}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.AcceptTask(ctx, "usr_executor", &types.AcceptTaskReq{TaskId: created.Id}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.AcceptTask(ctx, "usr_executor_2", &types.AcceptTaskReq{TaskId: created.Id}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.SubmitTask(ctx, "usr_executor", &types.SubmitTaskReq{TaskId: created.Id, Payload: map[string]any{"v": 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.SubmitTask(ctx, "usr_executor_2", &types.SubmitTaskReq{TaskId: created.Id, Payload: map[string]any{"v": 2}}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := eng.AutoSettleDue(ctx); err != nil || n != 0 {
+		t.Fatalf("before deadline n=%d err=%v", n, err)
+	}
+	clk.t = clk.t.Add(2 * time.Hour)
+	n, err := eng.AutoSettleDue(ctx)
+	if err != nil || n != 0 {
+		t.Fatalf("auto n=%d err=%v", n, err)
+	}
+	got, err := eng.GetTask(ctx, created.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != model.StatusInReview || got.WinningSubmissionId != nil || got.Escrow == nil || got.Escrow.Held != 500 {
+		t.Fatalf("auto changed the task: status=%s win=%v escrow=%+v", got.Status, got.WinningSubmissionId, got.Escrow)
+	}
+	for _, entry := range got.Escrow.Entries {
+		if entry.Type == model.EscrowRelease || entry.Type == model.EscrowRefund {
+			t.Fatalf("auto moved escrow: %+v", entry)
+		}
+	}
+	if n, err := eng.AutoSettleDue(ctx); err != nil || n != 0 {
+		t.Fatalf("second auto n=%d err=%v", n, err)
+	}
+	first, _ := st.Users().Get(ctx, "usr_executor")
+	second, _ := st.Users().Get(ctx, "usr_executor_2")
+	if first.Balance != 1_000_000 || second.Balance != 1_000_000 || first.Ability != 0 || second.Ability != 0 {
+		t.Fatalf("auto paid someone: %+v %+v", first, second)
+	}
+
+	subs, err := st.Submissions().ListByTask(ctx, created.Id)
+	if err != nil || len(subs) != 2 {
+		t.Fatal(err)
+	}
+	winner := ""
+	for _, s := range subs {
+		if s.ExecutorID == "usr_executor_2" {
+			winner = s.ID
+		}
+	}
+	if winner == "" {
+		t.Fatal("missing executor 2 submission")
+	}
+	settled, err := eng.ConfirmTask(ctx, "usr_publisher", &types.ConfirmTaskReq{TaskId: created.Id, SubmissionId: winner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled.Status != model.StatusSettled || settled.WinningSubmissionId == nil || *settled.WinningSubmissionId != winner || settled.Escrow.Held != 0 {
+		t.Fatalf("explicit confirm %+v", settled)
+	}
+	second, _ = st.Users().Get(ctx, "usr_executor_2")
+	first, _ = st.Users().Get(ctx, "usr_executor")
+	if second.Balance != 1_000_500 || second.Ability != 10 || first.Balance != 1_000_000 || first.Ability != 0 {
+		t.Fatalf("after confirm winner %+v loser %+v", second, first)
+	}
+}
+
 func TestAutoSettleExclusive(t *testing.T) {
 	ctx := context.Background()
 	eng, _, clk := newEngine(t, 1_000_000)

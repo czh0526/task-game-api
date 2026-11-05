@@ -23,18 +23,46 @@ Mint a dev JWT with `make token` (subject defaults to `usr_publisher`).
 
 ## 运行
 
-需要 Go 1.26（见 `go.mod`）以及 `python3`（`scripts/smoke.sh` 用来读 JSON）。
+需要 Go 1.26（见 `go.mod`）、`python3`（`scripts/smoke.sh` 用来读 JSON）和 `curl`。不需要 C 编译器：SQLite 驱动是 `modernc.org/sqlite`。下面的命令都在仓库根目录执行。
 
 ```bash
 go mod tidy
 CGO_ENABLED=0 go test ./...
 CGO_ENABLED=0 go build ./...
-go run . -f etc/taskgame.yaml
+CGO_ENABLED=0 go run . -f etc/taskgame.yaml
 ```
 
-进程监听 `http://0.0.0.0:8891`。探活是 `GET /health`。业务路径都在 `/v1` 下。SQLite 文件是 `data/taskgame.db`（已在 `.gitignore` 中）。
+`Makefile` 会导出 `CGO_ENABLED=0`（也可在命令行覆盖），所以等价于：
 
-另开一个终端跑独占任务的成功路径（创建 → 注资 → 接受 → 提交 → 确认，最终 `settled`）：
+```bash
+make tidy
+make test
+make build
+make run
+```
+
+进程监听 `http://0.0.0.0:8891`。探活是 `GET /health`（响应 `{"status":"ok"}`）。业务路径都在 `/v1` 下。SQLite 文件是 `data/taskgame.db`（已在 `.gitignore` 中），目录会在启动时创建。
+
+开发用的静态密钥在 `etc/taskgame.yaml` 的 `Auth.ApiKeys`：
+
+| Header | User |
+| --- | --- |
+| `X-Api-Key: dev-publisher-key` | `usr_publisher` |
+| `X-Api-Key: dev-executor-key` | `usr_executor` |
+
+额外用户用 HS256 JWT，密钥是同一个文件里的 `Auth.JwtSecret`（至少 16 个字符）。`sub` 就是用户 id：
+
+```bash
+make token
+# 指定 subject。USER_ID 缺省是 usr_publisher
+make token USER_ID=usr_executor
+# 或
+CGO_ENABLED=0 go run ./cmd/token -f etc/taskgame.yaml -user usr_executor
+```
+
+请求头写成 `Authorization: Bearer <token>`。冒烟脚本会自己为每轮新的执行者签发 JWT，所以正在跑的进程必须使用同一份 `Auth.JwtSecret`。
+
+另开一个终端，对已经在听的服务跑三种任务（独占、竞争 `winner_take_all`、协作 `on_dropout=replace`）：
 
 ```bash
 bash scripts/smoke.sh
@@ -42,14 +70,33 @@ bash scripts/smoke.sh
 make smoke
 ```
 
-`scripts/smoke.sh` 默认请求 `http://127.0.0.1:8891`。可用环境变量 `BASE`、`PUB_KEY`、`EXE_KEY` 覆盖。
+`scripts/smoke.sh` 默认请求 `http://127.0.0.1:8891`。可用环境变量覆盖：
+
+| 变量 | 默认 | 作用 |
+| --- | --- | --- |
+| `BASE` | `http://127.0.0.1:8891` | 服务地址 |
+| `PUB_KEY` | `dev-publisher-key` | 发布者 `X-Api-Key` |
+| `EXE_KEY` | `dev-executor-key` | 独占路径的执行者 `X-Api-Key` |
+| `CONFIG` | `etc/taskgame.yaml` | 给额外执行者签 JWT；须与服务的 `Auth.JwtSecret` 一致 |
+
+三条路径：
+
+1. **exclusive**：创建 → 注资 → 接受 → 提交 → 确认 → `settled`。同时检查幂等重放、积分、webhook 和 chat。
+2. **competitive**（`settlement_rule=winner_take_all`）：两个执行者都接受并提交。不带 `submission_id` 的确认返回 400，任务保持 `in_review`，托管不动。v0.1 的任务体不列出提交；这条 400 的 `message` 会按 `created_at` 顺序列出 submission id（`Webhook.Mode=post` 时，`task.submitted` 事件里还有 `executor_id`）。再带选定的 `submission_id` 确认后，只有赢家拿到全部托管，任务 `settled`，输家能力分为 0。
+3. **collaborative**（`on_dropout=replace`）：两个席位的 `share_bps` 使用接口已经要求的合计 10000（这里是 6000 与 4000）。坐满后一人退出：佣金 0、能力分 0，该席位回到 `open`，另一席位仍是 `filled`，任务保持 `active`。替补入席、提交、确认后按该 bps 结算（500 积分分成 300 与 200，退出者拿不到 release）。
+
+72 小时自动结算不会替多份提交的竞争任务猜赢家。冒烟不等待 72 小时。同一条规则由单元测试拨钟覆盖（`review_hours` 设为 1，只为越过截止时间，不改变规则）：
+
+```bash
+CGO_ENABLED=0 go test ./internal/engine -run 'TestAutoSettleCompetitiveDoesNotPickWinner|TestAutoSettleExclusive'
+```
 
 配置项在 `etc/taskgame.yaml`：
 
 - `Auth.JwtSecret`：HS256 密钥，至少 16 个字符
 - `Auth.ApiKeys`：静态 `X-Api-Key` → 用户 id
 - `Store.DSN`：modernc SQLite DSN
-- `Escrow.InitialBalance`：用户第一次出现时记入的模拟积分
+- `Escrow.InitialBalance`：用户第一次出现时记入的模拟积分（开发配置是 1000000）
 - `Webhook.Mode`：`log` 只记录签名，不发 HTTP；`post` 才真正 POST
 - `AutoSettle`：到 `review_deadline` 后自动结算。竞争任务如果有多份提交，不会猜赢家，保持 `in_review`
 
@@ -57,18 +104,46 @@ make smoke
 
 ## Run
 
-Requires Go 1.26 (see `go.mod`) and `python3` (the smoke script reads JSON with it).
+Requires Go 1.26 (see `go.mod`), `python3` (the smoke script reads JSON with it), and `curl`. No C compiler: the SQLite driver is `modernc.org/sqlite`. Run the commands below from the repository root.
 
 ```bash
 go mod tidy
 CGO_ENABLED=0 go test ./...
 CGO_ENABLED=0 go build ./...
-go run . -f etc/taskgame.yaml
+CGO_ENABLED=0 go run . -f etc/taskgame.yaml
 ```
 
-The process listens on `http://0.0.0.0:8891`. Liveness is `GET /health`. Protocol routes are under `/v1`. The SQLite file is `data/taskgame.db` (gitignored).
+The `Makefile` exports `CGO_ENABLED=0` (override it from the environment or the command line), so the same steps are:
 
-In another shell, run the exclusive happy path (create → fund → accept → submit → confirm, ending `settled`):
+```bash
+make tidy
+make test
+make build
+make run
+```
+
+The process listens on `http://0.0.0.0:8891`. Liveness is `GET /health` (`{"status":"ok"}`). Protocol routes are under `/v1`. The SQLite file is `data/taskgame.db` (gitignored); the directory is created on startup.
+
+Development keys live in `etc/taskgame.yaml` under `Auth.ApiKeys`:
+
+| Header | User |
+| --- | --- |
+| `X-Api-Key: dev-publisher-key` | `usr_publisher` |
+| `X-Api-Key: dev-executor-key` | `usr_executor` |
+
+Mint an HS256 JWT for any other user with the same file's `Auth.JwtSecret` (at least 16 characters). `sub` is the user id:
+
+```bash
+make token
+# USER_ID defaults to usr_publisher
+make token USER_ID=usr_executor
+# or
+CGO_ENABLED=0 go run ./cmd/token -f etc/taskgame.yaml -user usr_executor
+```
+
+Send `Authorization: Bearer <token>`. The smoke script mints a fresh JWT per extra executor, so the running process must be using that same `Auth.JwtSecret`.
+
+In another shell, exercise all three kinds against the listening server (exclusive, competitive `winner_take_all`, collaborative `on_dropout=replace`):
 
 ```bash
 bash scripts/smoke.sh
@@ -76,14 +151,33 @@ bash scripts/smoke.sh
 make smoke
 ```
 
-`scripts/smoke.sh` calls `http://127.0.0.1:8891` unless `BASE`, `PUB_KEY`, or `EXE_KEY` is set.
+`scripts/smoke.sh` calls `http://127.0.0.1:8891` unless you override:
+
+| Variable | Default | Role |
+| --- | --- | --- |
+| `BASE` | `http://127.0.0.1:8891` | Server URL |
+| `PUB_KEY` | `dev-publisher-key` | Publisher `X-Api-Key` |
+| `EXE_KEY` | `dev-executor-key` | Executor `X-Api-Key` for the exclusive path |
+| `CONFIG` | `etc/taskgame.yaml` | Signs JWTs; must share `Auth.JwtSecret` with the server |
+
+The three paths:
+
+1. **exclusive**: create → fund → accept → submit → confirm → `settled`, plus the idempotency replay, scores, webhook, and chat calls.
+2. **competitive** (`settlement_rule=winner_take_all`): two executors accept and submit. Confirm without `submission_id` returns 400 and leaves the task `in_review` with the escrow untouched. v0.1 task bodies do not list submissions; that 400 `message` names the submission ids in `created_at` order (`task.submitted` webhooks also include `executor_id` when `Webhook.Mode=post`). Confirm with the chosen `submission_id` pays the whole escrow to that winner, settles the task, and leaves the loser at ability 0.
+3. **collaborative** (`on_dropout=replace`): two seats use the share the API already requires (`share_bps` sums to 10000; this run uses 6000 and 4000). After both seats are filled, one participant drops out: 0 commission, 0 ability, that seat returns to `open`, the other seat stays `filled`, and the task stays `active`. The replacement takes the seat, the work is submitted and confirmed, and settlement follows those basis points (500 credits split 300 / 200; the exitee gets no release).
+
+The 72h auto-settle path does not pick a winner for a competitive task that has more than one submission. The smoke script does not sleep 72h. The same rule is covered by moving the clock in a unit test (`review_hours` is 1 only so the deadline can pass; the rule is unchanged):
+
+```bash
+CGO_ENABLED=0 go test ./internal/engine -run 'TestAutoSettleCompetitiveDoesNotPickWinner|TestAutoSettleExclusive'
+```
 
 `etc/taskgame.yaml` holds:
 
 - `Auth.JwtSecret`: HS256 secret, at least 16 characters
 - `Auth.ApiKeys`: static `X-Api-Key` to user id
 - `Store.DSN`: modernc SQLite DSN
-- `Escrow.InitialBalance`: simulated credits granted the first time a user is seen
+- `Escrow.InitialBalance`: simulated credits granted the first time a user is seen (1000000 in the dev file)
 - `Webhook.Mode`: `log` records the signature and does not POST; `post` delivers HTTP
 - `AutoSettle`: settles when `review_deadline` passes. A competitive task with more than one submission stays `in_review` (winner-take-all does not guess)
 
@@ -149,7 +243,7 @@ internal/engine              状态机、托管账本、幂等 / FSM, escrow, id
 internal/store               Store 接口；sqlite 实现 / interface and sqlite impl
 internal/webhook             签名与投递 / sign and deliver
 internal/model               持久化记录 / persistence records
-scripts/smoke.sh             独占任务成功路径 / exclusive happy path
+scripts/smoke.sh             三种任务的端到端冒烟 / smoke for all three kinds
 ```
 
 换 Postgres 时实现同一个 `store.Store`，handler 不用改。SQLite 的 JSON 列是 TEXT，schema 注释里标了对应的 jsonb。
