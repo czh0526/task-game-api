@@ -1,0 +1,270 @@
+syntax = "v1"
+
+info (
+	title:   "Task Game Open Protocol"
+	desc:    "v0.1 HTTP API. Source for goctl. Contract: api/openapi.yaml."
+	author:  "taskgame"
+	version: "0.1.0"
+)
+
+type (
+	HealthResp {
+		Status string `json:"status"`
+	}
+	ListTasksReq {
+		Status         string `form:"status,optional,options=draft|open|active|in_review|disputed|settled|cancelled"`
+		Kind           string `form:"kind,optional,options=exclusive|competitive|collaborative"`
+		Limit          int64  `form:"limit,optional"`
+		Cursor         string `form:"cursor,optional"`
+		IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
+	}
+	TaskList {
+		Items      []Task  `json:"items"`
+		NextCursor *string `json:"next_cursor,optional"`
+	}
+	Payment {
+		Mode       string      `json:"mode,options=one_shot|milestone"`
+		Amount     int64       `json:"amount"`
+		Milestones []Milestone `json:"milestones,optional,omitempty"`
+		Conditions []string    `json:"conditions,optional,omitempty"`
+	}
+	Milestone {
+		Id        string `json:"id"`
+		Amount    int64  `json:"amount"`
+		Condition string `json:"condition"`
+		Status    string `json:"status,optional,options=pending|submitted|released|disputed"`
+	}
+	Acceptance {
+		Deadline    string   `json:"deadline"`
+		Quality     string   `json:"quality"`
+		Constraints []string `json:"constraints,optional,omitempty"`
+		ReviewHours int64    `json:"review_hours,optional"`
+	}
+	AssigneePolicy {
+		Type       string   `json:"type,options=specific|criteria|open"`
+		UserIds    []string `json:"user_ids,optional,omitempty"`
+		MinAbility *int64   `json:"min_ability,optional,omitempty"`
+	}
+	Competitive {
+		Slots          int64  `json:"slots"`
+		SettlementRule string `json:"settlement_rule,optional,options=winner_take_all"`
+	}
+	CollaborativeRole {
+		Id             string  `json:"id"`
+		Name           string  `json:"name"`
+		ShareBps       int64   `json:"share_bps"`
+		AssigneeUserId *string `json:"assignee_user_id,optional"`
+		Status         string  `json:"status,optional,options=open|filled|dropped"`
+	}
+	Collaborative {
+		Roles     []CollaborativeRole `json:"roles"`
+		OnDropout string              `json:"on_dropout,optional,options=replace"`
+	}
+	CreateTaskReq {
+		IdempotencyKey string         `header:"Idempotency-Key,optional" json:"-"`
+		Kind           string         `json:"kind,options=exclusive|competitive|collaborative"`
+		Title          string         `json:"title"`
+		Description    string         `json:"description"`
+		Payment        Payment        `json:"payment"`
+		Acceptance     Acceptance     `json:"acceptance"`
+		AssigneePolicy AssigneePolicy `json:"assignee_policy"`
+		Competitive    *Competitive   `json:"competitive,optional,omitempty"`
+		Collaborative  *Collaborative `json:"collaborative,optional,omitempty"`
+	}
+	EscrowEntry {
+		Id        string `json:"id"`
+		Type      string `json:"type"`
+		Amount    int64  `json:"amount"`
+		ToUserId  string `json:"to_user_id,optional,omitempty"`
+		CreatedAt string `json:"created_at"`
+	}
+	EscrowAccount {
+		Id       string        `json:"id"`
+		Held     int64         `json:"held"`
+		Currency string        `json:"currency"`
+		Entries  []EscrowEntry `json:"entries"`
+	}
+	Task {
+		Kind                string         `json:"kind"`
+		Title               string         `json:"title"`
+		Description         string         `json:"description"`
+		Payment             Payment        `json:"payment"`
+		Acceptance          Acceptance     `json:"acceptance"`
+		AssigneePolicy      AssigneePolicy `json:"assignee_policy"`
+		Competitive         *Competitive   `json:"competitive,optional,omitempty"`
+		Collaborative       *Collaborative `json:"collaborative,optional,omitempty"`
+		Id                  string         `json:"id"`
+		Status              string         `json:"status"`
+		PublisherId         string         `json:"publisher_id"`
+		ExecutorIds         []string       `json:"executor_ids"`
+		WinningSubmissionId *string        `json:"winning_submission_id,optional"`
+		ReviewDeadline      *string        `json:"review_deadline,optional"`
+		Escrow              *EscrowAccount `json:"escrow,optional,omitempty"`
+		CreatedAt           string         `json:"created_at"`
+		UpdatedAt           string         `json:"updated_at"`
+	}
+	GetTaskReq {
+		TaskId string `path:"taskId" json:"-"`
+	}
+	FundTaskReq {
+		TaskId         string `path:"taskId" json:"-"`
+		IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
+	}
+	AcceptTaskReq {
+		TaskId         string `path:"taskId" json:"-"`
+		IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
+		RoleId         string `json:"role_id,optional"`
+	}
+	SubmitTaskReq {
+		TaskId         string                 `path:"taskId" json:"-"`
+		IdempotencyKey string                 `header:"Idempotency-Key,optional" json:"-"`
+		MilestoneId    string                 `json:"milestone_id,optional"`
+		Payload        map[string]interface{} `json:"payload"`
+		Note           string                 `json:"note,optional,omitempty"`
+	}
+	ConfirmTaskReq {
+		TaskId         string `path:"taskId" json:"-"`
+		IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
+		SubmissionId   string `json:"submission_id,optional"`
+		MilestoneId    string `json:"milestone_id,optional"`
+	}
+	DisputeTaskReq {
+		TaskId         string `path:"taskId" json:"-"`
+		IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
+		Reason         string `json:"reason"`
+	}
+	DropoutTaskReq {
+		TaskId         string `path:"taskId" json:"-"`
+		IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
+	}
+	CreateWebhookReq {
+		IdempotencyKey string   `header:"Idempotency-Key,optional" json:"-"`
+		Url            string   `json:"url"`
+		Secret         string   `json:"secret"`
+		Events         []string `json:"events"`
+	}
+	Webhook {
+		Url       string   `json:"url"`
+		Secret    string   `json:"secret"`
+		Events    []string `json:"events"`
+		Id        string   `json:"id"`
+		CreatedAt string   `json:"created_at"`
+	}
+	CreateChatReq {
+		IdempotencyKey string   `header:"Idempotency-Key,optional" json:"-"`
+		MemberIds      []string `json:"member_ids"`
+	}
+	Chat {
+		Id        string   `json:"id"`
+		TaskId    *string  `json:"task_id,optional"`
+		MemberIds []string `json:"member_ids"`
+	}
+	PostMessageReq {
+		ChatId         string `path:"chatId" json:"-"`
+		IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
+		Type           string `json:"type,options=text|attachment_ref"`
+		Text           string `json:"text,optional,omitempty"`
+		AttachmentRef  string `json:"attachment_ref,optional,omitempty"`
+	}
+	Message {
+		Type          string `json:"type"`
+		Text          string `json:"text,optional,omitempty"`
+		AttachmentRef string `json:"attachment_ref,optional,omitempty"`
+		Id            string `json:"id"`
+		ChatId        string `json:"chat_id"`
+		SenderId      string `json:"sender_id"`
+		CreatedAt     string `json:"created_at"`
+	}
+	GetUserScoresReq {
+		UserId string `path:"userId" json:"-"`
+	}
+	ScoreChange {
+		DeltaIntegrity int64  `json:"delta_integrity"`
+		DeltaAbility   int64  `json:"delta_ability"`
+		Reason         string `json:"reason"`
+		TaskId         string `json:"task_id,optional,omitempty"`
+		CreatedAt      string `json:"created_at"`
+	}
+	UserScores {
+		UserId    string        `json:"user_id"`
+		Integrity int64         `json:"integrity"`
+		Ability   int64         `json:"ability"`
+		Recent    []ScoreChange `json:"recent"`
+	}
+)
+
+@server (
+	group: health
+)
+service taskgame {
+	@handler health
+	get /health returns (HealthResp)
+}
+
+@server (
+	prefix:     /v1
+	group:      task
+	middleware: Auth
+)
+service taskgame {
+	@handler listTasks
+	get /tasks (ListTasksReq) returns (TaskList)
+
+	@handler createTask
+	post /tasks (CreateTaskReq) returns (Task)
+
+	@handler getTask
+	get /tasks/:taskId (GetTaskReq) returns (Task)
+
+	@handler fundTask
+	post /tasks/:taskId/fund (FundTaskReq) returns (Task)
+
+	@handler acceptTask
+	post /tasks/:taskId/accept (AcceptTaskReq) returns (Task)
+
+	@handler submitTask
+	post /tasks/:taskId/submit (SubmitTaskReq) returns (Task)
+
+	@handler confirmTask
+	post /tasks/:taskId/confirm (ConfirmTaskReq) returns (Task)
+
+	@handler disputeTask
+	post /tasks/:taskId/dispute (DisputeTaskReq) returns (Task)
+
+	@handler dropoutTask
+	post /tasks/:taskId/dropout (DropoutTaskReq) returns (Task)
+}
+
+@server (
+	prefix:     /v1
+	group:      webhook
+	middleware: Auth
+)
+service taskgame {
+	@handler createWebhook
+	post /webhooks (CreateWebhookReq) returns (Webhook)
+}
+
+@server (
+	prefix:     /v1
+	group:      chat
+	middleware: Auth
+)
+service taskgame {
+	@handler createChat
+	post /chats (CreateChatReq) returns (Chat)
+
+	@handler postMessage
+	post /chats/:chatId/messages (PostMessageReq) returns (Message)
+}
+
+@server (
+	prefix:     /v1
+	group:      user
+	middleware: Auth
+)
+service taskgame {
+	@handler getUserScores
+	get /users/:userId/scores (GetUserScoresReq) returns (UserScores)
+}
+

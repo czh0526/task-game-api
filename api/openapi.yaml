@@ -1,0 +1,573 @@
+openapi: 3.1.0
+info:
+  title: Task Game Open Protocol
+  version: 0.1.0
+  summary: Multiplayer shared-task marketplace API (simulated escrow first)
+  description: |
+    Locked assumptions (v0.1):
+    - Simulated escrow (credits); real money later without changing task FSM
+    - Acceptance: executor submit → publisher confirm; default 72h auto-settle; dispute freezes funds
+    - Task kinds: exclusive | competitive | collaborative
+    - competitive.settlement_rule = winner_take_all
+    - collaborative.on_dropout = replace (dropout gets 0 commission, 0 ability score)
+    - API / Webhook first; no UI required for third parties
+servers:
+  - url: https://api.example.com/v1
+security:
+  - bearerAuth: []
+  - apiKeyAuth: []
+tags:
+  - name: Tasks
+  - name: Escrow
+  - name: Webhooks
+  - name: Chats
+  - name: Users
+paths:
+  /tasks:
+    get:
+      tags: [Tasks]
+      summary: List / filter tasks
+      operationId: listTasks
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/TaskStatus'
+        - name: kind
+          in: query
+          schema:
+            $ref: '#/components/schemas/TaskKind'
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: cursor
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Task page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskList'
+    post:
+      tags: [Tasks]
+      summary: Create task (draft)
+      operationId: createTask
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskCreate'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+  /tasks/{taskId}:
+    get:
+      tags: [Tasks]
+      summary: Get task
+      operationId: getTask
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+      responses:
+        '200':
+          description: Task
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+  /tasks/{taskId}/fund:
+    post:
+      tags: [Tasks, Escrow]
+      summary: Simulate escrow hold → status open
+      operationId: fundTask
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Funded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+  /tasks/{taskId}/accept:
+    post:
+      tags: [Tasks]
+      summary: Executor accepts task → active
+      operationId: acceptTask
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                role_id:
+                  type: string
+                  description: Required for collaborative role seat
+      responses:
+        '200':
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+  /tasks/{taskId}/submit:
+    post:
+      tags: [Tasks]
+      summary: Submit delivery → in_review
+      operationId: submitTask
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmissionCreate'
+      responses:
+        '200':
+          description: Submitted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+  /tasks/{taskId}/confirm:
+    post:
+      tags: [Tasks, Escrow]
+      summary: Publisher confirms → settled (competitive winner_take_all)
+      operationId: confirmTask
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                submission_id:
+                  type: string
+                  description: Required for competitive; winning submission
+                milestone_id:
+                  type: string
+      responses:
+        '200':
+          description: Settled or milestone released
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+  /tasks/{taskId}/dispute:
+    post:
+      tags: [Tasks, Escrow]
+      summary: Open dispute (freeze escrow)
+      operationId: disputeTask
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string }
+      responses:
+        '200':
+          description: Disputed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+  /tasks/{taskId}/dropout:
+    post:
+      tags: [Tasks]
+      summary: Collaborative executor dropout (0 commission; seat reopenable)
+      operationId: dropoutTask
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Dropped out
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+  /webhooks:
+    post:
+      tags: [Webhooks]
+      summary: Register webhook endpoint
+      operationId: createWebhook
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookCreate'
+      responses:
+        '201':
+          description: Registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Webhook'
+  /chats:
+    post:
+      tags: [Chats]
+      summary: Create free-form chat
+      operationId: createChat
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [member_ids]
+              properties:
+                member_ids:
+                  type: array
+                  items: { type: string }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Chat'
+  /chats/{chatId}/messages:
+    post:
+      tags: [Chats]
+      summary: Send message
+      operationId: postMessage
+      parameters:
+        - name: chatId
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MessageCreate'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+  /users/{userId}/scores:
+    get:
+      tags: [Users]
+      summary: Integrity and ability scores
+      operationId: getUserScores
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Scores
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserScores'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+  parameters:
+    TaskId:
+      name: taskId
+      in: path
+      required: true
+      schema: { type: string, pattern: '^tsk_' }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema: { type: string }
+  schemas:
+    TaskKind:
+      type: string
+      enum: [exclusive, competitive, collaborative]
+    TaskStatus:
+      type: string
+      enum: [draft, open, active, in_review, disputed, settled, cancelled]
+    PaymentMode:
+      type: string
+      enum: [one_shot, milestone]
+    AssigneePolicyType:
+      type: string
+      enum: [specific, criteria, open]
+    EscrowEntryType:
+      type: string
+      enum: [hold, release, refund, freeze]
+    WebhookEventType:
+      type: string
+      enum:
+        - task.funded
+        - task.accepted
+        - task.submitted
+        - task.in_review
+        - task.confirmed
+        - task.auto_settled
+        - task.disputed
+        - task.settled
+        - task.cancelled
+        - task.executor_replaced
+        - escrow.hold
+        - escrow.release
+        - escrow.refund
+        - chat.message.created
+        - score.updated
+    MoneyAmount:
+      type: integer
+      minimum: 0
+      description: Simulated credits (smallest unit)
+    Milestone:
+      type: object
+      required: [id, amount, condition]
+      properties:
+        id: { type: string }
+        amount: { $ref: '#/components/schemas/MoneyAmount' }
+        condition: { type: string }
+        status:
+          type: string
+          enum: [pending, submitted, released, disputed]
+    AssigneePolicy:
+      type: object
+      required: [type]
+      properties:
+        type: { $ref: '#/components/schemas/AssigneePolicyType' }
+        user_ids:
+          type: array
+          items: { type: string }
+        min_ability: { type: integer }
+    CollaborativeRole:
+      type: object
+      required: [id, name, share_bps]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        share_bps:
+          type: integer
+          minimum: 0
+          maximum: 10000
+          description: Basis points of total bounty for this seat when still active at settle
+        assignee_user_id:
+          type: [string, 'null']
+        status:
+          type: string
+          enum: [open, filled, dropped]
+    TaskCreate:
+      type: object
+      required: [kind, title, description, payment, acceptance, assignee_policy]
+      properties:
+        kind: { $ref: '#/components/schemas/TaskKind' }
+        title: { type: string }
+        description: { type: string }
+        payment:
+          type: object
+          required: [mode, amount]
+          properties:
+            mode: { $ref: '#/components/schemas/PaymentMode' }
+            amount: { $ref: '#/components/schemas/MoneyAmount' }
+            milestones:
+              type: array
+              items: { $ref: '#/components/schemas/Milestone' }
+            conditions:
+              type: array
+              items:
+                type: string
+                enum: [on_accept, on_milestone_pass, on_final_confirm]
+        acceptance:
+          type: object
+          required: [deadline, quality]
+          properties:
+            deadline: { type: string, format: date-time }
+            quality: { type: string }
+            constraints:
+              type: array
+              items: { type: string }
+            review_hours:
+              type: integer
+              default: 72
+        assignee_policy: { $ref: '#/components/schemas/AssigneePolicy' }
+        competitive:
+          type: object
+          properties:
+            slots: { type: integer, minimum: 2 }
+            settlement_rule:
+              type: string
+              enum: [winner_take_all]
+              default: winner_take_all
+        collaborative:
+          type: object
+          properties:
+            roles:
+              type: array
+              items: { $ref: '#/components/schemas/CollaborativeRole' }
+            on_dropout:
+              type: string
+              enum: [replace]
+              default: replace
+    Task:
+      allOf:
+        - $ref: '#/components/schemas/TaskCreate'
+        - type: object
+          required: [id, status, publisher_id, created_at]
+          properties:
+            id: { type: string }
+            status: { $ref: '#/components/schemas/TaskStatus' }
+            publisher_id: { type: string }
+            executor_ids:
+              type: array
+              items: { type: string }
+            winning_submission_id: { type: [string, 'null'] }
+            review_deadline: { type: [string, 'null'], format: date-time }
+            escrow:
+              $ref: '#/components/schemas/EscrowAccount'
+            created_at: { type: string, format: date-time }
+            updated_at: { type: string, format: date-time }
+    TaskList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Task' }
+        next_cursor: { type: [string, 'null'] }
+    SubmissionCreate:
+      type: object
+      required: [payload]
+      properties:
+        milestone_id: { type: string }
+        payload:
+          type: object
+          additionalProperties: true
+        note: { type: string }
+    EscrowAccount:
+      type: object
+      properties:
+        id: { type: string }
+        held: { $ref: '#/components/schemas/MoneyAmount' }
+        currency:
+          type: string
+          default: credits
+        entries:
+          type: array
+          items: { $ref: '#/components/schemas/EscrowEntry' }
+    EscrowEntry:
+      type: object
+      required: [id, type, amount, created_at]
+      properties:
+        id: { type: string }
+        type: { $ref: '#/components/schemas/EscrowEntryType' }
+        amount: { $ref: '#/components/schemas/MoneyAmount' }
+        to_user_id: { type: string }
+        created_at: { type: string, format: date-time }
+    WebhookCreate:
+      type: object
+      required: [url, secret, events]
+      properties:
+        url: { type: string, format: uri }
+        secret: { type: string, minLength: 16 }
+        events:
+          type: array
+          items: { $ref: '#/components/schemas/WebhookEventType' }
+    Webhook:
+      allOf:
+        - $ref: '#/components/schemas/WebhookCreate'
+        - type: object
+          required: [id, created_at]
+          properties:
+            id: { type: string }
+            created_at: { type: string, format: date-time }
+    WebhookEnvelope:
+      type: object
+      description: |
+        Delivered as HTTP POST to the registered URL.
+        Headers: X-Signature = HMAC-SHA256(raw_body, secret); X-Event-Id for idempotency.
+      required: [id, type, created_at, data]
+      properties:
+        id: { type: string }
+        type: { $ref: '#/components/schemas/WebhookEventType' }
+        created_at: { type: string, format: date-time }
+        data:
+          type: object
+          additionalProperties: true
+    Chat:
+      type: object
+      required: [id, member_ids]
+      properties:
+        id: { type: string }
+        task_id: { type: [string, 'null'] }
+        member_ids:
+          type: array
+          items: { type: string }
+    MessageCreate:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [text, attachment_ref]
+        text: { type: string }
+        attachment_ref: { type: string }
+    Message:
+      allOf:
+        - $ref: '#/components/schemas/MessageCreate'
+        - type: object
+          required: [id, chat_id, sender_id, created_at]
+          properties:
+            id: { type: string }
+            chat_id: { type: string }
+            sender_id: { type: string }
+            created_at: { type: string, format: date-time }
+    UserScores:
+      type: object
+      required: [user_id, integrity, ability]
+      properties:
+        user_id: { type: string }
+        integrity: { type: integer }
+        ability: { type: integer }
+        recent:
+          type: array
+          items:
+            type: object
+            properties:
+              delta_integrity: { type: integer }
+              delta_ability: { type: integer }
+              reason: { type: string }
+              task_id: { type: string }
+              created_at: { type: string, format: date-time }

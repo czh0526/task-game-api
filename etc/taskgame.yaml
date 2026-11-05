@@ -1,0 +1,42 @@
+Name: taskgame-api
+Host: 0.0.0.0
+Port: 8891
+Mode: dev
+Timeout: 10000
+CpuThreshold: 0
+Log:
+  Mode: console
+  Encoding: plain
+  Level: info
+  Stat: false
+
+# HS256 bearer tokens and static API keys. Sample keys are for local development.
+Auth:
+  JwtSecret: dev-jwt-secret-change-me-32b
+  ApiKeys:
+    - Key: dev-publisher-key
+      UserId: usr_publisher
+    - Key: dev-executor-key
+      UserId: usr_executor
+
+# modernc.org/sqlite, no cgo. The data directory is created on startup.
+Store:
+  Driver: sqlite
+  DSN: "file:data/taskgame.db?mode=rwc&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_txlock=immediate"
+
+# Simulated credits. InitialBalance is granted the first time a user is seen.
+Escrow:
+  InitialBalance: 1000000
+  Currency: credits
+
+# log: record X-Signature and do not POST. post: deliver the queued body.
+Webhook:
+  Mode: log
+  Interval: 2s
+  Timeout: 5s
+  MaxAttempts: 3
+
+# Exclusive in_review past review_deadline (default 72h) settles without a publisher confirm.
+AutoSettle:
+  Enabled: true
+  Interval: 30s
