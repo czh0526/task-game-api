@@ -10,6 +10,7 @@ import (
 	"taskgame/internal/biz"
 	"taskgame/internal/config"
 	"taskgame/internal/handler"
+	"taskgame/internal/middleware"
 	"taskgame/internal/svc"
 
 	"github.com/zeromicro/go-zero/core/conf"
@@ -38,7 +39,8 @@ func main() {
 		}
 	})
 
-	server := rest.MustNewServer(c.RestConf)
+	// LocalDevCORS only adds preflight headers for the Vite dev UI.
+	server := rest.MustNewServer(c.RestConf, middleware.LocalDevCORS())
 	defer server.Stop()
 
 	sc, err := svc.NewServiceContext(c)

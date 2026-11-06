@@ -1,0 +1,76 @@
+# 任务游戏 Web
+
+给发布者和执行者用的本地演示界面。文案是中文，任务 id、状态和字段名保持英文。页面通过 [`sdk/ts`](../sdk/ts)（npm 包名 `taskgame-client`）调用本机 API，不走 registry。
+
+## 运行
+
+终端 1，在仓库根目录启动 API：
+
+```bash
+make run
+# http://127.0.0.1:8891
+```
+
+终端 2：
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+浏览器打开 `http://localhost:5173`。Vite 如果 5173 被占用，会顺延到 5185 以内；`npm run preview` 使用 4173。服务只给这些本机源回 CORS 头：`localhost`、`127.0.0.1`、`[::1]` 的端口 4173 和 5173–5185。
+
+```bash
+cd web
+npm install
+npm run build
+```
+
+`npm run build` 会先编译 `../sdk/ts`，再做类型检查和 Vite 打包。
+
+## 密钥
+
+`etc/taskgame.yaml` 里的开发密钥：
+
+| 角色 | `X-Api-Key` | 用户 id |
+| --- | --- | --- |
+| 发布者 | `dev-publisher-key` | `usr_publisher` |
+| 执行者 | `dev-executor-key` | `usr_executor` |
+
+左侧两个角色按钮会写回对应的 API Key 和用户 id。Base URL、API Key、用户 id 都可以改。第二个执行者没有静态密钥时：
+
+```bash
+make token USER_ID=usr_extra
+```
+
+把鉴权改成 Bearer，贴上 JWT，用户 id 填 `usr_extra`。`make` 会先回显命令，整段输出可以一起贴，页面会从中取出 JWT。界面上的用户 id 用来决定按钮和默认聊天对象，真正的调用身份仍是密钥或 JWT 的 `sub`，两边要一致。
+
+## 环境变量和 localStorage
+
+| 键 | 作用 |
+| --- | --- |
+| `VITE_TASKGAME_BASE_URL` | 还没有保存过设置时，作为 Base URL 的初始值 |
+| `taskgame.web.settings` | JSON：`baseUrl`、`role`、`authMode`（`apiKey` 或 `bearer`）、`apiKey`、`bearerToken`、`userId` |
+| `taskgame.web.chats` | 本浏览器创建或记下的会话，以及 `postMessage` 返回的消息 |
+
+v0.1 没有列出会话或消息的接口。会话页只展示这份本地记录，方便两个角色在同一浏览器里对看。
+
+## 三条任务
+
+金额是模拟积分。创建页的报酬模式是 `one_shot`，承接策略是 `open`。
+
+1. **exclusive**：发布者创建并注资，执行者接受、提交，发布者确认。确认体是 `{}`，结束后状态为 `settled`。
+2. **competitive**：`settlement_rule` 固定 `winner_take_all`。两个执行者都接受并提交后，发布者先不带 `submission_id` 确认。400 的 `message` 交给 SDK 的 `submissionIdsFromConfirmError`，页面按 `created_at` 顺序列出 id，选定后再确认。
+3. **collaborative**：`on_dropout` 固定 `replace`，各席 `share_bps` 合计 10000。执行者接受时选择 `role_id`。退出后该席回到 `open`，佣金和能力分为 0。再用同一个 `role_id` 接受，就是补位。
+
+积分页读 `GET /v1/users/{userId}/scores` 的 `integrity` 和 `ability`。
+
+## Run
+
+```bash
+make run
+cd web && npm install && npm run dev
+```
+
+Open `http://localhost:5173`. Dev keys are `dev-publisher-key` (`usr_publisher`) and `dev-executor-key` (`usr_executor`). Settings live in `localStorage` key `taskgame.web.settings`. Optional `VITE_TASKGAME_BASE_URL` applies only before that key exists. Chat transcripts are local (`taskgame.web.chats`) because v0.1 has create and post, not list.

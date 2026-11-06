@@ -1,0 +1,24 @@
+{
+  "name": "taskgame-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "sdk:build": "node scripts/build-sdk.mjs",
+    "dev": "npm run sdk:build && vite",
+    "build": "npm run sdk:build && tsc -p tsconfig.json --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 4173"
+  },
+  "dependencies": {
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "taskgame-client": "file:../sdk/ts"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^4.7.0",
+    "typescript": "^5.9.3",
+    "vite": "^6.4.1"
+  }
+}
