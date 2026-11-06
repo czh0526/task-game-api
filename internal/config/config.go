@@ -20,6 +20,9 @@ type Config struct {
 type AuthConf struct {
 	JwtSecret string
 	ApiKeys   []ApiKeyConf `json:",optional"`
+	// TokenTTL is the lifetime of JWTs from register and login.
+	// Zero means 24h. Claims match `make token`: sub, iat, exp, HS256.
+	TokenTTL time.Duration `json:",optional"`
 }
 
 // ApiKeyConf maps one X-Api-Key header value to a user id.

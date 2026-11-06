@@ -10,7 +10,7 @@ Credits are simulated. There is no payment provider. Locked v0.1 rules:
 - `review_hours` defaults to 72; exclusive tasks auto-settle when that review window passes
 - mutating calls accept `Idempotency-Key`; the same key with a different body returns 409 `idempotency_conflict`
 - webhooks are queued and delivered with `X-Signature` (hex HMAC-SHA256 of the raw body) and `X-Event-Id`
-- auth is `Authorization: Bearer` (HS256 JWT) and/or `X-Api-Key`
+- auth is `Authorization: Bearer` (HS256 JWT) and/or `X-Api-Key`. `POST /v1/register` and `POST /v1/login` are public and issue that same JWT (`sub` is the new user id). Passwords are stored as bcrypt.
 
 Sample development keys (see `etc/taskgame.yaml`):
 
@@ -62,6 +62,14 @@ CGO_ENABLED=0 go run ./cmd/token -f etc/taskgame.yaml -user usr_executor
 
 请求头写成 `Authorization: Bearer <token>`。冒烟脚本会自己为每轮新的执行者签发 JWT，所以正在跑的进程必须使用同一份 `Auth.JwtSecret`。
 
+邮箱注册是同一套 JWT（仍是 v0.1 的附加接口）。`POST /v1/register` 和 `POST /v1/login` 不需要鉴权，密码以 bcrypt 保存，不会回明文。`GET /v1/me` 需要 Bearer 或 `X-Api-Key`。`usr_publisher` / `usr_executor` 的开发密钥保持可用。令牌有效期是 `Auth.TokenTTL`（缺省 24h）。
+
+```bash
+curl -s -X POST http://127.0.0.1:8891/v1/register \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"publisher@example.com","password":"password123"}'
+```
+
 另开一个终端，对已经在听的服务跑三种任务（独占、竞争 `winner_take_all`、协作 `on_dropout=replace`）：
 
 ```bash
@@ -93,7 +101,8 @@ CGO_ENABLED=0 go test ./internal/engine -run 'TestAutoSettleCompetitiveDoesNotPi
 
 配置项在 `etc/taskgame.yaml`：
 
-- `Auth.JwtSecret`：HS256 密钥，至少 16 个字符
+- `Auth.JwtSecret`：HS256 密钥，至少 16 个字符。`make token`、注册和登录共用它
+- `Auth.TokenTTL`：注册和登录签发的 JWT 有效期，缺省 24h
 - `Auth.ApiKeys`：静态 `X-Api-Key` → 用户 id
 - `Store.DSN`：modernc SQLite DSN
 - `Escrow.InitialBalance`：用户第一次出现时记入的模拟积分（开发配置是 1000000）
@@ -143,6 +152,14 @@ CGO_ENABLED=0 go run ./cmd/token -f etc/taskgame.yaml -user usr_executor
 
 Send `Authorization: Bearer <token>`. The smoke script mints a fresh JWT per extra executor, so the running process must be using that same `Auth.JwtSecret`.
 
+Email registration is the same JWT, added without a version bump. `POST /v1/register` and `POST /v1/login` are public. Passwords are stored as bcrypt and are not returned. `GET /v1/me` requires Bearer or `X-Api-Key`. The `usr_publisher` / `usr_executor` development keys keep working. Token lifetime is `Auth.TokenTTL` (default 24h).
+
+```bash
+curl -s -X POST http://127.0.0.1:8891/v1/register \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"publisher@example.com","password":"password123"}'
+```
+
 In another shell, exercise all three kinds against the listening server (exclusive, competitive `winner_take_all`, collaborative `on_dropout=replace`):
 
 ```bash
@@ -174,7 +191,8 @@ CGO_ENABLED=0 go test ./internal/engine -run 'TestAutoSettleCompetitiveDoesNotPi
 
 `etc/taskgame.yaml` holds:
 
-- `Auth.JwtSecret`: HS256 secret, at least 16 characters
+- `Auth.JwtSecret`: HS256 secret, at least 16 characters. Shared by `make token`, register, and login
+- `Auth.TokenTTL`: lifetime of register and login JWTs, default 24h
 - `Auth.ApiKeys`: static `X-Api-Key` to user id
 - `Store.DSN`: modernc SQLite DSN
 - `Escrow.InitialBalance`: simulated credits granted the first time a user is seen (1000000 in the dev file)
@@ -204,7 +222,7 @@ goctl api go -api taskgame.api -dir . -style goZero
 - `internal/config`、`internal/svc`、`internal/middleware`
 - `internal/logic` 里已经接到 `internal/engine` 的方法体
 - `internal/handler/task/submitTaskHandler.go`：提交体用 `encoding/json` 解码，因为 go-zero 的 mapper 填不了 `map[string]interface{}` 的 `payload`
-- 创建任务、webhook、会话、消息的 handler 返回 **201**（`httpx.WriteJsonCtx`），其余成功响应是 200
+- 创建任务、webhook、会话、消息，以及 `POST /v1/register` 的 handler 返回 **201**（`httpx.WriteJsonCtx`），其余成功响应是 200
 
 The runtime dependency is go-zero v1.10.3 from `go.mod`. `taskgame.api` is the goctl input and matches the OpenAPI document. Generate with the same goctl 1.8.4 used to lay out this tree:
 
@@ -225,7 +243,7 @@ Do not overwrite these after a regen:
 - `internal/config`, `internal/svc`, `internal/middleware`
 - `internal/logic` method bodies that call `internal/engine`
 - `internal/handler/task/submitTaskHandler.go`: the body is decoded with `encoding/json` because go-zero's mapper cannot fill a `map[string]interface{}` payload
-- create task, webhook, chat, and message handlers return **201** via `httpx.WriteJsonCtx`; other successes return 200
+- create task, webhook, chat, and message handlers, plus `POST /v1/register`, return **201** via `httpx.WriteJsonCtx`; other successes return 200
 
 ## TypeScript 客户端
 

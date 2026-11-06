@@ -238,6 +238,21 @@ th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line
 .toolbar { margin: 12px 0; }
 .hint { margin: 6px 0; }
 
+.app.auth-app { grid-template-columns: 1fr; }
+.auth-main { width: min(460px, 100%); margin-inline: auto; }
+.auth-switch { margin-bottom: 14px; }
+.who { display: grid; gap: 4px; margin-bottom: 8px; }
+.who strong, .who .mono { overflow-wrap: anywhere; }
+.dev-id {
+  margin-top: 14px;
+  border: 1px dashed #d3c7b4;
+  border-radius: 12px;
+  padding: 8px 10px 12px;
+  background: rgba(255, 253, 248, 0.55);
+}
+.dev-id summary { cursor: pointer; font-weight: 650; }
+.dev-id[open] summary { margin-bottom: 8px; }
+
 @media (max-width: 900px) {
   .app { grid-template-columns: 1fr; }
   .side { border-right: 0; border-bottom: 1px solid var(--line); }

@@ -7,7 +7,12 @@ CREATE TABLE IF NOT EXISTS users (
     balance INTEGER NOT NULL,
     integrity INTEGER NOT NULL,
     ability INTEGER NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    -- Password accounts only. API-key users (usr_publisher, usr_executor) leave both NULL.
+    -- password_hash is bcrypt. Never store the plaintext password.
+    -- Uniqueness is a partial index created in Open, so older files can ADD COLUMN first.
+    email TEXT,
+    password_hash TEXT
 );
 
 CREATE TABLE IF NOT EXISTS tasks (

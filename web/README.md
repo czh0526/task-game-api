@@ -19,7 +19,7 @@ npm install
 npm run dev
 ```
 
-浏览器打开 `http://localhost:5173`。Vite 如果 5173 被占用，会顺延到 5185 以内；`npm run preview` 使用 4173。服务只给这些本机源回 CORS 头：`localhost`、`127.0.0.1`、`[::1]` 的端口 4173 和 5173–5185。
+浏览器打开 `http://localhost:5173`。未登录时停在注册/登录页。注册或登录成功后，Bearer JWT 和用户 id 写进 `localStorage`，之后的任务请求带 `Authorization: Bearer`。Vite 如果 5173 被占用，会顺延到 5185 以内；`npm run preview` 使用 4173。服务只给这些本机源回 CORS 头：`localhost`、`127.0.0.1`、`[::1]` 的端口 4173 和 5173–5185。`POST /v1/register`、`POST /v1/login` 和 `GET /v1/me` 走同一套 CORS。
 
 ```bash
 cd web
@@ -29,7 +29,11 @@ npm run build
 
 `npm run build` 会先编译 `../sdk/ts`，再做类型检查和 Vite 打包。
 
-## 密钥
+## 账号
+
+打开页面先注册或登录。密码至少 8 个字符。服务签发的 JWT 与 `make token` 相同（HS256，`sub` 为 `usr_…`）。侧栏显示邮箱和用户 id，退出登录会清掉本机令牌。
+
+侧栏和登录页里的「开发快捷身份」仍可切回静态密钥：
 
 `etc/taskgame.yaml` 里的开发密钥：
 
@@ -38,7 +42,7 @@ npm run build
 | 发布者 | `dev-publisher-key` | `usr_publisher` |
 | 执行者 | `dev-executor-key` | `usr_executor` |
 
-左侧两个角色按钮会写回对应的 API Key 和用户 id。Base URL、API Key、用户 id 都可以改。第二个执行者没有静态密钥时：
+展开后，两个角色按钮会写回对应的 API Key 和用户 id。Base URL、API Key、用户 id 都可以改。第二个执行者没有静态密钥时：
 
 ```bash
 make token USER_ID=usr_extra
@@ -51,7 +55,7 @@ make token USER_ID=usr_extra
 | 键 | 作用 |
 | --- | --- |
 | `VITE_TASKGAME_BASE_URL` | 还没有保存过设置时，作为 Base URL 的初始值 |
-| `taskgame.web.settings` | JSON：`baseUrl`、`role`、`authMode`（`apiKey` 或 `bearer`）、`apiKey`、`bearerToken`、`userId` |
+| `taskgame.web.settings` | JSON：`baseUrl`、`role`、`authMode`（`apiKey` 或 `bearer`）、`apiKey`、`bearerToken`、`userId`、`email`。没有密钥也没有 JWT 时停在登录页 |
 | `taskgame.web.chats` | 本浏览器创建或记下的会话，以及 `postMessage` 返回的消息 |
 
 v0.1 没有列出会话或消息的接口。会话页只展示这份本地记录，方便两个角色在同一浏览器里对看。
@@ -73,4 +77,4 @@ make run
 cd web && npm install && npm run dev
 ```
 
-Open `http://localhost:5173`. Dev keys are `dev-publisher-key` (`usr_publisher`) and `dev-executor-key` (`usr_executor`). Settings live in `localStorage` key `taskgame.web.settings`. Optional `VITE_TASKGAME_BASE_URL` applies only before that key exists. Chat transcripts are local (`taskgame.web.chats`) because v0.1 has create and post, not list.
+Open `http://localhost:5173`. Register or log in with email and password; the JWT and user id are stored in `localStorage` and sent as Bearer. The collapsed「开发快捷身份」panel still switches `dev-publisher-key` (`usr_publisher`) and `dev-executor-key` (`usr_executor`). Settings live in `taskgame.web.settings`. Optional `VITE_TASKGAME_BASE_URL` applies only before that key exists. Chat transcripts are local (`taskgame.web.chats`) because v0.1 has create and post, not list.

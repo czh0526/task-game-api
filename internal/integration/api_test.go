@@ -57,6 +57,7 @@ Log:
   Stat: false
 Auth:
   JwtSecret: dev-jwt-secret-change-me-32b
+  TokenTTL: 24h
   ApiKeys:
     - Key: dev-publisher-key
       UserId: usr_publisher
@@ -172,6 +173,8 @@ AutoSettle:
 	if status != http.StatusOK {
 		t.Fatalf("scores %d %s", status, raw)
 	}
+
+	exercisePasswordAuth(t, base, c.Auth.JwtSecret)
 }
 
 func assertLocalDevCORS(t *testing.T, base string) {
@@ -194,6 +197,27 @@ func assertLocalDevCORS(t *testing.T, base string) {
 	}
 	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "http://localhost:5173" {
 		t.Fatalf("preflight allow-origin %q", got)
+	}
+	for _, path := range []string{"/v1/register", "/v1/login", "/v1/me"} {
+		req, err := http.NewRequest(http.MethodOptions, base+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Origin", "http://127.0.0.1:5173")
+		req.Header.Set("Access-Control-Request-Method", "POST")
+		req.Header.Set("Access-Control-Request-Headers", "content-type,authorization")
+		resp, err = http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNoContent {
+			t.Fatalf("preflight %s status %d", path, resp.StatusCode)
+		}
+		if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "http://127.0.0.1:5173" {
+			t.Fatalf("preflight %s allow-origin %q", path, got)
+		}
 	}
 	allow := strings.ToLower(resp.Header.Get("Access-Control-Allow-Headers"))
 	for _, name := range []string{"x-api-key", "idempotency-key", "authorization", "content-type"} {
@@ -236,6 +260,134 @@ func assertLocalDevCORS(t *testing.T, base string) {
 	}
 	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "" {
 		t.Fatalf("foreign origin was allowed: %q", got)
+	}
+}
+
+func exercisePasswordAuth(t *testing.T, base, secret string) {
+	t.Helper()
+	status, raw := do(t, http.MethodPost, base+"/v1/register", "", map[string]any{
+		"email": "not-an-email", "password": "password123",
+	})
+	if status != http.StatusBadRequest || !strings.Contains(string(raw), `"invalid_argument"`) {
+		t.Fatalf("bad email %d %s", status, raw)
+	}
+	status, raw = do(t, http.MethodPost, base+"/v1/register", "", map[string]any{
+		"email": "pub@example.com", "password": "short",
+	})
+	if status != http.StatusBadRequest || !strings.Contains(string(raw), "at least 8") {
+		t.Fatalf("short password %d %s", status, raw)
+	}
+
+	status, raw = do(t, http.MethodPost, base+"/v1/register", "", map[string]any{
+		"email": "Publisher@Example.com", "password": "password123",
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("register %d %s", status, raw)
+	}
+	if strings.Contains(string(raw), "password123") || strings.Contains(string(raw), "password_hash") {
+		t.Fatalf("register response leaked a secret: %s", raw)
+	}
+	var pub struct {
+		AccessToken string `json:"access_token"`
+		ExpiresIn   int64  `json:"expires_in"`
+		User        struct {
+			ID    string `json:"id"`
+			Email string `json:"email"`
+		} `json:"user"`
+	}
+	if err := json.Unmarshal(raw, &pub); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(pub.User.ID, "usr_") || pub.User.Email != "publisher@example.com" || pub.ExpiresIn != 24*60*60 {
+		t.Fatalf("register body %s", raw)
+	}
+	sub, err := auth.ParseHS256(secret, pub.AccessToken, time.Now().Add(time.Minute))
+	if err != nil || sub != pub.User.ID {
+		t.Fatalf("register token sub %q err %v", sub, err)
+	}
+
+	status, raw = do(t, http.MethodPost, base+"/v1/register", "", map[string]any{
+		"email": "publisher@example.com", "password": "password123",
+	})
+	if status != http.StatusConflict || !strings.Contains(string(raw), `"conflict"`) {
+		t.Fatalf("duplicate %d %s", status, raw)
+	}
+	status, raw = do(t, http.MethodPost, base+"/v1/login", "", map[string]any{
+		"email": "publisher@example.com", "password": "wrong-password",
+	})
+	if status != http.StatusUnauthorized || !strings.Contains(string(raw), `"unauthorized"`) {
+		t.Fatalf("bad login %d %s", status, raw)
+	}
+	status, raw = do(t, http.MethodPost, base+"/v1/login", "", map[string]any{
+		"email": "missing@example.com", "password": "password123",
+	})
+	if status != http.StatusUnauthorized || !strings.Contains(string(raw), "invalid email or password") {
+		t.Fatalf("missing login %d %s", status, raw)
+	}
+
+	status, raw = doBearer(t, http.MethodGet, base+"/v1/me", pub.AccessToken, nil)
+	if status != http.StatusOK {
+		t.Fatalf("me %d %s", status, raw)
+	}
+	var me struct {
+		ID    string `json:"id"`
+		Email string `json:"email"`
+	}
+	if err := json.Unmarshal(raw, &me); err != nil || me.ID != pub.User.ID || me.Email != pub.User.Email {
+		t.Fatalf("me body %s", raw)
+	}
+	if status, _ := do(t, http.MethodGet, base+"/v1/me", "", nil); status != http.StatusUnauthorized {
+		t.Fatalf("me unauthenticated %d", status)
+	}
+	status, raw = do(t, http.MethodGet, base+"/v1/me", "dev-publisher-key", nil)
+	if status != http.StatusOK {
+		t.Fatalf("me api key %d %s", status, raw)
+	}
+	if err := json.Unmarshal(raw, &me); err != nil || me.ID != "usr_publisher" || me.Email != "" {
+		t.Fatalf("dev me %s", raw)
+	}
+
+	status, raw = do(t, http.MethodPost, base+"/v1/register", "", map[string]any{
+		"email": "executor@example.com", "password": "password123",
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("executor register %d %s", status, raw)
+	}
+	var exe struct {
+		AccessToken string `json:"access_token"`
+		User        struct {
+			ID string `json:"id"`
+		} `json:"user"`
+	}
+	if err := json.Unmarshal(raw, &exe); err != nil || exe.User.ID == "" || exe.User.ID == pub.User.ID {
+		t.Fatalf("executor body %s", raw)
+	}
+
+	deadline := time.Now().Add(48 * time.Hour).UTC().Format(time.RFC3339)
+	status, raw = doBearer(t, http.MethodPost, base+"/v1/tasks", pub.AccessToken, map[string]any{
+		"kind":            "exclusive",
+		"title":           "Password account task",
+		"description":     "Created with a register JWT.",
+		"payment":         map[string]any{"mode": "one_shot", "amount": 500},
+		"acceptance":      map[string]any{"deadline": deadline, "quality": "Done", "review_hours": 72},
+		"assignee_policy": map[string]any{"type": "open"},
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("jwt create %d %s", status, raw)
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(raw, &created); err != nil || created.ID == "" {
+		t.Fatalf("jwt create body %s", raw)
+	}
+	status, raw = doBearer(t, http.MethodPost, base+"/v1/tasks/"+created.ID+"/fund", pub.AccessToken, nil)
+	if status != http.StatusOK {
+		t.Fatalf("jwt fund %d %s", status, raw)
+	}
+	status, raw = doBearer(t, http.MethodPost, base+"/v1/tasks/"+created.ID+"/accept", exe.AccessToken, map[string]any{})
+	if status != http.StatusOK || !strings.Contains(string(raw), `"active"`) {
+		t.Fatalf("jwt accept %d %s", status, raw)
 	}
 }
 

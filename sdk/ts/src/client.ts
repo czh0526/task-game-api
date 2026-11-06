@@ -6,6 +6,7 @@ import type {
   ChatCreate,
   ConfirmTaskBody,
   DisputeTaskBody,
+  AuthSession,
   HealthStatus,
   ListTasksQuery,
   Message,
@@ -13,8 +14,10 @@ import type {
   SubmissionCreate,
   Task,
   TaskCreate,
+  PasswordCredentials,
   TaskList,
   UserScores,
+  UserSummary,
   Webhook,
   WebhookCreate,
 } from "./types.js";
@@ -98,6 +101,24 @@ export class TaskGameClient {
   /** `GET /health`. No auth header. Not part of the OpenAPI document. */
   health(options?: Pick<CallOptions, "signal">): Promise<HealthStatus> {
     return this.send("GET", `${this.origin}/health`, options, undefined, false, "forbidden", false);
+  }
+
+  /**
+   * `POST /v1/register` → 201. No auth header.
+   * Stores a bcrypt hash and returns an HS256 JWT (`sub` is the new user id).
+   */
+  register(body: PasswordCredentials, options?: Pick<CallOptions, "signal">): Promise<AuthSession> {
+    return this.send("POST", `${this.apiBase}/register`, options, body, true, "forbidden", false);
+  }
+
+  /** `POST /v1/login`. No auth header. Returns a new HS256 JWT (`sub` is the user id). */
+  login(body: PasswordCredentials, options?: Pick<CallOptions, "signal">): Promise<AuthSession> {
+    return this.send("POST", `${this.apiBase}/login`, options, body, true, "forbidden", false);
+  }
+
+  /** `GET /v1/me`. Requires the client auth (Bearer or X-Api-Key). */
+  me(options?: CallOptions): Promise<UserSummary> {
+    return this.send("GET", `${this.apiBase}/me`, options, undefined, false, "forbidden");
   }
 
   /** `GET /v1/tasks` */

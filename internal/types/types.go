@@ -215,3 +215,24 @@ type Webhook struct {
 	Id        string   `json:"id"`
 	CreatedAt string   `json:"created_at"`
 }
+
+type RegisterReq struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+type LoginReq struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+type UserSummary struct {
+	Id    string `json:"id"`
+	Email string `json:"email"`
+}
+
+type AuthSession struct {
+	AccessToken string      `json:"access_token"`
+	ExpiresIn   int64       `json:"expires_in"`
+	User        UserSummary `json:"user"`
+}

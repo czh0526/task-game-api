@@ -61,6 +61,10 @@ func Open(dsn string, initialBalance int64) (*DB, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := migrate(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	for _, pragma := range []string{
 		`PRAGMA journal_mode=WAL`,
 		`PRAGMA busy_timeout=5000`,
@@ -114,6 +118,58 @@ func (t *txRepos) Webhooks() store.WebhookRepo       { return &webhookRepo{q: t.
 func (t *txRepos) Deliveries() store.DeliveryRepo    { return &deliveryRepo{q: t.q} }
 func (t *txRepos) Chats() store.ChatRepo             { return &chatRepo{q: t.q} }
 func (t *txRepos) Idem() store.IdemRepo              { return &idemRepo{q: t.q} }
+
+// migrate adds password-account columns on databases created before they existed.
+// CREATE TABLE IF NOT EXISTS does not alter an existing users table.
+func migrate(ctx context.Context, db *sql.DB) error {
+	cols, err := userColumns(ctx, db)
+	if err != nil {
+		return err
+	}
+	if _, ok := cols["email"]; !ok {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE users ADD COLUMN email TEXT`); err != nil {
+			return fmt.Errorf("migrate users.email: %w", err)
+		}
+	}
+	if _, ok := cols["password_hash"]; !ok {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE users ADD COLUMN password_hash TEXT`); err != nil {
+			return fmt.Errorf("migrate users.password_hash: %w", err)
+		}
+	}
+	_, err = db.ExecContext(ctx, `
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email
+		ON users (email) WHERE email IS NOT NULL AND email != ''`)
+	if err != nil {
+		return fmt.Errorf("migrate users email index: %w", err)
+	}
+	return nil
+}
+
+func userColumns(ctx context.Context, db *sql.DB) (map[string]struct{}, error) {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(users)`)
+	if err != nil {
+		return nil, fmt.Errorf("pragma table_info users: %w", err)
+	}
+	defer rows.Close()
+	cols := map[string]struct{}{}
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
+			return nil, err
+		}
+		cols[name] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(cols) == 0 {
+		return nil, fmt.Errorf("users table is missing after schema apply")
+	}
+	return cols, nil
+}
 
 func execScript(ctx context.Context, db *sql.DB, script string) error {
 	for _, stmt := range strings.Split(script, ";") {

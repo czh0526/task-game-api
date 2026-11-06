@@ -191,6 +191,23 @@ type (
 		Ability   int64         `json:"ability"`
 		Recent    []ScoreChange `json:"recent"`
 	}
+	RegisterReq {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	LoginReq {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	UserSummary {
+		Id    string `json:"id"`
+		Email string `json:"email"`
+	}
+	AuthSession {
+		AccessToken string      `json:"access_token"`
+		ExpiresIn   int64       `json:"expires_in"`
+		User        UserSummary `json:"user"`
+	}
 )
 
 @server (
@@ -199,6 +216,18 @@ type (
 service taskgame {
 	@handler health
 	get /health returns (HealthResp)
+}
+
+@server (
+	prefix: /v1
+	group:  session
+)
+service taskgame {
+	@handler register
+	post /register (RegisterReq) returns (AuthSession)
+
+	@handler login
+	post /login (LoginReq) returns (AuthSession)
 }
 
 @server (
@@ -264,6 +293,9 @@ service taskgame {
 	middleware: Auth
 )
 service taskgame {
+	@handler getMe
+	get /me returns (UserSummary)
+
 	@handler getUserScores
 	get /users/:userId/scores (GetUserScoresReq) returns (UserScores)
 }

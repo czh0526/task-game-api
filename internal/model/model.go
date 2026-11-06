@@ -185,7 +185,10 @@ type User struct {
 	Balance   int64
 	Integrity int64
 	Ability   int64
-	CreatedAt time.Time
+	Email     string
+	// PasswordHash is bcrypt and is filled only by GetByEmail. It is not an API field.
+	PasswordHash string
+	CreatedAt    time.Time
 }
 
 type ScoreEvent struct {
