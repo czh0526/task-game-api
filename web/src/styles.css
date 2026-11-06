@@ -198,7 +198,23 @@ code.mono, .mono { font-family: var(--mono); font-size: 0.86em; }
 
 .form, .form-grid { display: grid; gap: 12px; }
 .form-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.role-row { display: grid; grid-template-columns: 1.1fr 1.2fr 0.8fr auto; gap: 8px; align-items: end; }
+.role-row { display: grid; grid-template-columns: 1.3fr 1fr 0.7fr auto; gap: 8px; align-items: end; }
+.card h3 { margin: 16px 0 8px; font-size: 0.98rem; }
+.seat-table input {
+  width: 6.5rem;
+  border: 1px solid #d9d0c2;
+  background: var(--bg-raised);
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+.check-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 0;
+  font-size: 0.92rem;
+}
+.check-line input { width: auto; }
 
 .facts {
   display: grid;

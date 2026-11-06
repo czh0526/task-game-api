@@ -68,6 +68,8 @@ v0.1 没有列出会话或消息的接口。会话页只展示这份本地记录
 2. **competitive**：`settlement_rule` 固定 `winner_take_all`。两个执行者都接受并提交后，发布者先不带 `submission_id` 确认。400 的 `message` 交给 SDK 的 `submissionIdsFromConfirmError`，页面按 `created_at` 顺序列出 id，选定后再确认。
 3. **collaborative**：`on_dropout` 固定 `replace`，各席 `share_bps` 合计 10000。执行者接受时选择 `role_id`。退出后该席回到 `open`，佣金和能力分为 0。再用同一个 `role_id` 接受，就是补位。
 
+   创建页按「角色 × 人数」填写，同一种角色不用逐行加席。每一行是一种角色：显示名称、可选基础 id、人数。例如 4×设计（基础 id `design`）和 2×文案（`copy`）会展开成 `design_1`…`design_4` 与 `copy_1`、`copy_2`，显示名称相同。10000 `share_bps` 在全部展开席位间均分，余数加在最后几席，合计正好 10000。基础 id 留空时，名称若已是合法 slug 就用名称，否则按顺序用 `role`、`role2`、`role3`。勾选「手动调整各席 share_bps」后可以改每一席的份额，提交前合计仍须是 10000。请求体仍是扁平的 `roles[]`。
+
 积分页读 `GET /v1/users/{userId}/scores` 的 `integrity` 和 `ability`。
 
 ## Run
