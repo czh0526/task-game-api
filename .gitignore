@@ -2,6 +2,8 @@
 sdk/ts/node_modules/
 sdk/ts/dist/
 sdk/ts/dist-test/
+web/node_modules/
+web/dist/
 *.db
 *.db-wal
 *.db-shm

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"taskgame/internal/biz"
 	"taskgame/internal/config"
 	"taskgame/internal/handler"
+	"taskgame/internal/middleware"
 	"taskgame/internal/svc"
 
 	"github.com/zeromicro/go-zero/core/conf"
@@ -82,7 +84,7 @@ AutoSettle:
 	if err := conf.Load(cfgPath, &c); err != nil {
 		t.Fatal(err)
 	}
-	server, err := rest.NewServer(c.RestConf)
+	server, err := rest.NewServer(c.RestConf, middleware.LocalDevCORS())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,6 +101,7 @@ AutoSettle:
 
 	base := fmt.Sprintf("http://127.0.0.1:%d", port)
 	waitHealthy(t, base)
+	assertLocalDevCORS(t, base)
 
 	if status, _ := do(t, http.MethodGet, base+"/v1/tasks", "", nil); status != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated status %d", status)
@@ -168,6 +171,71 @@ AutoSettle:
 	status, raw = do(t, http.MethodGet, base+"/v1/users/usr_executor/scores", "dev-publisher-key", nil)
 	if status != http.StatusOK {
 		t.Fatalf("scores %d %s", status, raw)
+	}
+}
+
+func assertLocalDevCORS(t *testing.T, base string) {
+	t.Helper()
+	preflight, err := http.NewRequest(http.MethodOptions, base+"/v1/tasks", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preflight.Header.Set("Origin", "http://localhost:5173")
+	preflight.Header.Set("Access-Control-Request-Method", "POST")
+	preflight.Header.Set("Access-Control-Request-Headers", "content-type,x-api-key,idempotency-key")
+	resp, err := http.DefaultClient.Do(preflight)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("preflight status %d", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "http://localhost:5173" {
+		t.Fatalf("preflight allow-origin %q", got)
+	}
+	allow := strings.ToLower(resp.Header.Get("Access-Control-Allow-Headers"))
+	for _, name := range []string{"x-api-key", "idempotency-key", "authorization", "content-type"} {
+		if !strings.Contains(allow, name) {
+			t.Fatalf("preflight allow-headers %q missing %s", allow, name)
+		}
+	}
+
+	health, err := http.NewRequest(http.MethodGet, base+"/health", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	health.Header.Set("Origin", "http://127.0.0.1:5174")
+	resp, err = http.DefaultClient.Do(health)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"status":"ok"`) {
+		t.Fatalf("health with origin %d %s", resp.StatusCode, body)
+	}
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "http://127.0.0.1:5174" {
+		t.Fatalf("health allow-origin %q", got)
+	}
+
+	foreign, err := http.NewRequest(http.MethodGet, base+"/health", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign.Header.Set("Origin", "https://evil.example")
+	resp, err = http.DefaultClient.Do(foreign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("foreign origin health %d", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("foreign origin was allowed: %q", got)
 	}
 }
 

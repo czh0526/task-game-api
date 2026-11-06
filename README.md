@@ -242,6 +242,16 @@ npm run example:exclusive
 
 `baseUrl` 用 `http://127.0.0.1:8891`，或以 `/v1` 结尾的 OpenAPI 服务器 URL。鉴权用 `apiKey(...)`（`X-Api-Key`）或 `bearer(...)`（`Authorization: Bearer`）。写操作把 `idempotencyKey` 写成 `Idempotency-Key`。
 
+## Web 界面
+
+发布者 / 执行者演示页在 [`web`](web)（Vite + React，中文界面，依赖本地 `sdk/ts`）。`make run` 之后：
+
+```bash
+cd web && npm install && npm run dev
+```
+
+打开 `http://localhost:5173`。用法、localStorage 键和三种任务的点法见 [`web/README.md`](web/README.md)。进程为本地 Vite 源（`localhost` / `127.0.0.1` / `[::1]` 的 4173 与 5173–5185）加了 CORS 预检，业务路由不变。
+
 ## TypeScript client
 
 The protocol client is [`sdk/ts`](sdk/ts), npm package `taskgame-client` (not published to the registry yet). Paths and types follow [`api/openapi.yaml`](api/openapi.yaml), plus process liveness `GET /health`. The Chinese and English guide (base URL, `X-Api-Key` / bearer, the exclusive happy path, competitive `submission_id`, collaborative `on_dropout=replace`, hex HMAC-SHA256 of the raw webhook body) is [`docs/client-ts.md`](docs/client-ts.md). The runnable sample [`sdk/ts/examples/exclusive.mjs`](sdk/ts/examples/exclusive.mjs) follows the exclusive path in `scripts/smoke.sh`.
@@ -256,6 +266,16 @@ npm run example:exclusive
 ```
 
 `baseUrl` is `http://127.0.0.1:8891`, or the OpenAPI server URL ending in `/v1`. Auth is `apiKey(...)` (`X-Api-Key`) or `bearer(...)` (`Authorization: Bearer`). Mutating calls send `idempotencyKey` as `Idempotency-Key`.
+
+## Web UI
+
+The publisher / executor demo is [`web`](web) (Vite + React, Chinese UI, local `sdk/ts`). With `make run` already listening:
+
+```bash
+cd web && npm install && npm run dev
+```
+
+Open `http://localhost:5173`. Keys, localStorage, and the three task flows are in [`web/README.md`](web/README.md). The process adds a CORS preflight for local Vite origins (`localhost`, `127.0.0.1`, `[::1]` on 4173 and 5173–5185). Handlers stay the same.
 
 ## 布局 / Layout
 
@@ -276,6 +296,7 @@ internal/model               持久化记录 / persistence records
 scripts/smoke.sh             三种任务的端到端冒烟 / smoke for all three kinds
 sdk/ts                       TypeScript 客户端 taskgame-client / TS client
 docs/client-ts.md            客户端接入说明（中英） / client guide (zh + en)
+web/                         浏览器演示（Vite + React） / player demo UI
 ```
 
 换 Postgres 时实现同一个 `store.Store`，handler 不用改。SQLite 的 JSON 列是 TEXT，schema 注释里标了对应的 jsonb。
