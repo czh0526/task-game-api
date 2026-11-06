@@ -1,4 +1,4 @@
-.PHONY: tidy build test run smoke token generate
+.PHONY: tidy build test run smoke token generate sdk
 
 # modernc.org/sqlite does not need cgo. Export so build, test, and run stay
 # reproducible on machines without a C compiler. Override on the command line
@@ -27,6 +27,11 @@ run:
 # exclusive, competitive winner_take_all, and collaborative on_dropout=replace.
 smoke:
 	bash scripts/smoke.sh
+
+# TypeScript client in sdk/ts. npm test builds, typechecks the examples, and
+# runs node:test. The API does not need to be running.
+sdk:
+	cd sdk/ts && npm install && npm test
 
 token:
 	go run ./cmd/token -f etc/taskgame.yaml -user $(or $(USER_ID),usr_publisher)

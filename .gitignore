@@ -1,4 +1,7 @@
 /data/
+sdk/ts/node_modules/
+sdk/ts/dist/
+sdk/ts/dist-test/
 *.db
 *.db-wal
 *.db-shm

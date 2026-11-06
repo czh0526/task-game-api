@@ -227,6 +227,36 @@ Do not overwrite these after a regen:
 - `internal/handler/task/submitTaskHandler.go`: the body is decoded with `encoding/json` because go-zero's mapper cannot fill a `map[string]interface{}` payload
 - create task, webhook, chat, and message handlers return **201** via `httpx.WriteJsonCtx`; other successes return 200
 
+## TypeScript 客户端
+
+协议客户端在 [`sdk/ts`](sdk/ts)，npm 包名 `taskgame-client`（还没发布到 registry）。路径和类型以 [`api/openapi.yaml`](api/openapi.yaml) 为准，另外调用进程探活 `GET /health`。中英接入说明（基址、`X-Api-Key` / Bearer、独占 happy path、竞争确认要 `submission_id`、协作 `on_dropout=replace`、webhook 原始 body 的 HMAC-SHA256 十六进制）在 [`docs/client-ts.md`](docs/client-ts.md)。可运行示例 [`sdk/ts/examples/exclusive.mjs`](sdk/ts/examples/exclusive.mjs) 与 `scripts/smoke.sh` 的独占路径一致。
+
+```bash
+cd sdk/ts
+npm install
+npm test
+npm run build
+# 服务已在听（make run）时：
+npm run example:exclusive
+```
+
+`baseUrl` 用 `http://127.0.0.1:8891`，或以 `/v1` 结尾的 OpenAPI 服务器 URL。鉴权用 `apiKey(...)`（`X-Api-Key`）或 `bearer(...)`（`Authorization: Bearer`）。写操作把 `idempotencyKey` 写成 `Idempotency-Key`。
+
+## TypeScript client
+
+The protocol client is [`sdk/ts`](sdk/ts), npm package `taskgame-client` (not published to the registry yet). Paths and types follow [`api/openapi.yaml`](api/openapi.yaml), plus process liveness `GET /health`. The Chinese and English guide (base URL, `X-Api-Key` / bearer, the exclusive happy path, competitive `submission_id`, collaborative `on_dropout=replace`, hex HMAC-SHA256 of the raw webhook body) is [`docs/client-ts.md`](docs/client-ts.md). The runnable sample [`sdk/ts/examples/exclusive.mjs`](sdk/ts/examples/exclusive.mjs) follows the exclusive path in `scripts/smoke.sh`.
+
+```bash
+cd sdk/ts
+npm install
+npm test
+npm run build
+# with the API already listening (make run):
+npm run example:exclusive
+```
+
+`baseUrl` is `http://127.0.0.1:8891`, or the OpenAPI server URL ending in `/v1`. Auth is `apiKey(...)` (`X-Api-Key`) or `bearer(...)` (`Authorization: Bearer`). Mutating calls send `idempotencyKey` as `Idempotency-Key`.
+
 ## 布局 / Layout
 
 ```
@@ -244,6 +274,8 @@ internal/store               Store 接口；sqlite 实现 / interface and sqlite
 internal/webhook             签名与投递 / sign and deliver
 internal/model               持久化记录 / persistence records
 scripts/smoke.sh             三种任务的端到端冒烟 / smoke for all three kinds
+sdk/ts                       TypeScript 客户端 taskgame-client / TS client
+docs/client-ts.md            客户端接入说明（中英） / client guide (zh + en)
 ```
 
 换 Postgres 时实现同一个 `store.Store`，handler 不用改。SQLite 的 JSON 列是 TEXT，schema 注释里标了对应的 jsonb。
