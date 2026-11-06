@@ -1,9 +1,13 @@
 package engine
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -190,6 +194,17 @@ func TestCollaborativeDropoutAndSettle(t *testing.T) {
 	}
 	if created.Collaborative.OnDropout != model.DropoutReplace {
 		t.Fatalf("dropout rule %s", created.Collaborative.OnDropout)
+	}
+	if len(created.Collaborative.Roles) != 2 {
+		t.Fatalf("roles %+v", created.Collaborative.Roles)
+	}
+	design := created.Collaborative.Roles[0]
+	copySeat := created.Collaborative.Roles[1]
+	if design.Id != "design" || design.TemplateId != "design" || design.ShareBps != 6000 || design.Quantity != nil {
+		t.Fatalf("flat design seat %+v", design)
+	}
+	if copySeat.Id != "copy" || copySeat.TemplateId != "copy" || copySeat.ShareBps != 4000 || copySeat.Quantity != nil {
+		t.Fatalf("flat copy seat %+v", copySeat)
 	}
 	if _, err := eng.FundTask(ctx, "usr_publisher", &types.FundTaskReq{TaskId: created.Id}); err != nil {
 		t.Fatal(err)
@@ -458,6 +473,200 @@ func TestMilestoneReleases(t *testing.T) {
 	if exec.Balance != 1_000_500 || exec.Ability != 10 || exec.Integrity != 1 {
 		t.Fatalf("final executor %+v", exec)
 	}
+}
+
+func TestCollaborativeQuantityMaterializesSeats(t *testing.T) {
+	ctx := context.Background()
+	eng, st, clk := newEngine(t, 1_000_000)
+	req := exclusiveReq(clk)
+	req.Kind = model.KindCollaborative
+	req.Payment.Amount = 500
+	req.Collaborative = &types.Collaborative{
+		Roles: []types.CollaborativeRole{
+			{Id: "writer", Name: "Writer", Quantity: qty(4), ShareBps: 10000},
+		},
+	}
+	created, err := eng.CreateTask(ctx, "usr_publisher", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roles := created.Collaborative.Roles
+	if len(roles) != 4 {
+		t.Fatalf("seats %+v", roles)
+	}
+	var shareSum int64
+	for i, role := range roles {
+		shareSum += role.ShareBps
+		wantID := fmt.Sprintf("writer_%d", i+1)
+		if role.Id != wantID || role.Name != "Writer" || role.ShareBps != 2500 || role.TemplateId != "writer" || role.Status != model.RoleOpen || role.Quantity != nil || role.AssigneeUserId != nil {
+			t.Fatalf("seat %d %+v", i, role)
+		}
+	}
+	if shareSum != 10000 {
+		t.Fatalf("seat shares sum %d", shareSum)
+	}
+	raw, err := json.Marshal(roles[0])
+	if err != nil || bytes.Contains(raw, []byte("quantity")) {
+		t.Fatalf("quantity is create-input only: %s %v", raw, err)
+	}
+	stored, err := eng.GetTask(ctx, created.Id)
+	if err != nil || stored.Collaborative.Roles[3].Id != "writer_4" || stored.Collaborative.Roles[3].TemplateId != "writer" {
+		t.Fatalf("stored %+v %v", stored.Collaborative, err)
+	}
+
+	if _, err := eng.FundTask(ctx, "usr_publisher", &types.FundTaskReq{TaskId: created.Id}); err != nil {
+		t.Fatal(err)
+	}
+	users := []string{"usr_w1", "usr_w2", "usr_w3", "usr_w4"}
+	for i, user := range users {
+		if _, err := eng.AcceptTask(ctx, user, &types.AcceptTaskReq{TaskId: created.Id, RoleId: fmt.Sprintf("writer_%d", i+1)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := eng.SubmitTask(ctx, users[0], &types.SubmitTaskReq{TaskId: created.Id, Payload: map[string]any{"page": "final"}}); err != nil {
+		t.Fatal(err)
+	}
+	settled, err := eng.ConfirmTask(ctx, "usr_publisher", &types.ConfirmTaskReq{TaskId: created.Id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled.Status != model.StatusSettled || settled.Escrow.Held != 0 {
+		t.Fatalf("settled %+v", settled.Escrow)
+	}
+	for _, user := range users {
+		got, err := st.Users().Get(ctx, user)
+		if err != nil || got.Balance != 1_000_125 {
+			t.Fatalf("%s balance %+v err %v", user, got, err)
+		}
+	}
+}
+
+func TestCollaborativeTemplateSplit(t *testing.T) {
+	ctx := context.Background()
+	eng, _, clk := newEngine(t, 1_000_000)
+
+	one := exclusiveReq(clk)
+	one.Kind = model.KindCollaborative
+	one.Collaborative = &types.Collaborative{Roles: []types.CollaborativeRole{
+		{Id: "design", Name: "Design", Quantity: qty(1), ShareBps: 6000},
+		{Id: "copy", Name: "Copy", ShareBps: 4000},
+	}}
+	created, err := eng.CreateTask(ctx, "usr_publisher", one)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Collaborative.Roles[0].Id != "design" || created.Collaborative.Roles[1].Id != "copy" {
+		t.Fatalf("quantity 1 must keep the template id: %+v", created.Collaborative.Roles)
+	}
+
+	three := exclusiveReq(clk)
+	three.Kind = model.KindCollaborative
+	three.Title = "Three writers"
+	three.Collaborative = &types.Collaborative{Roles: []types.CollaborativeRole{
+		{Id: "writer", Name: "Writer", Quantity: qty(3), ShareBps: 10000},
+	}}
+	created, err = eng.CreateTask(ctx, "usr_publisher", three)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := sharesOf(created)
+	if !equalInts(got, []int64{3333, 3333, 3334}) || created.Collaborative.Roles[2].Id != "writer_3" {
+		t.Fatalf("remainder seats %+v", created.Collaborative.Roles)
+	}
+
+	weighted := exclusiveReq(clk)
+	weighted.Kind = model.KindCollaborative
+	weighted.Title = "Weighted templates"
+	weighted.Collaborative = &types.Collaborative{Roles: []types.CollaborativeRole{
+		{Id: "design", Name: "Design", Quantity: qty(4), ShareBps: 6000},
+		{Id: "copy", Name: "Copy", Quantity: qty(2), ShareBps: 4000},
+	}}
+	created, err = eng.CreateTask(ctx, "usr_publisher", weighted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !equalInts(sharesOf(created), []int64{1500, 1500, 1500, 1500, 2000, 2000}) {
+		t.Fatalf("weighted %+v", created.Collaborative.Roles)
+	}
+	if created.Collaborative.Roles[0].Id != "design_1" || created.Collaborative.Roles[4].Id != "copy_1" || created.Collaborative.Roles[4].TemplateId != "copy" {
+		t.Fatalf("ids %+v", created.Collaborative.Roles)
+	}
+}
+
+func TestCollaborativeQuantityRejects(t *testing.T) {
+	ctx := context.Background()
+	eng, _, clk := newEngine(t, 1_000_000)
+	longID := strings.Repeat("a", 63)
+	cases := []struct {
+		name  string
+		roles []types.CollaborativeRole
+		want  string
+	}{
+		{
+			name:  "per-seat number is not the template total",
+			roles: []types.CollaborativeRole{{Id: "writer", Name: "Writer", Quantity: qty(4), ShareBps: 2500}},
+			want:  "share_bps must sum to 10000",
+		},
+		{
+			name:  "quantity zero",
+			roles: []types.CollaborativeRole{{Id: "writer", Name: "Writer", Quantity: qty(0), ShareBps: 10000}},
+			want:  "quantity must be between 1 and 20",
+		},
+		{
+			name: "too many seats",
+			roles: []types.CollaborativeRole{
+				{Id: "a", Name: "A", Quantity: qty(11), ShareBps: 5000},
+				{Id: "b", Name: "B", Quantity: qty(11), ShareBps: 5000},
+			},
+			want: "at most 20 seats",
+		},
+		{
+			name: "expanded ids collide",
+			roles: []types.CollaborativeRole{
+				{Id: "writer", Name: "Writer", Quantity: qty(2), ShareBps: 6000},
+				{Id: "writer_1", Name: "Overlap", ShareBps: 4000},
+			},
+			want: "expanded seat ids must be unique",
+		},
+		{
+			name:  "seat id longer than 64",
+			roles: []types.CollaborativeRole{{Id: longID, Name: "Writer", Quantity: qty(2), ShareBps: 10000}},
+			want:  "too long to expand",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := exclusiveReq(clk)
+			req.Kind = model.KindCollaborative
+			req.Collaborative = &types.Collaborative{Roles: tc.roles}
+			_, err := eng.CreateTask(ctx, "usr_publisher", req)
+			if codeOf(err) != "invalid_argument" || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("got %v", err)
+			}
+		})
+	}
+}
+
+func qty(n int64) *int64 { return &n }
+
+func sharesOf(task *types.Task) []int64 {
+	out := make([]int64, len(task.Collaborative.Roles))
+	for i, role := range task.Collaborative.Roles {
+		out[i] = role.ShareBps
+	}
+	return out
+}
+
+func equalInts(got, want []int64) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestInsufficientCredits(t *testing.T) {

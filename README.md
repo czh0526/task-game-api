@@ -6,6 +6,7 @@ Credits are simulated. There is no payment provider. Locked v0.1 rules:
 
 - `competitive.settlement_rule` is `winner_take_all`
 - `collaborative.on_dropout` is `replace` (the exitee gets 0 commission and 0 ability)
+- collaborative `roles[]` may include `quantity` (default 1). `share_bps` is the template total and still sums to 10000. The server expands seats. Omitting `quantity` keeps the old flat role list.
 - acceptance is executor submit, then publisher confirm
 - `review_hours` defaults to 72; exclusive tasks auto-settle when that review window passes
 - mutating calls accept `Idempotency-Key`; the same key with a different body returns 409 `idempotency_conflict`
@@ -91,7 +92,7 @@ make smoke
 
 1. **exclusive**：创建 → 注资 → 接受 → 提交 → 确认 → `settled`。同时检查幂等重放、积分、webhook 和 chat。
 2. **competitive**（`settlement_rule=winner_take_all`）：两个执行者都接受并提交。不带 `submission_id` 的确认返回 400，任务保持 `in_review`，托管不动。v0.1 的任务体不列出提交；这条 400 的 `message` 会按 `created_at` 顺序列出 submission id（`Webhook.Mode=post` 时，`task.submitted` 事件里还有 `executor_id`）。再带选定的 `submission_id` 确认后，只有赢家拿到全部托管，任务 `settled`，输家能力分为 0。
-3. **collaborative**（`on_dropout=replace`）：两个席位的 `share_bps` 使用接口已经要求的合计 10000（这里是 6000 与 4000）。坐满后一人退出：佣金 0、能力分 0，该席位回到 `open`，另一席位仍是 `filled`，任务保持 `active`。替补入席、提交、确认后按该 bps 结算（500 积分分成 300 与 200，退出者拿不到 release）。
+3. **collaborative**（`on_dropout=replace`）：两个席位的 `share_bps` 使用接口已经要求的合计 10000（这里是 6000 与 4000，不带 `quantity`）。坐满后一人退出：佣金 0、能力分 0，该席位回到 `open`，另一席位仍是 `filled`，任务保持 `active`。替补入席、提交、确认后按该 bps 结算（500 积分分成 300 与 200，退出者拿不到 release）。另一条用一个角色 `quantity=4`、`share_bps=10000`（角色合计，不是每席）。服务端展开为 `writer_1`…`writer_4`，每席 2500。四席坐满后 500 积分各结算 125。
 
 72 小时自动结算不会替多份提交的竞争任务猜赢家。冒烟不等待 72 小时。同一条规则由单元测试拨钟覆盖（`review_hours` 设为 1，只为越过截止时间，不改变规则）：
 
@@ -181,7 +182,7 @@ The three paths:
 
 1. **exclusive**: create → fund → accept → submit → confirm → `settled`, plus the idempotency replay, scores, webhook, and chat calls.
 2. **competitive** (`settlement_rule=winner_take_all`): two executors accept and submit. Confirm without `submission_id` returns 400 and leaves the task `in_review` with the escrow untouched. v0.1 task bodies do not list submissions; that 400 `message` names the submission ids in `created_at` order (`task.submitted` webhooks also include `executor_id` when `Webhook.Mode=post`). Confirm with the chosen `submission_id` pays the whole escrow to that winner, settles the task, and leaves the loser at ability 0.
-3. **collaborative** (`on_dropout=replace`): two seats use the share the API already requires (`share_bps` sums to 10000; this run uses 6000 and 4000). After both seats are filled, one participant drops out: 0 commission, 0 ability, that seat returns to `open`, the other seat stays `filled`, and the task stays `active`. The replacement takes the seat, the work is submitted and confirmed, and settlement follows those basis points (500 credits split 300 / 200; the exitee gets no release).
+3. **collaborative** (`on_dropout=replace`): two seats use the share the API already requires (`share_bps` sums to 10000; this run uses 6000 and 4000 and omits `quantity`). After both seats are filled, one participant drops out: 0 commission, 0 ability, that seat returns to `open`, the other seat stays `filled`, and the task stays `active`. The replacement takes the seat, the work is submitted and confirmed, and settlement follows those basis points (500 credits split 300 / 200; the exitee gets no release). A second create sends one role with `quantity=4` and `share_bps=10000` (the template total, not per seat). The server stores `writer_1`…`writer_4` at 2500 each. After all four seats are filled, 500 credits settle as 125 each.
 
 The 72h auto-settle path does not pick a winner for a competitive task that has more than one submission. The smoke script does not sleep 72h. The same rule is covered by moving the clock in a unit test (`review_hours` is 1 only so the deadline can pass; the rule is unchanged):
 

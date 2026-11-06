@@ -209,6 +209,37 @@ const dropped = await exitee.dropoutTask(taskId);
 await replacement.acceptTask(taskId, { role_id: "design" });
 ```
 
+### 角色人数 quantity
+
+创建时 `roles[]` 的每一项是角色模板。`quantity` 省略或为 1 时，和以前的扁平席位一样：`share_bps` 就是这一席，`id` 就是 `accept` 用的 `role_id`。各模板的 `share_bps` 相加必须是 10000。人数不乘进这个合计。
+
+`quantity` 大于 1 时，`share_bps` 仍是这一角色的合计。服务端拆成 `quantity` 个席位：每席先拿 `floor(share_bps / quantity)`，余数从最后几席起每人再加 1，使各席之和等于该角色的 `share_bps`。席位 id 是 `{id}_1` … `{id}_N`（从 1 起）。`accept` 和退出补位用席位 id。
+
+任务响应里的 `roles` 是席位。每席的 `share_bps` 是拆开之后的数字，`quantity` 不会出现。`template_id` 是创建时的模板 id。把响应里的席位原样再拿去创建也合法：每一席省略 `quantity`，`share_bps` 已经是席位份额，合计仍是 10000。
+
+协议仍是 0.1.0。旧的扁平 `roles[]` 不用改。
+
+```ts
+await publisher.createTask({
+  kind: "collaborative",
+  title: "Write the launch page",
+  description: "Four writer seats from one role template.",
+  payment: { mode: "one_shot", amount: 500 },
+  acceptance: {
+    deadline,
+    quality: "Meets the written acceptance bar",
+    review_hours: 72,
+  },
+  assignee_policy: { type: "open" },
+  collaborative: {
+    on_dropout: "replace",
+    roles: [{ id: "writer", name: "Writer", quantity: 4, share_bps: 10000 }],
+  },
+});
+// seats writer_1 … writer_4, each share_bps 2500, template_id "writer"
+await client.acceptTask(taskId, { role_id: "writer_1" });
+```
+
 ### Webhook 签名
 
 登记时带上 `secret`（至少 16 个字符）和 `events`。投递是 HTTP POST，请求头：
@@ -435,6 +466,37 @@ const dropped = await exitee.dropoutTask(taskId);
 // dropped.status === "active"
 // the design seat status is "open" and its assignee is cleared
 await replacement.acceptTask(taskId, { role_id: "design" });
+```
+
+### Role quantity
+
+Each `roles[]` entry on create is a template. Omit `quantity`, or send 1, and it behaves like the old flat seat: `share_bps` is that seat and `id` is the `role_id` passed to `accept`. Template `share_bps` values must still sum to 10000. Quantity does not multiply that sum.
+
+When `quantity` is greater than 1, `share_bps` is still that role's total. The server stores `quantity` seats. Each seat gets `floor(share_bps / quantity)`, and the last `share_bps mod quantity` seats each get one extra basis point so the seats sum to the template total. Seat ids are `{id}_1` … `{id}_N` (1-based). `accept` and dropout use the seat id.
+
+A task response lists seats. `share_bps` there is the split figure, `quantity` is absent, and `template_id` is the template id from create. Sending those seats back on a later create is valid: each one omits `quantity`, the seat shares already sum to 10000.
+
+The protocol version stays 0.1.0. Old flat `roles[]` payloads do not need a change.
+
+```ts
+await publisher.createTask({
+  kind: "collaborative",
+  title: "Write the launch page",
+  description: "Four writer seats from one role template.",
+  payment: { mode: "one_shot", amount: 500 },
+  acceptance: {
+    deadline,
+    quality: "Meets the written acceptance bar",
+    review_hours: 72,
+  },
+  assignee_policy: { type: "open" },
+  collaborative: {
+    on_dropout: "replace",
+    roles: [{ id: "writer", name: "Writer", quantity: 4, share_bps: 10000 }],
+  },
+});
+// seats writer_1 … writer_4, each share_bps 2500, template_id "writer"
+await client.acceptTask(taskId, { role_id: "writer_1" });
 ```
 
 ### Webhook signatures

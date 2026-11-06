@@ -86,7 +86,7 @@ try {
 
 Runnable exclusive path (matches `scripts/smoke.sh`): `npm run example:exclusive`.
 
-Competitive confirm with more than one submission needs `submission_id`. Collaborative `on_dropout` is `replace` (the exitee gets 0 commission and 0 ability, and the seat returns to `open`). Webhook `X-Signature` is hex HMAC-SHA256 of the raw body: `verifyWebhookSignature`. Details and Chinese text are in [`docs/client-ts.md`](../../docs/client-ts.md).
+Competitive confirm with more than one submission needs `submission_id`. Collaborative `on_dropout` is `replace` (the exitee gets 0 commission and 0 ability, and the seat returns to `open`). A collaborative role may set `quantity`; `share_bps` is that role's total and still sums to 10000 across roles. The server expands the seats. Webhook `X-Signature` is hex HMAC-SHA256 of the raw body: `verifyWebhookSignature`. Details and Chinese text are in [`docs/client-ts.md`](../../docs/client-ts.md).
 
 ## 安装
 
@@ -128,4 +128,4 @@ const me = await publisher.me();
 
 写操作用 `idempotencyKey` 发送 `Idempotency-Key`。同一把 key、同一请求会重放已保存的响应。同一把 key、不同请求抛出 `IdempotencyConflictError`（HTTP 409，`idempotency_conflict`）。
 
-可运行的独占路径与 `scripts/smoke.sh` 一致：`npm run example:exclusive`。竞争任务有多份提交时，确认必须带 `submission_id`。协作任务的 `on_dropout` 是 `replace`（退出者佣金 0、能力分 0，席位回到 `open`）。Webhook 的 `X-Signature` 是原始 body 的 HMAC-SHA256 十六进制，用 `verifyWebhookSignature` 校验。中英步骤见 [`docs/client-ts.md`](../../docs/client-ts.md)。
+可运行的独占路径与 `scripts/smoke.sh` 一致：`npm run example:exclusive`。竞争任务有多份提交时，确认必须带 `submission_id`。协作任务的 `on_dropout` 是 `replace`（退出者佣金 0、能力分 0，席位回到 `open`）。协作角色可以带 `quantity`；`share_bps` 是该角色合计，各角色相加仍是 10000，席位由服务端展开。Webhook 的 `X-Signature` 是原始 body 的 HMAC-SHA256 十六进制，用 `verifyWebhookSignature` 校验。中英步骤见 [`docs/client-ts.md`](../../docs/client-ts.md)。

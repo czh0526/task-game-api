@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"fmt"
 	"net/url"
 
 	"taskgame/internal/biz"
@@ -8,6 +9,9 @@ import (
 	"taskgame/internal/model"
 	"taskgame/internal/types"
 )
+
+// maxCollaborativeSeats is the cap on both role templates and materialized seats.
+const maxCollaborativeSeats = 20
 
 func (e *Engine) buildTask(publisherID string, req *types.CreateTaskReq) (model.Task, error) {
 	if req == nil {
@@ -244,6 +248,14 @@ func cleanUserIDs(in []string) ([]string, error) {
 	return dedupe(out), nil
 }
 
+// cleanCollaborative materializes role templates into seats.
+//
+// share_bps is the template total, not a per-seat figure. The numbers on the
+// templates must still sum to 10000. quantity defaults to 1 and does not
+// multiply share_bps. quantity 1 keeps the template id as the seat id, so a
+// flat roles[] payload is unchanged. quantity N becomes seats {id}_1 .. {id}_N.
+// Each seat receives floor(share_bps / quantity); the remainder is one extra
+// basis point on each of the last (share_bps mod quantity) seats.
 func cleanCollaborative(in *types.Collaborative) (*model.Collaborative, error) {
 	rule := in.OnDropout
 	if rule == "" {
@@ -252,26 +264,38 @@ func cleanCollaborative(in *types.Collaborative) (*model.Collaborative, error) {
 	if rule != model.DropoutReplace {
 		return nil, biz.Invalid("collaborative.on_dropout must be replace")
 	}
-	if len(in.Roles) == 0 || len(in.Roles) > 20 {
+	if len(in.Roles) == 0 || len(in.Roles) > maxCollaborativeSeats {
 		return nil, biz.Invalid("collaborative tasks require between 1 and 20 roles")
 	}
-	seen := map[string]struct{}{}
+	seenTemplate := map[string]struct{}{}
 	var sum int64
-	roles := make([]model.Role, 0, len(in.Roles))
+	type template struct {
+		id, name string
+		qty      int
+		share    int64
+	}
+	templates := make([]template, 0, len(in.Roles))
 	for _, role := range in.Roles {
 		if !id.ValidRefID(role.Id) {
 			return nil, biz.Invalid("role id must match [A-Za-z0-9_-]{1,64}")
 		}
-		if _, ok := seen[role.Id]; ok {
+		if _, ok := seenTemplate[role.Id]; ok {
 			return nil, biz.Invalid("role ids must be unique")
 		}
-		seen[role.Id] = struct{}{}
+		seenTemplate[role.Id] = struct{}{}
 		name := trim(role.Name)
 		if name == "" || len(name) > 80 {
 			return nil, biz.Invalid("role name is required")
 		}
+		qty, err := roleQuantity(role.Quantity)
+		if err != nil {
+			return nil, err
+		}
 		if role.ShareBps < 0 || role.ShareBps > 10000 {
 			return nil, biz.Invalid("share_bps must be between 0 and 10000")
+		}
+		if sum > 10000-role.ShareBps {
+			return nil, biz.Invalid("collaborative role share_bps must sum to 10000")
 		}
 		sum += role.ShareBps
 		if role.AssigneeUserId != nil && trim(*role.AssigneeUserId) != "" {
@@ -280,12 +304,66 @@ func cleanCollaborative(in *types.Collaborative) (*model.Collaborative, error) {
 		if role.Status != "" && role.Status != model.RoleOpen {
 			return nil, biz.Invalid("role status is assigned by the server")
 		}
-		roles = append(roles, model.Role{ID: role.Id, Name: name, ShareBps: role.ShareBps, Status: model.RoleOpen})
+		templates = append(templates, template{id: role.Id, name: name, qty: qty, share: role.ShareBps})
 	}
 	if sum != 10000 {
 		return nil, biz.Invalid("collaborative role share_bps must sum to 10000")
 	}
+	roles := make([]model.Role, 0)
+	seenSeat := map[string]struct{}{}
+	for _, tmpl := range templates {
+		parts := splitTemplateShare(tmpl.share, tmpl.qty)
+		for n, share := range parts {
+			seatID := tmpl.id
+			if tmpl.qty > 1 {
+				seatID = fmt.Sprintf("%s_%d", tmpl.id, n+1)
+			}
+			if !id.ValidRefID(seatID) {
+				return nil, biz.Invalid("role id is too long to expand into seat ids")
+			}
+			if _, ok := seenSeat[seatID]; ok {
+				return nil, biz.Invalid("expanded seat ids must be unique")
+			}
+			seenSeat[seatID] = struct{}{}
+			roles = append(roles, model.Role{
+				ID:         seatID,
+				Name:       tmpl.name,
+				ShareBps:   share,
+				TemplateID: tmpl.id,
+				Status:     model.RoleOpen,
+			})
+		}
+	}
+	if len(roles) == 0 || len(roles) > maxCollaborativeSeats {
+		return nil, biz.Invalid("collaborative tasks expand to at most 20 seats")
+	}
 	return &model.Collaborative{Roles: roles, OnDropout: rule}, nil
+}
+
+func roleQuantity(q *int64) (int, error) {
+	if q == nil {
+		return 1, nil
+	}
+	if *q < 1 || *q > maxCollaborativeSeats {
+		return 0, biz.Invalid("quantity must be between 1 and 20")
+	}
+	return int(*q), nil
+}
+
+// splitTemplateShare divides a template total across quantity seats.
+// The last (total mod quantity) seats each receive one extra basis point.
+func splitTemplateShare(total int64, quantity int) []int64 {
+	base := total / int64(quantity)
+	remainder := total % int64(quantity)
+	firstFlat := int64(quantity) - remainder
+	out := make([]int64, quantity)
+	for i := 0; i < quantity; i++ {
+		out[i] = base
+		if int64(i) >= firstFlat {
+			out[i] = base + 1
+		}
+	}
+	return out
 }
 
 func validateWebhookURL(raw string) error {

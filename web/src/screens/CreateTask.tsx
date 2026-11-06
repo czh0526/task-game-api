@@ -9,7 +9,7 @@ import {
 import { useApp } from "../context";
 import { KIND_LABEL, formatError, parseIntStrict } from "../format";
 import { href } from "../route";
-import { type ExpandedSeat, type RoleTemplate, SHARE_BPS_TOTAL, expandRoleTemplates } from "../roles";
+import { type ExpandedSeat, type RoleTemplate, SHARE_BPS_TOTAL, expandRoleTemplates, templatesFromSeats } from "../roles";
 import { PRESETS } from "../settings";
 import { Button, ErrorNote, Field, KindPill, OkNote, Screen, StatusPill } from "../ui";
 
@@ -215,9 +215,7 @@ export function CreateTask() {
           <div className="card">
             <h2>协作 collaborative</h2>
             <p className="hint">
-              on_dropout = replace。按「角色 × 人数」填写，同一种角色不用逐行加席。每种角色展开为{" "}
-              <code className="mono">基础id_1</code> … <code className="mono">基础id_人数</code>，显示名称相同。10000 share_bps
-              在全部席位间均分，余数记在最后几席。
+              on_dropout = replace。按「角色 × 人数」填写。未勾选手动调整时，请求发送角色模板：quantity 是人数，share_bps 是这一角色的合计，各角色相加为 10000。服务端展开席位。人数为 1 时席位 id 就是基础 id；大于 1 时是 <code className="mono">基础id_1</code> … <code className="mono">基础id_人数</code>。10000 在全部席位间均分，余数在最后几席。
             </p>
             {form.templates.map((template, index) => (
               <div className="role-row" key={index}>
@@ -279,6 +277,7 @@ export function CreateTask() {
                 <p className={shareSum === SHARE_BPS_TOTAL ? "hint" : "banner warn"}>
                   共 {expanded.length} 席，share_bps 合计 {shareSum === null ? "无效" : shareSum}
                   {shareSum === SHARE_BPS_TOTAL ? "。" : "，需要 10000。"}
+                  {form.adjustShares ? " 手动调整后按逐席 roles[] 提交。" : " 创建请求只发送角色模板，由服务端展开。"}
                 </p>
                 <table className="seat-table">
                   <thead>
@@ -437,19 +436,24 @@ function collaborativeRoles(form: FormState): CollaborativeRole[] | string {
   const expanded = expandRoleTemplates(form.templates);
   if (typeof expanded === "string") return expanded;
   const drafts = shareDraftsFor(form, expanded);
-  const roles: CollaborativeRole[] = [];
+  const shares: number[] = [];
   let sum = 0;
   for (let index = 0; index < expanded.length; index += 1) {
-    const seat = expanded[index];
-    if (!seat) return "无法展开席位";
     const share = parseIntStrict(drafts[index] ?? "");
     if (share === null || share < 0 || share > SHARE_BPS_TOTAL) return "share_bps 需要是 0 到 10000 的整数";
     sum += share;
-    roles.push({ id: seat.id, name: seat.name, share_bps: share });
+    shares.push(share);
   }
-  if (roles.length < 1 || roles.length > 20) return "协作任务需要 1 到 20 个席位";
+  if (expanded.length < 1 || expanded.length > 20) return "协作任务需要 1 到 20 个席位";
   if (sum !== SHARE_BPS_TOTAL) return `share_bps 合计是 ${sum}，需要 10000`;
-  return roles;
+  if (form.adjustShares) {
+    return expanded.map((seat, index) => ({
+      id: seat.id,
+      name: seat.name,
+      share_bps: shares[index] ?? 0,
+    }));
+  }
+  return templatesFromSeats(expanded.map((seat, index) => ({ ...seat, share_bps: shares[index] ?? seat.share_bps })));
 }
 
 function defaultDeadlineLocal(): string {

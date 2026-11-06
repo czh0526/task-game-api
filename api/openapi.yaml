@@ -10,6 +10,7 @@ info:
     - Task kinds: exclusive | competitive | collaborative
     - competitive.settlement_rule = winner_take_all
     - collaborative.on_dropout = replace (dropout gets 0 commission, 0 ability score)
+    - Additive in v0.1: collaborative roles take optional quantity (default 1). share_bps is the template total and those totals still sum to 10000. The server materializes that many seats and splits the share (extra basis points go to the last seats of that template). Task responses list seats, not templates. Accept uses the seat id. A flat roles[] array with no quantity is unchanged.
     - API / Webhook first; no UI required for third parties
     - Additive in v0.1: POST /register and POST /login are public. They store a bcrypt password hash (never plaintext) and return an HS256 access token with the same claims as `make token` (`sub` is the user id, plus `iat` and `exp`). X-Api-Key dev users such as usr_publisher and usr_executor stay valid. GET /me returns the caller id and email.
 servers:
@@ -207,7 +208,9 @@ paths:
               properties:
                 role_id:
                   type: string
-                  description: Required for collaborative role seat
+                  description: |
+                    Required for a collaborative task. This is a materialized seat id.
+                    quantity 1 keeps the template id. quantity N uses `{id}_1` through `{id}_N`.
       responses:
         '200':
           description: Accepted
@@ -509,15 +512,43 @@ components:
         min_ability: { type: integer }
     CollaborativeRole:
       type: object
+      description: |
+        On create, one role template. On a task resource, one materialized seat.
+        share_bps is the template total on create: role totals must sum to 10000, and quantity does not multiply that number.
+        The server stores quantity seats (default 1). Each seat gets floor(share_bps / quantity), then the last
+        (share_bps mod quantity) seats each get one extra basis point so the seats sum to the template total.
+        Task responses omit quantity. share_bps on a returned seat is that seat's share after the split.
+        Those seat shares still sum to 10000 and are what settlement uses.
       required: [id, name, share_bps]
       properties:
-        id: { type: string }
+        id:
+          type: string
+          description: |
+            Template id on create. Seat id on the task.
+            quantity 1, or omitted, keeps this id.
+            quantity N materializes `{id}_1` through `{id}_N` (1-based).
+            accept and dropout send the seat id.
         name: { type: string }
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 20
+          default: 1
+          description: |
+            Create input only. Seats to materialize from this template. Omitted means 1.
+            Not returned on task seats. Does not multiply share_bps.
         share_bps:
           type: integer
           minimum: 0
           maximum: 10000
-          description: Basis points of total bounty for this seat when still active at settle
+          description: |
+            share_bps is the template total on create, not the per-seat figure.
+            Across templates these totals must sum to 10000.
+            On the task resource this is the seat's own share after the server split.
+        template_id:
+          type: string
+          description: |
+            Present on materialized seats. The template id from create. Ignored on create.
         assignee_user_id:
           type: [string, 'null']
         status:
@@ -570,6 +601,9 @@ components:
           properties:
             roles:
               type: array
+              description: |
+                Create: 1 to 20 role templates. The server expands them and stores at most 20 seats.
+                Task responses: those seats. Accept and dropout use each seat's id.
               items: { $ref: '#/components/schemas/CollaborativeRole' }
             on_dropout:
               type: string

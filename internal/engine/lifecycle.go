@@ -69,7 +69,8 @@ func (e *Engine) FundTask(ctx context.Context, userID string, req *types.FundTas
 }
 
 // AcceptTask moves open → active. Competitive tasks stay active until slots fill.
-// Collaborative accept fills one role. Dropout later reopens that seat (on_dropout = replace).
+// Collaborative accept fills one materialized seat. role_id is that seat id.
+// Dropout later reopens the same seat (on_dropout = replace).
 func (e *Engine) AcceptTask(ctx context.Context, userID string, req *types.AcceptTaskReq) (*types.Task, error) {
 	return call(e, ctx, userID, http.MethodPost, taskPath(req.TaskId, "accept"), req.IdempotencyKey, req, func(ctx context.Context, r store.Repos) (*types.Task, error) {
 		t, err := loadTask(ctx, r, req.TaskId)

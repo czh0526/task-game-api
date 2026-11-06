@@ -30,10 +30,11 @@ func toTask(t model.Task, acc *model.EscrowAccount) types.Task {
 		roles := make([]types.CollaborativeRole, 0, len(t.Collaborative.Roles))
 		for _, role := range t.Collaborative.Roles {
 			item := types.CollaborativeRole{
-				Id:       role.ID,
-				Name:     role.Name,
-				ShareBps: role.ShareBps,
-				Status:   role.Status,
+				Id:         role.ID,
+				Name:       role.Name,
+				ShareBps:   role.ShareBps,
+				TemplateId: role.TemplateID,
+				Status:     role.Status,
 			}
 			if role.AssigneeUserID != "" {
 				uid := role.AssigneeUserID
