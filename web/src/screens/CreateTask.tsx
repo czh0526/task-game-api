@@ -9,14 +9,9 @@ import {
 import { useApp } from "../context";
 import { KIND_LABEL, formatError, parseIntStrict } from "../format";
 import { href } from "../route";
+import { type ExpandedSeat, type RoleTemplate, SHARE_BPS_TOTAL, expandRoleTemplates } from "../roles";
 import { PRESETS } from "../settings";
 import { Button, ErrorNote, Field, KindPill, OkNote, Screen, StatusPill } from "../ui";
-
-interface RoleDraft {
-  id: string;
-  name: string;
-  share: string;
-}
 
 interface FormState {
   kind: TaskKind;
@@ -27,12 +22,16 @@ interface FormState {
   quality: string;
   reviewHours: string;
   slots: string;
-  roles: RoleDraft[];
+  templates: RoleTemplate[];
+  adjustShares: boolean;
+  shareDrafts: string[];
 }
 
-const EMPTY_ROLES: RoleDraft[] = [
-  { id: "design", name: "Design", share: "6000" },
-  { id: "copy", name: "Copy", share: "4000" },
+const DEFAULT_TEMPLATES: RoleTemplate[] = [{ name: "设计", slug: "design", count: "4" }];
+
+const EXAMPLE_TEMPLATES: RoleTemplate[] = [
+  { name: "设计", slug: "design", count: "4" },
+  { name: "文案", slug: "copy", count: "2" },
 ];
 
 export function CreateTask() {
@@ -46,13 +45,17 @@ export function CreateTask() {
     quality: "达到书面验收标准",
     reviewHours: "72",
     slots: "2",
-    roles: EMPTY_ROLES.map((role) => ({ ...role })),
+    templates: DEFAULT_TEMPLATES.map((template) => ({ ...template })),
+    adjustShares: false,
+    shareDrafts: [],
   }));
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<"create" | "fund" | null>(null);
   const [created, setCreated] = useState<Task | null>(null);
 
-  const shareSum = form.roles.reduce((sum, role) => sum + (parseIntStrict(role.share) ?? 0), 0);
+  const expanded = expandRoleTemplates(form.templates);
+  const shareDrafts = shareDraftsFor(form, expanded);
+  const shareSum = typeof expanded === "string" ? null : sumShareDrafts(shareDrafts);
 
   function patch(partial: Partial<FormState>) {
     setCreated(null);
@@ -87,8 +90,27 @@ export function CreateTask() {
     patch({
       ...common,
       title: "撰写发布页",
-      description: "设计席和文案席。退出后席位重新开放，退出者佣金和能力分都是 0。",
-      roles: EMPTY_ROLES.map((role) => ({ ...role })),
+      description: "4 名设计、2 名文案。退出后席位重新开放，退出者佣金和能力分都是 0。",
+      templates: EXAMPLE_TEMPLATES.map((template) => ({ ...template })),
+      adjustShares: false,
+      shareDrafts: [],
+    });
+  }
+
+  function updateTemplate(index: number, partial: Partial<RoleTemplate>) {
+    setCreated(null);
+    setForm((prev) => withTemplates(prev, prev.templates.map((template, i) => (i === index ? { ...template, ...partial } : template))));
+  }
+
+  function editShare(index: number, value: string) {
+    setCreated(null);
+    setForm((prev) => {
+      const seats = expandRoleTemplates(prev.templates);
+      const drafts = shareDraftsFor(prev, seats);
+      if (drafts.length === 0) return prev;
+      const next = [...drafts];
+      next[index] = value;
+      return { ...prev, adjustShares: true, shareDrafts: next };
     });
   }
 
@@ -192,28 +214,46 @@ export function CreateTask() {
         {form.kind === "collaborative" ? (
           <div className="card">
             <h2>协作 collaborative</h2>
-            <p className="hint">on_dropout = replace。各席 share_bps 合计必须是 10000。当前合计 {shareSum}。</p>
-            {form.roles.map((role, index) => (
+            <p className="hint">
+              on_dropout = replace。按「角色 × 人数」填写，同一种角色不用逐行加席。每种角色展开为{" "}
+              <code className="mono">基础id_1</code> … <code className="mono">基础id_人数</code>，显示名称相同。10000 share_bps
+              在全部席位间均分，余数记在最后几席。
+            </p>
+            {form.templates.map((template, index) => (
               <div className="role-row" key={index}>
-                <Field label="role id">
+                <Field label="显示名称 name">
                   <input
-                    value={role.id}
-                    maxLength={64}
-                    spellCheck={false}
-                    onChange={(event) => updateRole(setForm, index, { id: event.target.value })}
+                    value={template.name}
+                    maxLength={80}
+                    placeholder="设计"
+                    onChange={(event) => updateTemplate(index, { name: event.target.value })}
                   />
                 </Field>
-                <Field label="名称 name">
-                  <input value={role.name} maxLength={80} onChange={(event) => updateRole(setForm, index, { name: event.target.value })} />
+                <Field label="基础 id">
+                  <input
+                    value={template.slug}
+                    maxLength={61}
+                    spellCheck={false}
+                    placeholder="可选，如 design"
+                    onChange={(event) => updateTemplate(index, { slug: event.target.value })}
+                  />
                 </Field>
-                <Field label="share_bps">
-                  <input value={role.share} inputMode="numeric" onChange={(event) => updateRole(setForm, index, { share: event.target.value })} />
+                <Field label="人数 count">
+                  <input
+                    value={template.count}
+                    inputMode="numeric"
+                    placeholder="4"
+                    onChange={(event) => updateTemplate(index, { count: event.target.value })}
+                  />
                 </Field>
                 <Button
                   type="button"
                   kind="ghost"
-                  disabled={form.roles.length <= 1}
-                  onClick={() => setForm((prev) => ({ ...prev, roles: prev.roles.filter((_, i) => i !== index) }))}
+                  disabled={form.templates.length <= 1}
+                  onClick={() => {
+                    setCreated(null);
+                    setForm((prev) => withTemplates(prev, prev.templates.filter((_, i) => i !== index)));
+                  }}
                 >
                   移除
                 </Button>
@@ -222,11 +262,81 @@ export function CreateTask() {
             <Button
               type="button"
               kind="secondary"
-              disabled={form.roles.length >= 20}
-              onClick={() => setForm((prev) => ({ ...prev, roles: [...prev.roles, { id: "", name: "", share: "" }] }))}
+              disabled={form.templates.length >= 20 || (typeof expanded !== "string" && expanded.length >= 20)}
+              onClick={() => {
+                setCreated(null);
+                setForm((prev) => withTemplates(prev, [...prev.templates, { name: "", slug: "", count: "1" }]));
+              }}
             >
-              增加席位
+              增加角色
             </Button>
+
+            <h3>展开预览</h3>
+            {typeof expanded === "string" ? (
+              <p className="banner warn">{expanded}</p>
+            ) : (
+              <>
+                <p className={shareSum === SHARE_BPS_TOTAL ? "hint" : "banner warn"}>
+                  共 {expanded.length} 席，share_bps 合计 {shareSum === null ? "无效" : shareSum}
+                  {shareSum === SHARE_BPS_TOTAL ? "。" : "，需要 10000。"}
+                </p>
+                <table className="seat-table">
+                  <thead>
+                    <tr>
+                      <th>role_id</th>
+                      <th>名称</th>
+                      <th>share_bps</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {expanded.map((seat, index) => {
+                      const draft = shareDrafts[index] ?? String(seat.share_bps);
+                      const share = parseIntStrict(draft);
+                      return (
+                        <tr key={seat.id}>
+                          <td>
+                            <code className="mono">{seat.id}</code>
+                          </td>
+                          <td>{seat.name}</td>
+                          <td>
+                            {form.adjustShares ? (
+                              <input
+                                aria-label={`${seat.id} share_bps`}
+                                value={draft}
+                                inputMode="numeric"
+                                onChange={(event) => editShare(index, event.target.value)}
+                              />
+                            ) : (
+                              draft
+                            )}{" "}
+                            <span className="en">{share === null ? "—" : `${(share / 100).toFixed(2)}%`}</span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                <label className="check-line">
+                  <input
+                    type="checkbox"
+                    checked={form.adjustShares}
+                    onChange={() => {
+                      setCreated(null);
+                      setForm((prev) => {
+                        if (prev.adjustShares) return { ...prev, adjustShares: false, shareDrafts: [] };
+                        const seats = expandRoleTemplates(prev.templates);
+                        return {
+                          ...prev,
+                          adjustShares: true,
+                          shareDrafts: typeof seats === "string" ? [] : seats.map((seat) => String(seat.share_bps)),
+                        };
+                      });
+                    }}
+                  />
+                  手动调整各席 share_bps
+                </label>
+              </>
+            )}
           </div>
         ) : null}
 
@@ -262,11 +372,33 @@ export function CreateTask() {
   );
 }
 
-function updateRole(setForm: (updater: (prev: FormState) => FormState) => void, index: number, partial: Partial<RoleDraft>) {
-  setForm((prev) => ({
-    ...prev,
-    roles: prev.roles.map((role, i) => (i === index ? { ...role, ...partial } : role)),
-  }));
+function withTemplates(prev: FormState, templates: RoleTemplate[]): FormState {
+  const previousKey = seatKey(prev.templates);
+  const nextKey = seatKey(templates);
+  const keepDrafts = prev.adjustShares && previousKey !== null && previousKey === nextKey;
+  return { ...prev, templates, shareDrafts: keepDrafts ? prev.shareDrafts : [] };
+}
+
+function seatKey(templates: RoleTemplate[]): string | null {
+  const seats = expandRoleTemplates(templates);
+  if (typeof seats === "string") return null;
+  return seats.map((seat) => seat.id).join("\n");
+}
+
+function shareDraftsFor(form: FormState, expanded: ExpandedSeat[] | string): string[] {
+  if (typeof expanded === "string") return [];
+  if (form.adjustShares && form.shareDrafts.length === expanded.length) return form.shareDrafts;
+  return expanded.map((seat) => String(seat.share_bps));
+}
+
+function sumShareDrafts(drafts: string[]): number | null {
+  let sum = 0;
+  for (const draft of drafts) {
+    const share = parseIntStrict(draft);
+    if (share === null) return null;
+    sum += share;
+  }
+  return sum;
 }
 
 function buildTask(form: FormState): TaskCreate | string {
@@ -296,24 +428,28 @@ function buildTask(form: FormState): TaskCreate | string {
     if (slots === null || slots < 2 || slots > 100) return "slots 需要是 2 到 100 的整数";
     return { kind: "competitive", ...common, competitive: { slots, settlement_rule: "winner_take_all" } };
   }
+  const roles = collaborativeRoles(form);
+  if (typeof roles === "string") return roles;
+  return { kind: "collaborative", ...common, collaborative: { on_dropout: "replace", roles } };
+}
+
+function collaborativeRoles(form: FormState): CollaborativeRole[] | string {
+  const expanded = expandRoleTemplates(form.templates);
+  if (typeof expanded === "string") return expanded;
+  const drafts = shareDraftsFor(form, expanded);
   const roles: CollaborativeRole[] = [];
-  const seen = new Set<string>();
   let sum = 0;
-  for (const role of form.roles) {
-    const id = role.id.trim();
-    const name = role.name.trim();
-    const share = parseIntStrict(role.share);
-    if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) return "role id 只能包含字母、数字、下划线和连字符";
-    if (seen.has(id)) return `role id 重复：${id}`;
-    seen.add(id);
-    if (!name) return "请填写席位名称";
-    if (share === null || share < 0 || share > 10000) return "share_bps 需要是 0 到 10000 的整数";
+  for (let index = 0; index < expanded.length; index += 1) {
+    const seat = expanded[index];
+    if (!seat) return "无法展开席位";
+    const share = parseIntStrict(drafts[index] ?? "");
+    if (share === null || share < 0 || share > SHARE_BPS_TOTAL) return "share_bps 需要是 0 到 10000 的整数";
     sum += share;
-    roles.push({ id, name, share_bps: share });
+    roles.push({ id: seat.id, name: seat.name, share_bps: share });
   }
   if (roles.length < 1 || roles.length > 20) return "协作任务需要 1 到 20 个席位";
-  if (sum !== 10000) return `share_bps 合计是 ${sum}，需要 10000`;
-  return { kind: "collaborative", ...common, collaborative: { on_dropout: "replace", roles } };
+  if (sum !== SHARE_BPS_TOTAL) return `share_bps 合计是 ${sum}，需要 10000`;
+  return roles;
 }
 
 function defaultDeadlineLocal(): string {
