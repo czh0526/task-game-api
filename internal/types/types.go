@@ -36,7 +36,9 @@ type Collaborative struct {
 type CollaborativeRole struct {
 	Id             string  `json:"id"`
 	Name           string  `json:"name"`
+	Quantity       *int64  `json:"quantity,optional,omitempty"`
 	ShareBps       int64   `json:"share_bps"`
+	TemplateId     string  `json:"template_id,optional,omitempty"`
 	AssigneeUserId *string `json:"assignee_user_id,optional"`
 	Status         string  `json:"status,optional,options=open|filled|dropped"`
 }

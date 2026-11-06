@@ -1,4 +1,9 @@
-/** UI-only expansion of collaborative role templates into flat API seats. */
+/**
+ * Preview of collaborative role × headcount.
+ * Seat ids match the server: quantity 1 keeps the template id, quantity N is `{id}_1`…`{id}_N`.
+ * Shares are an even split of 10000 across every seat, remainder on the last seats.
+ * The create form sends template totals (quantity + share_bps) unless the publisher edits seats.
+ */
 
 export const SHARE_BPS_TOTAL = 10000;
 export const MAX_COLLAB_SEATS = 20;
@@ -7,7 +12,10 @@ const ROLE_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 export interface RoleTemplate {
   name: string;
-  /** Optional base id. Expanded seats are `{slug}_1` … `{slug}_{count}`. */
+  /**
+   * Optional base id. One seat keeps this id.
+   * More than one seat uses `{slug}_1` … `{slug}_{count}`.
+   */
   slug: string;
   count: string;
 }
@@ -15,6 +23,14 @@ export interface RoleTemplate {
 export interface ExpandedSeat {
   id: string;
   name: string;
+  share_bps: number;
+  template_id: string;
+}
+
+export interface ProtocolTemplate {
+  id: string;
+  name: string;
+  quantity: number;
   share_bps: number;
 }
 
@@ -40,7 +56,23 @@ function parsePositiveInt(value: string): number | null {
 }
 
 function seatIds(base: string, count: number): string[] {
+  if (count === 1) return [base];
   return Array.from({ length: count }, (_, index) => `${base}_${index + 1}`);
+}
+
+/** Group preview seats into the quantity templates the server expands. */
+export function templatesFromSeats(seats: ExpandedSeat[]): ProtocolTemplate[] {
+  const out: ProtocolTemplate[] = [];
+  for (const seat of seats) {
+    const last = out[out.length - 1];
+    if (last && last.id === seat.template_id && last.name === seat.name) {
+      last.quantity += 1;
+      last.share_bps += seat.share_bps;
+      continue;
+    }
+    out.push({ id: seat.template_id, name: seat.name, quantity: 1, share_bps: seat.share_bps });
+  }
+  return out;
 }
 
 function idsAvailable(ids: string[], used: Set<string>): boolean {
@@ -124,7 +156,7 @@ export function expandRoleTemplates(templates: RoleTemplate[]): ExpandedSeat[] |
       used.add(id);
       const share = shares[shareIndex];
       if (share === undefined) return "无法分配 share_bps";
-      seats.push({ id, name: template.name, share_bps: share });
+      seats.push({ id, name: template.name, share_bps: share, template_id: allocated });
       shareIndex += 1;
     }
   }

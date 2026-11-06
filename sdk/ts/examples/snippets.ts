@@ -60,6 +60,26 @@ export async function confirmCompetitive(publisher: TaskGameClient, taskId: stri
   return publisher.confirmTask(taskId, { submission_id: chosenSubmissionId });
 }
 
+/** One template. The server stores writer_1..writer_4 at 2500 bps each. */
+export function collaborativeQuantityBody(deadline: string): TaskCreate {
+  return {
+    kind: "collaborative",
+    title: "Write the launch page",
+    description: "Four writer seats from one role template.",
+    payment: { mode: "one_shot", amount: 500 },
+    acceptance: {
+      deadline,
+      quality: "Meets the written acceptance bar",
+      review_hours: 72,
+    },
+    assignee_policy: { type: "open" },
+    collaborative: {
+      on_dropout: "replace",
+      roles: [{ id: "writer", name: "Writer", quantity: 4, share_bps: 10000 }],
+    },
+  };
+}
+
 export function collaborativeBody(deadline: string): TaskCreate {
   return {
     kind: "collaborative",

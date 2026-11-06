@@ -143,6 +143,7 @@ type Role struct {
 	ID             string `json:"id"`
 	Name           string `json:"name"`
 	ShareBps       int64  `json:"share_bps"`
+	TemplateID     string `json:"template_id,omitempty"`
 	AssigneeUserID string `json:"assignee_user_id,omitempty"`
 	Status         string `json:"status"`
 }

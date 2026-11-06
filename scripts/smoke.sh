@@ -4,6 +4,7 @@
 #   exclusive:      create → fund → accept → submit → confirm → settled
 #   competitive:    winner_take_all, two executors, confirm one submission_id
 #   collaborative:  on_dropout=replace, dropout pays 0, seat reopens, then settle
+#                   plus one template quantity=4, share_bps=10000 (template total)
 #
 # Start the API first, from the repo root:
 #   CGO_ENABLED=0 go run . -f etc/taskgame.yaml
@@ -213,6 +214,37 @@ elif op == "collab_settled":
         fail("unexpected refund; both seats were filled at settle")
     if exitee in (doc.get("executor_ids") or []):
         fail("exitee still listed")
+elif op == "quantity_seats":
+    roles = (doc.get("collaborative") or {}).get("roles") or []
+    if len(roles) != 4:
+        fail("expected 4 seats from one template, got %s" % len(roles))
+    total = 0
+    for i, role in enumerate(roles, start=1):
+        total += int(role.get("share_bps") or 0)
+        if role.get("id") != "writer_%d" % i or role.get("share_bps") != 2500:
+            fail("seat %s" % role)
+        if role.get("template_id") != "writer" or role.get("name") != "Writer":
+            fail("template %s" % role)
+        if role.get("quantity") not in (None,):
+            fail("quantity is create-input only: %s" % role)
+        if role.get("status") not in (None, "open") or role.get("assignee_user_id"):
+            fail("seat should be open: %s" % role)
+    if total != 10000:
+        fail("seat share_bps sum %s" % total)
+elif op == "quantity_settled":
+    users = args[:4]
+    amount = int(args[4])
+    if doc.get("status") != "settled" or (doc.get("escrow") or {}).get("held") != 0:
+        fail("not settled")
+    rel = {e.get("to_user_id"): e.get("amount") for e in releases()}
+    if len(rel) != 4:
+        fail("releases %s" % rel)
+    for user in users:
+        if rel.get(user) != amount:
+            fail("shares %s" % rel)
+    entries = (doc.get("escrow") or {}).get("entries") or []
+    if any(e.get("type") == "refund" for e in entries):
+        fail("unexpected refund")
 else:
     fail("unknown check %s" % op)
 PY
@@ -238,7 +270,7 @@ doc = {
 if kind == "competitive":
     doc["competitive"] = {"slots": 2, "settlement_rule": "winner_take_all"}
 elif kind == "collaborative":
-    # Existing rule: share_bps is parts of 10000 and must sum to 10000.
+    # quantity omitted: each share_bps is that one seat, and they sum to 10000.
     # 6000/4000 of 500 credits is 300/200 with no dust and no refund.
     doc["collaborative"] = {
         "on_dropout": "replace",
@@ -247,6 +279,34 @@ elif kind == "collaborative":
             {"id": "copy", "name": "Copy", "share_bps": 4000},
         ],
     }
+print(json.dumps(doc, separators=(",", ":")))
+PY
+}
+
+# One role template. share_bps 10000 is the template total, not 2500 per seat.
+# The server stores writer_1..writer_4 at 2500 each (500 credits -> 125 each).
+quantity_body() {
+  python3 - "$@" <<'PY'
+import json, sys
+deadline, amount = sys.argv[1], int(sys.argv[2])
+doc = {
+    "kind": "collaborative",
+    "title": "Four writers",
+    "description": "One role template expands to four seats.",
+    "payment": {"mode": "one_shot", "amount": amount},
+    "acceptance": {
+        "deadline": deadline,
+        "quality": "Meets the written acceptance bar",
+        "review_hours": 72,
+    },
+    "assignee_policy": {"type": "open"},
+    "collaborative": {
+        "on_dropout": "replace",
+        "roles": [
+            {"id": "writer", "name": "Writer", "quantity": 4, "share_bps": 10000},
+        ],
+    },
+}
 print(json.dumps(doc, separators=(",", ":")))
 PY
 }
@@ -464,8 +524,47 @@ run_collaborative() {
   echo "collaborative ok task=${id}"
 }
 
+run_collaborative_quantity() {
+  local amount=500 seat_amt=125 body id
+  local -a users=("usr_s${STAMP}q1" "usr_s${STAMP}q2" "usr_s${STAMP}q3" "usr_s${STAMP}q4")
+  local -a toks=()
+  local u tok i seat
+  echo "== collaborative quantity=4 template total 10000 =="
+  for u in "${users[@]}"; do
+    echo "minting JWT for ${u}"
+    tok="$(mint "$u")"
+    toks+=("$tok")
+  done
+
+  body="$(quantity_body "$DEADLINE" "$amount")"
+  request POST "${BASE}/v1/tasks" key "$PUB_KEY" "$body" "smoke-qty-${STAMP}"
+  expect_code 201 "quantity create"
+  id="$(json_id "$RESP_BODY")"
+  check "$RESP_BODY" quantity_seats
+  echo "created ${id} with writer_1..writer_4"
+
+  request POST "${BASE}/v1/tasks/${id}/fund" key "$PUB_KEY" "" "fund-qty-${STAMP}"
+  expect_code 200 "quantity fund"
+
+  for i in 1 2 3 4; do
+    seat="writer_${i}"
+    request POST "${BASE}/v1/tasks/${id}/accept" bearer "${toks[$((i - 1))]}" "{\"role_id\":\"${seat}\"}"
+    expect_code 200 "accept ${seat}"
+    check "$RESP_BODY" seat_filled "$seat" "${users[$((i - 1))]}"
+  done
+  echo "four seats filled"
+
+  request POST "${BASE}/v1/tasks/${id}/submit" bearer "${toks[0]}" '{"payload":{"page":"final"},"note":"four writers"}'
+  expect_code 200 "quantity submit"
+  request POST "${BASE}/v1/tasks/${id}/confirm" key "$PUB_KEY" '{}'
+  expect_code 200 "quantity confirm"
+  check "$RESP_BODY" quantity_settled "${users[0]}" "${users[1]}" "${users[2]}" "${users[3]}" "$seat_amt"
+  echo "collaborative quantity ok task=${id}"
+}
+
 wait_health
 run_exclusive
 run_competitive
 run_collaborative
-echo "smoke ok exclusive + competitive winner_take_all + collaborative replace"
+run_collaborative_quantity
+echo "smoke ok exclusive + competitive winner_take_all + collaborative replace + quantity"

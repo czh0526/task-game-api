@@ -182,12 +182,14 @@ export function TaskDetail({ id }: { id: string }) {
       {task.collaborative ? (
         <section className="card">
           <h2>席位 roles</h2>
+          <p className="hint">表里是服务端展开后的席位。share_bps 是这一席结算用的基点。接受时用席位 id。</p>
           <table>
             <thead>
               <tr>
                 <th>role_id</th>
                 <th>名称</th>
                 <th>share_bps</th>
+                <th>template_id</th>
                 <th>状态</th>
                 <th>assignee_user_id</th>
               </tr>
@@ -202,6 +204,7 @@ export function TaskDetail({ id }: { id: string }) {
                   <td>
                     {role.share_bps} <span className="en">{(role.share_bps / 100).toFixed(2)}%</span>
                   </td>
+                  <td>{role.template_id ? <IdText value={role.template_id} /> : "—"}</td>
                   <td>{ROLE_STATUS_LABEL[role.status ?? "open"] ?? role.status} <span className="en">{role.status ?? "open"}</span></td>
                   <td>{role.assignee_user_id ? <IdText value={role.assignee_user_id} /> : "—"}</td>
                 </tr>
@@ -335,7 +338,7 @@ export function TaskDetail({ id }: { id: string }) {
             </Button>
           </ActionRow>
           {task.kind === "collaborative" ? (
-            <Field label="入席 role_id" hint="协作任务接受时必填">
+            <Field label="入席 role_id" hint="选展开后的席位 id。人数为 1 时就是角色 id。">
               <select value={roleId} onChange={(event) => setRoleId(event.target.value)}>
                 {openRoles.length === 0 ? <option value="">没有空席</option> : null}
                 {openRoles.map((role) => (

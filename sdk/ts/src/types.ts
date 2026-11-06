@@ -66,10 +66,27 @@ export interface AssigneePolicy {
 }
 
 export interface CollaborativeRole {
+  /**
+   * Template id on create. Seat id on a task.
+   * Omitted quantity, or quantity 1, keeps this id.
+   * quantity N becomes `{id}_1` .. `{id}_N` (1-based). accept and dropout use the seat id.
+   */
   id: string;
   name: string;
-  /** Basis points of the bounty for this seat when it is still active at settle. */
+  /**
+   * Create input only. Seats to materialize. Omitted means 1.
+   * Not returned on task seats, and it does not multiply share_bps.
+   */
+  quantity?: number;
+  /**
+   * On create, the template total. Template totals must sum to 10000.
+   * The server gives each seat floor(share_bps / quantity), then adds 1 to each of the
+   * last (share_bps mod quantity) seats.
+   * On a task, this is that seat's share after the split. Settlement uses the seat shares.
+   */
   share_bps: number;
+  /** Server-assigned on materialized seats. The template id from create. */
+  template_id?: string;
   assignee_user_id?: string | null;
   status?: RoleStatus;
 }
@@ -96,6 +113,11 @@ export interface CompetitiveSettings {
 }
 
 export interface CollaborativeSettings {
+  /**
+   * Create: role templates. Response: materialized seats.
+   * share_bps is the template total on the way in and the seat share on the way out.
+   * With quantity omitted or 1, those are the same number.
+   */
   roles: CollaborativeRole[];
   on_dropout?: DropoutRule;
 }
@@ -152,7 +174,10 @@ export interface ListTasksQuery {
 }
 
 export interface AcceptTaskBody {
-  /** Required when the task is collaborative. Names the role seat. */
+  /**
+   * Required when the task is collaborative.
+   * The materialized seat id (`design`, or `writer_1` when quantity is greater than 1).
+   */
   role_id?: string;
 }
 

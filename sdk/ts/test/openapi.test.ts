@@ -56,6 +56,8 @@ describe("OpenAPI parity", () => {
     assert.match(yaml, /Idempotency-Key/);
     assert.match(yaml, /bearerFormat:\s*JWT/);
     assert.match(yaml, /version:\s*0\.1\.0/);
+    assert.match(yaml, /share_bps is the template total on create/);
+    assert.match(yaml, /quantity N materializes/);
     assert.equal(PROTOCOL_VERSION, "0.1.0");
     assert.match(yaml, /HMAC-SHA256\(raw_body, secret\)/);
   });
