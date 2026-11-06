@@ -11,18 +11,110 @@ info:
     - competitive.settlement_rule = winner_take_all
     - collaborative.on_dropout = replace (dropout gets 0 commission, 0 ability score)
     - API / Webhook first; no UI required for third parties
+    - Additive in v0.1: POST /register and POST /login are public. They store a bcrypt password hash (never plaintext) and return an HS256 access token with the same claims as `make token` (`sub` is the user id, plus `iat` and `exp`). X-Api-Key dev users such as usr_publisher and usr_executor stay valid. GET /me returns the caller id and email.
 servers:
   - url: https://api.example.com/v1
 security:
   - bearerAuth: []
   - apiKeyAuth: []
 tags:
+  - name: Auth
   - name: Tasks
   - name: Escrow
   - name: Webhooks
   - name: Chats
   - name: Users
 paths:
+  /register:
+    post:
+      tags: [Auth]
+      summary: Register with email and password
+      operationId: register
+      security: []
+      description: |
+        Public. Creates a user id (`usr_` plus random) and stores a bcrypt password hash.
+        The access token is an HS256 JWT whose `sub` is that user id (same shape as `make token`).
+        Invalid email or password is 400 `invalid_argument`. A duplicate email is 409 `conflict`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordCredentials'
+      responses:
+        '201':
+          description: Registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSession'
+        '400':
+          description: Invalid email or password
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Email already registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /login:
+    post:
+      tags: [Auth]
+      summary: Log in with email and password
+      operationId: login
+      security: []
+      description: |
+        Public. Returns a new HS256 access token (`sub` is the user id).
+        Unknown email and wrong password are both 401 `unauthorized` with the same message.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordCredentials'
+      responses:
+        '200':
+          description: Logged in
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSession'
+        '400':
+          description: Invalid email or password
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unknown email or wrong password
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /me:
+    get:
+      tags: [Auth, Users]
+      summary: Current caller
+      operationId: me
+      description: |
+        Requires Bearer or X-Api-Key. Email is empty when the caller has no password account
+        (development API keys).
+      responses:
+        '200':
+          description: Caller
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserSummary'
+        '401':
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /tasks:
     get:
       tags: [Tasks]
@@ -317,6 +409,48 @@ components:
       required: false
       schema: { type: string }
   schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }
+    PasswordCredentials:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        password:
+          type: string
+          minLength: 8
+          maxLength: 72
+          description: 8 to 72 bytes. Stored as a bcrypt hash, never as plaintext.
+    AuthSession:
+      type: object
+      required: [access_token, expires_in, user]
+      properties:
+        access_token:
+          type: string
+          description: HS256 JWT. `sub` is the user id. `iat` and `exp` match `make token`.
+        expires_in:
+          type: integer
+          minimum: 1
+          description: Token lifetime in seconds.
+        user:
+          $ref: '#/components/schemas/UserSummary'
+    UserSummary:
+      type: object
+      required: [id, email]
+      properties:
+        id:
+          type: string
+          description: User id. Password accounts use the `usr_` prefix.
+        email:
+          type: string
+          description: Empty when the caller has no password account.
     TaskKind:
       type: string
       enum: [exclusive, competitive, collaborative]

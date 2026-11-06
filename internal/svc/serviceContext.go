@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"taskgame/internal/account"
 	"taskgame/internal/config"
 	"taskgame/internal/engine"
 	"taskgame/internal/id"
@@ -22,6 +23,7 @@ type ServiceContext struct {
 	Config     config.Config
 	Auth       rest.Middleware
 	Engine     *engine.Engine
+	Accounts   *account.Service
 	Store      store.Store
 	Dispatcher *webhook.Dispatcher
 }
@@ -52,10 +54,11 @@ func NewServiceContext(c config.Config) (*ServiceContext, error) {
 		return nil, err
 	}
 	return &ServiceContext{
-		Config: c,
-		Auth:   middleware.NewAuthMiddleware(c.Auth).Handle,
-		Engine: engine.New(st, c.Escrow.Currency),
-		Store:  st,
+		Config:   c,
+		Auth:     middleware.NewAuthMiddleware(c.Auth).Handle,
+		Engine:   engine.New(st, c.Escrow.Currency),
+		Accounts: account.New(st, c.Auth.JwtSecret, c.Auth.TokenTTL),
+		Store:    st,
 		Dispatcher: webhook.NewDispatcher(st, webhook.Config{
 			Mode:        c.Webhook.Mode,
 			Timeout:     c.Webhook.Timeout,

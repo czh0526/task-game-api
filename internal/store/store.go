@@ -43,6 +43,10 @@ type Repos interface {
 type UserRepo interface {
 	Ensure(ctx context.Context, id string, now time.Time) (model.User, error)
 	Get(ctx context.Context, id string) (model.User, error)
+	// InsertRegistered creates a password account. Email is unique. Balance is the store initial balance.
+	InsertRegistered(ctx context.Context, id, email, passwordHash string, now time.Time) (model.User, error)
+	// GetByEmail returns the user and its password hash. ErrNotFound when the email is absent.
+	GetByEmail(ctx context.Context, email string) (model.User, error)
 	AddBalance(ctx context.Context, id string, delta int64) error
 	ApplyScore(ctx context.Context, id string, deltaIntegrity, deltaAbility int64) error
 	AddScoreEvent(ctx context.Context, ev model.ScoreEvent) error

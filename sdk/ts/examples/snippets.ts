@@ -13,6 +13,17 @@ import {
   type TaskCreate,
 } from "../dist/index.js";
 
+export async function registerAndLogin(email: string, password: string): Promise<TaskGameClient> {
+  const anon = new TaskGameClient({ baseUrl: "http://127.0.0.1:8891" });
+  const session = await anon.register({ email, password });
+  const authed = anon.withAuth(bearer(session.access_token));
+  const me = await authed.me();
+  if (me.id !== session.user.id) {
+    throw new Error("token subject did not match the registered user");
+  }
+  return authed;
+}
+
 export function clients(publisherJwt: string, executorJwt: string): { publisher: TaskGameClient; executor: TaskGameClient } {
   const publisher = new TaskGameClient({
     baseUrl: "http://127.0.0.1:8891",

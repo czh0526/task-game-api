@@ -15,15 +15,17 @@ export interface Settings {
   apiKey: string;
   bearerToken: string;
   userId: string;
+  email: string;
 }
 
 const DEFAULTS: Settings = {
   baseUrl: "http://127.0.0.1:8891",
   role: "publisher",
   authMode: "apiKey",
-  apiKey: PRESETS.publisher.apiKey,
+  apiKey: "",
   bearerToken: "",
-  userId: PRESETS.publisher.userId,
+  userId: "",
+  email: "",
 };
 
 export function loadSettings(): Settings {
@@ -51,6 +53,19 @@ export function settingsForRole(current: Settings, role: Role): Settings {
     authMode: "apiKey",
     apiKey: preset.apiKey,
     userId: preset.userId,
+    email: "",
+  });
+}
+
+/** Clears the saved session. Base URL and the dev-role choice stay. */
+export function loggedOut(current: Settings): Settings {
+  return normalize({
+    ...current,
+    authMode: "apiKey",
+    apiKey: "",
+    bearerToken: "",
+    userId: "",
+    email: "",
   });
 }
 
@@ -73,5 +88,6 @@ function normalize(input: Settings): Settings {
     apiKey: typeof input.apiKey === "string" ? input.apiKey : DEFAULTS.apiKey,
     bearerToken: typeof input.bearerToken === "string" ? input.bearerToken : "",
     userId: typeof input.userId === "string" ? input.userId.trim() : "",
+    email: typeof input.email === "string" ? input.email.trim() : "",
   };
 }

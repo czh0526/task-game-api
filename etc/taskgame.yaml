@@ -13,6 +13,8 @@ Log:
 # HS256 bearer tokens and static API keys. Sample keys are for local development.
 Auth:
   JwtSecret: dev-jwt-secret-change-me-32b
+  # Lifetime of POST /v1/register and POST /v1/login tokens. Same claims as `make token`.
+  TokenTTL: 24h
   ApiKeys:
     - Key: dev-publisher-key
       UserId: usr_publisher

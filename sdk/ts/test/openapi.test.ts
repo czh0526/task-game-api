@@ -37,6 +37,9 @@ describe("OpenAPI parity", () => {
     assert.deepEqual(paths, [
       "/chats",
       "/chats/{chatId}/messages",
+      "/login",
+      "/me",
+      "/register",
       "/tasks",
       "/tasks/{taskId}",
       "/tasks/{taskId}/accept",

@@ -33,7 +33,7 @@ Development keys (`etc/taskgame.yaml`):
 - `http://127.0.0.1:8891` — 进程 origin
 - `http://127.0.0.1:8891/v1` — OpenAPI server URL
 
-客户端会把末尾的 `/v1` 当成协议前缀。`health()` 请求 `{origin}/health`。其余方法请求 `{origin}/v1/...`。创建任务、webhook、会话、消息成功时是 **201**，其他成功是 **200**。除 `/health` 外都要鉴权。
+客户端会把末尾的 `/v1` 当成协议前缀。`health()` 请求 `{origin}/health`。其余方法请求 `{origin}/v1/...`。注册、创建任务、webhook、会话、消息成功时是 **201**，其他成功是 **200**。除 `/health`、`POST /v1/register`、`POST /v1/login` 外都要鉴权。
 
 ### 鉴权
 
@@ -59,11 +59,32 @@ const asJwt = new TaskGameClient({
 
 `apiKey` 发送 `X-Api-Key`。`bearer` 发送 `Authorization: Bearer <jwt>`。`bearer` 也可以是返回 token 的函数。
 
+### 注册和登录
+
+`register` 和 `login` 是公开接口，不会带上客户端里已经配置的 `apiKey` 或 `bearer`。密码至少 8 个字符、最长 72 字节。服务只存 bcrypt，响应里没有密码。成功时 `access_token` 是 HS256 JWT，`sub` 就是 `user.id`，和 `make token` 的 claims 一样（`sub`、`iat`、`exp`）。`expires_in` 是秒。重复邮箱是 **409** `conflict`。邮箱或密码不合法是 **400** `invalid_argument`。登录时邮箱不存在和密码错误都是 **401** `unauthorized`，文案相同。
+
+`me()` 要鉴权，返回 `{id, email}`。开发密钥用户的 `email` 是空字符串。对这三个方法传入 `idempotencyKey` 会抛出 `TypeError`。
+
+```ts
+import { TaskGameClient, bearer } from "taskgame-client";
+
+const anon = new TaskGameClient({ baseUrl: "http://127.0.0.1:8891" });
+const session = await anon.register({
+  email: "publisher@example.com",
+  password: "password123",
+});
+const publisher = anon.withAuth(bearer(session.access_token));
+const me = await publisher.me();
+// me.id === session.user.id
+```
+
+已有账号用 `anon.login({ email, password })`，返回同一形状。开发密钥 `apiKey()` 仍然可用，`usr_publisher` / `usr_executor` 不用注册。
+
 ### 幂等
 
 OpenAPI 在写操作上声明了请求头 `Idempotency-Key`，`GET /v1/tasks` 的参数表里也有这个头。传入 `idempotencyKey` 就会带上。创建、注资、接受、提交、确认、争议、退出、webhook、会话和消息会保存这把 key：同一用户、同一把 key、同一请求会重放已保存的响应；同一把 key 配了不同的请求则返回 **409** `idempotency_conflict`，客户端抛出 `IdempotencyConflictError`。`GET /v1/tasks` 会收下这个头，当前服务不用它做重放。
 
-`getTask`、`getUserScores`、`health` 的 OpenAPI（或探活）没有这个头。对它们传入 `idempotencyKey` 会抛出 `TypeError`。
+`getTask`、`getUserScores`、`me`、`register`、`login`、`health` 的 OpenAPI（或探活）没有这个头。对它们传入 `idempotencyKey` 会抛出 `TypeError`。
 
 错误体一律是 JSON：`{"code":"...","message":"..."}`。常见 `code` 有对应的错误类（都继承 `TaskGameError`）：
 
@@ -239,7 +260,7 @@ The dev process origin is `http://127.0.0.1:8891`. Protocol routes live under `/
 - `http://127.0.0.1:8891` — process origin
 - `http://127.0.0.1:8891/v1` — OpenAPI server URL
 
-A trailing `/v1` is the protocol prefix. `health()` calls `{origin}/health`. Every other method calls `{origin}/v1/...`. Task, webhook, chat, and message creates return **201**. Other successes return **200**. Every route except `/health` requires auth.
+A trailing `/v1` is the protocol prefix. `health()` calls `{origin}/health`. Every other method calls `{origin}/v1/...`. Register, task, webhook, chat, and message creates return **201**. Other successes return **200**. Every route except `/health`, `POST /v1/register`, and `POST /v1/login` requires auth.
 
 ### Auth
 
@@ -265,11 +286,32 @@ const asJwt = new TaskGameClient({
 
 `apiKey` sends `X-Api-Key`. `bearer` sends `Authorization: Bearer <jwt>`. `bearer` also accepts a function that returns the token.
 
+### Register and login
+
+`register` and `login` are public. They do not send an `apiKey` or `bearer` already configured on the client. The password is 8 to 72 bytes. The server stores bcrypt and does not return the password. `access_token` is an HS256 JWT whose `sub` is `user.id`, the same claims as `make token` (`sub`, `iat`, `exp`). `expires_in` is seconds. A duplicate email is **409** `conflict`. An invalid email or password is **400** `invalid_argument`. Login uses one **401** `unauthorized` message for an unknown email and a wrong password.
+
+`me()` requires auth and returns `{id, email}`. Development API-key users have an empty `email`. Passing `idempotencyKey` to these three methods throws `TypeError`.
+
+```ts
+import { TaskGameClient, bearer } from "taskgame-client";
+
+const anon = new TaskGameClient({ baseUrl: "http://127.0.0.1:8891" });
+const session = await anon.register({
+  email: "publisher@example.com",
+  password: "password123",
+});
+const publisher = anon.withAuth(bearer(session.access_token));
+const me = await publisher.me();
+// me.id === session.user.id
+```
+
+`anon.login({ email, password })` returns the same shape for an existing account. `apiKey()` still works. `usr_publisher` and `usr_executor` do not need to register.
+
 ### Idempotency
 
 OpenAPI declares `Idempotency-Key` on the mutating operations, and the parameter list for `GET /v1/tasks` includes it too. Pass `idempotencyKey` and the client sets that header. Create, fund, accept, submit, confirm, dispute, dropout, webhook, chat, and message store the key: the same user, key, and request replays the stored response; the same key with a different request returns **409** `idempotency_conflict`, and the client throws `IdempotencyConflictError`. `GET /v1/tasks` accepts the header. The current server does not use it for replay.
 
-`getTask`, `getUserScores`, and `health` do not define the header. Passing `idempotencyKey` to them throws `TypeError`.
+`getTask`, `getUserScores`, `me`, `register`, `login`, and `health` do not define the header. Passing `idempotencyKey` to them throws `TypeError`.
 
 Error bodies are JSON: `{"code":"...","message":"..."}`. Common codes have classes (each extends `TaskGameError`):
 

@@ -123,6 +123,69 @@ describe("TaskGameClient URLs and auth", () => {
     assert.equal(calls[1]?.url, "http://127.0.0.1:8891/v1/users/usr%2Fexecutor/scores");
   });
 
+  it("registers and logs in without sending stored credentials", async () => {
+    const calls: Captured[] = [];
+    const session = {
+      access_token: "header.payload.sig",
+      expires_in: 86400,
+      user: { id: "usr_abc", email: "publisher@example.com" },
+    };
+    const client = new TaskGameClient({
+      baseUrl: "http://127.0.0.1:8891/v1",
+      auth: apiKey("dev-publisher-key"),
+      fetch: captureFetch(201, session, calls),
+    });
+    const registered = await client.register({ email: "Publisher@Example.com", password: "password123" });
+    assert.equal(registered.user.id, "usr_abc");
+    assert.equal(calls[0]?.method, "POST");
+    assert.equal(calls[0]?.url, "http://127.0.0.1:8891/v1/register");
+    assert.equal(calls[0]?.headers["X-Api-Key"], undefined);
+    assert.equal(calls[0]?.headers.Authorization, undefined);
+    assert.equal(calls[0]?.headers["Content-Type"], "application/json");
+    assert.equal(calls[0]?.body, JSON.stringify({ email: "Publisher@Example.com", password: "password123" }));
+
+    calls.length = 0;
+    const loginFetch = captureFetch(200, session, calls);
+    const anon = new TaskGameClient({ baseUrl: "http://127.0.0.1:8891", fetch: loginFetch });
+    await anon.login({ email: "publisher@example.com", password: "password123" });
+    assert.equal(calls[0]?.url, "http://127.0.0.1:8891/v1/login");
+    assert.equal(calls[0]?.headers.Authorization, undefined);
+
+    const authed = anon.withAuth(bearer(session.access_token));
+    calls.length = 0;
+    const meFetch = captureFetch(200, session.user, calls);
+    const meClient = new TaskGameClient({
+      baseUrl: "http://127.0.0.1:8891",
+      auth: bearer(session.access_token),
+      fetch: meFetch,
+    });
+    const me = await meClient.me();
+    assert.equal(me.email, "publisher@example.com");
+    assert.equal(calls[0]?.method, "GET");
+    assert.equal(calls[0]?.url, "http://127.0.0.1:8891/v1/me");
+    assert.equal(calls[0]?.headers.Authorization, "Bearer header.payload.sig");
+    assert.equal(calls[0]?.body, undefined);
+    assert.equal(authed.apiBase, meClient.apiBase);
+
+    await assert.rejects(
+      () => meClient.me({ idempotencyKey: "nope" }),
+      (error: unknown) => error instanceof TypeError,
+    );
+  });
+
+  it("maps register and login error codes", async () => {
+    const conflict = new TaskGameClient({
+      baseUrl: "http://127.0.0.1:8891",
+      fetch: captureFetch(409, { code: "conflict", message: "email already registered" }, []),
+    });
+    await assert.rejects(() => conflict.register({ email: "a@b.co", password: "password123" }), ConflictError);
+    const denied = new TaskGameClient({
+      baseUrl: "http://127.0.0.1:8891",
+      fetch: captureFetch(401, { code: "unauthorized", message: "invalid email or password" }, []),
+    });
+    await assert.rejects(() => denied.login({ email: "a@b.co", password: "password123" }), UnauthorizedError);
+  });
+
   it("rejects configuring both credentials", () => {
     assert.throws(
       () => new TaskGameClient({ baseUrl: "http://127.0.0.1:8891", apiKey: "k", bearerToken: "t" }),

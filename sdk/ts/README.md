@@ -32,7 +32,21 @@ Auth is one header. `apiKey(...)` sends `X-Api-Key`. `bearer(...)` sends `Author
 | `X-Api-Key: dev-publisher-key` | `usr_publisher` |
 | `X-Api-Key: dev-executor-key` | `usr_executor` |
 
-Mint a JWT with `make token` (`sub` is the user id) and pass the raw token to `bearer`.
+Mint a JWT with `make token` (`sub` is the user id) and pass the raw token to `bearer`. `register` and `login` are public and return that same HS256 token (`access_token`, `sub` is `user.id`). They do not send credentials already set on the client. `me()` reads the caller. Passwords are 8 to 72 bytes; the server stores bcrypt.
+
+```ts
+import { TaskGameClient, bearer } from "taskgame-client";
+
+const anon = new TaskGameClient({ baseUrl: "http://127.0.0.1:8891" });
+const session = await anon.register({
+  email: "publisher@example.com",
+  password: "password123",
+});
+const publisher = anon.withAuth(bearer(session.access_token));
+const me = await publisher.me();
+```
+
+`login({ email, password })` returns the same `AuthSession`. `apiKey()` is unchanged.
 
 ```ts
 import { TaskGameClient, apiKey, isTaskGameError } from "taskgame-client";
@@ -96,7 +110,21 @@ npm run build
 | `X-Api-Key: dev-publisher-key` | `usr_publisher` |
 | `X-Api-Key: dev-executor-key` | `usr_executor` |
 
-`make token` 签发 JWT（`sub` 是用户 id），把原始 token 交给 `bearer`。
+`make token` 签发 JWT（`sub` 是用户 id），把原始 token 交给 `bearer`。`register` 和 `login` 是公开接口，返回同样的 HS256 token（`access_token`，`sub` 为 `user.id`），不会带上客户端里已经配置的凭证。`me()` 读取当前调用方。密码 8 到 72 字节，服务端只存 bcrypt。
+
+```ts
+import { TaskGameClient, bearer } from "taskgame-client";
+
+const anon = new TaskGameClient({ baseUrl: "http://127.0.0.1:8891" });
+const session = await anon.register({
+  email: "publisher@example.com",
+  password: "password123",
+});
+const publisher = anon.withAuth(bearer(session.access_token));
+const me = await publisher.me();
+```
+
+已有账号用 `login({ email, password })`，返回同一个 `AuthSession`。`apiKey()` 保持不变。
 
 写操作用 `idempotencyKey` 发送 `Idempotency-Key`。同一把 key、同一请求会重放已保存的响应。同一把 key、不同请求抛出 `IdempotencyConflictError`（HTTP 409，`idempotency_conflict`）。
 

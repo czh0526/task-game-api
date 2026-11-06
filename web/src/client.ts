@@ -1,8 +1,18 @@
 import { TaskGameClient, apiKey, bearer } from "taskgame-client";
 import type { Settings } from "./settings";
 
+/** A session is a Bearer JWT plus user id, or a non-empty API key plus user id. */
+export function isSignedIn(settings: Settings): boolean {
+  if (!settings.userId.trim()) return false;
+  if (settings.authMode === "bearer") return jwtFromPaste(settings.bearerToken) !== "";
+  return settings.apiKey.trim() !== "";
+}
+
 export function createClient(settings: Settings): TaskGameClient {
   const baseUrl = settings.baseUrl.trim();
+  if (!isSignedIn(settings)) {
+    return new TaskGameClient({ baseUrl });
+  }
   if (settings.authMode === "bearer") {
     const token = jwtFromPaste(settings.bearerToken);
     if (!token) throw new Error("请填写 Bearer token");

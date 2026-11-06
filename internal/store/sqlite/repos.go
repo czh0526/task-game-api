@@ -32,8 +32,9 @@ func (r *userRepo) Get(ctx context.Context, id string) (model.User, error) {
 	var u model.User
 	var created string
 	err := r.q.QueryRowContext(ctx, `
-		SELECT id, balance, integrity, ability, created_at FROM users WHERE id = ?`, id).
-		Scan(&u.ID, &u.Balance, &u.Integrity, &u.Ability, &created)
+		SELECT id, balance, integrity, ability, created_at, COALESCE(email, '')
+		FROM users WHERE id = ?`, id).
+		Scan(&u.ID, &u.Balance, &u.Integrity, &u.Ability, &created, &u.Email)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.User{}, store.ErrNotFound
 	}
@@ -45,6 +46,53 @@ func (r *userRepo) Get(ctx context.Context, id string) (model.User, error) {
 		return model.User{}, err
 	}
 	return u, nil
+}
+
+func (r *userRepo) InsertRegistered(ctx context.Context, id, email, passwordHash string, now time.Time) (model.User, error) {
+	_, err := r.q.ExecContext(ctx, `
+		INSERT INTO users (id, balance, integrity, ability, created_at, email, password_hash)
+		VALUES (?, ?, 0, 0, ?, ?, ?)`,
+		id, r.initial, model.FormatTime(now), email, passwordHash)
+	if err != nil {
+		if isEmailConflict(err) {
+			return model.User{}, store.ErrConflict
+		}
+		return model.User{}, err
+	}
+	return r.Get(ctx, id)
+}
+
+func (r *userRepo) GetByEmail(ctx context.Context, email string) (model.User, error) {
+	var u model.User
+	var created string
+	var hash sql.NullString
+	err := r.q.QueryRowContext(ctx, `
+		SELECT id, balance, integrity, ability, created_at, COALESCE(email, ''), password_hash
+		FROM users WHERE email = ?`, email).
+		Scan(&u.ID, &u.Balance, &u.Integrity, &u.Ability, &created, &u.Email, &hash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.User{}, store.ErrNotFound
+	}
+	if err != nil {
+		return model.User{}, err
+	}
+	if hash.Valid {
+		u.PasswordHash = hash.String
+	}
+	u.CreatedAt, err = model.ParseTime(created)
+	if err != nil {
+		return model.User{}, err
+	}
+	return u, nil
+}
+
+func isEmailConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "UNIQUE constraint failed") &&
+		(strings.Contains(msg, "users.email") || strings.Contains(msg, "idx_users_email"))
 }
 
 func (r *userRepo) AddBalance(ctx context.Context, id string, delta int64) error {

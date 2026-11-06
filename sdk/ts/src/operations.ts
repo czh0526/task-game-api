@@ -3,6 +3,9 @@
  * when this list and the document diverge.
  */
 export const protocolOperations = [
+  "register",
+  "login",
+  "me",
   "listTasks",
   "createTask",
   "getTask",

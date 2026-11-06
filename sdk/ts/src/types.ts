@@ -237,3 +237,25 @@ export interface UserScores {
 export interface HealthStatus {
   status: string;
 }
+
+/** Body of `POST /v1/register` and `POST /v1/login`. Password is 8 to 72 bytes. */
+export interface PasswordCredentials {
+  email: string;
+  password: string;
+}
+
+/** Caller summary from register, login, and `GET /v1/me`. Email is empty for API-key users. */
+export interface UserSummary {
+  id: string;
+  email: string;
+}
+
+/**
+ * Access token from register or login.
+ * `access_token` is an HS256 JWT whose `sub` is `user.id` (same claims as `make token`).
+ */
+export interface AuthSession {
+  access_token: string;
+  expires_in: number;
+  user: UserSummary;
+}

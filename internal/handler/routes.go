@@ -8,6 +8,7 @@ import (
 
 	chat "taskgame/internal/handler/chat"
 	health "taskgame/internal/handler/health"
+	session "taskgame/internal/handler/session"
 	task "taskgame/internal/handler/task"
 	user "taskgame/internal/handler/user"
 	webhook "taskgame/internal/handler/webhook"
@@ -44,6 +45,22 @@ func RegisterHandlers(server *rest.Server, serverCtx *svc.ServiceContext) {
 				Handler: health.HealthHandler(serverCtx),
 			},
 		},
+	)
+
+	server.AddRoutes(
+		[]rest.Route{
+			{
+				Method:  http.MethodPost,
+				Path:    "/register",
+				Handler: session.RegisterHandler(serverCtx),
+			},
+			{
+				Method:  http.MethodPost,
+				Path:    "/login",
+				Handler: session.LoginHandler(serverCtx),
+			},
+		},
+		rest.WithPrefix("/v1"),
 	)
 
 	server.AddRoutes(
@@ -104,6 +121,11 @@ func RegisterHandlers(server *rest.Server, serverCtx *svc.ServiceContext) {
 		rest.WithMiddlewares(
 			[]rest.Middleware{serverCtx.Auth},
 			[]rest.Route{
+				{
+					Method:  http.MethodGet,
+					Path:    "/me",
+					Handler: user.GetMeHandler(serverCtx),
+				},
 				{
 					Method:  http.MethodGet,
 					Path:    "/users/:userId/scores",
