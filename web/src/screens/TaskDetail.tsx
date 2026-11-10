@@ -5,6 +5,7 @@ import {
   ENTRY_LABEL,
   PAYMENT_MODE_LABEL,
   ROLE_STATUS_LABEL,
+  SETTLEMENT_MODE_LABEL,
   confirmFailure,
   formatCredits,
   formatError,
@@ -23,6 +24,7 @@ export function TaskDetail({ id }: { id: string }) {
   const [submissionIds, setSubmissionIds] = useState<string[] | null>(null);
   const [chosen, setChosen] = useState("");
   const [roleId, setRoleId] = useState("");
+  const [confirmSeat, setConfirmSeat] = useState("");
   const [payloadText, setPayloadText] = useState('{\n  "body": ""\n}');
   const [note, setNote] = useState("");
   const [milestoneId, setMilestoneId] = useState("");
@@ -52,6 +54,14 @@ export function TaskDetail({ id }: { id: string }) {
     if (!task) return;
     const open = (task.collaborative?.roles ?? []).filter((role) => (role.status ?? "open") === "open");
     setRoleId((prev) => (open.some((role) => role.id === prev) ? prev : (open[0]?.id ?? "")));
+    const payable = (task.collaborative?.roles ?? []).filter((role) => {
+      const status = role.status ?? "open";
+      return status === "submitted" || status === "open";
+    });
+    setConfirmSeat((prev) => {
+      if (payable.some((role) => role.id === prev)) return prev;
+      return payable.find((role) => role.status === "submitted")?.id ?? payable[0]?.id ?? "";
+    });
   }, [task]);
 
   async function run(name: string, fn: () => Promise<Task>) {
@@ -110,8 +120,16 @@ export function TaskDetail({ id }: { id: string }) {
   }
 
   const me = settings.userId;
+  const mode = settlementMode(task);
   const openRoles = (task.collaborative?.roles ?? []).filter((role) => (role.status ?? "open") === "open");
-  const mySeat = (task.collaborative?.roles ?? []).find((role) => role.assignee_user_id === me && role.status === "filled");
+  const confirmSeats = (task.collaborative?.roles ?? []).filter((role) => {
+    const status = role.status ?? "open";
+    return status === "submitted" || status === "open";
+  });
+  const selectedConfirm = confirmSeats.find((role) => role.id === confirmSeat) ?? confirmSeats[0];
+  const mySeat = (task.collaborative?.roles ?? []).find(
+    (role) => role.assignee_user_id === me && (role.status === "filled" || role.status === "submitted"),
+  );
 
   return (
     <Screen title={task.title} lede={task.description}>
@@ -138,6 +156,12 @@ export function TaskDetail({ id }: { id: string }) {
           <Fact
             label="竞争"
             value={`${task.competitive?.slots ?? "—"} 个名额 · ${task.competitive?.settlement_rule ?? "winner_take_all"}`}
+          />
+        ) : null}
+        {task.kind === "collaborative" ? (
+          <Fact
+            label="结算方式"
+            value={`${SETTLEMENT_MODE_LABEL[mode ?? "unified"] ?? mode} · ${mode ?? "unified"}`}
           />
         ) : null}
         {task.kind === "collaborative" ? <Fact label="退出规则" value={task.collaborative?.on_dropout ?? "replace"} /> : null}
@@ -182,7 +206,12 @@ export function TaskDetail({ id }: { id: string }) {
       {task.collaborative ? (
         <section className="card">
           <h2>席位 roles</h2>
-          <p className="hint">表里是服务端展开后的席位。share_bps 是这一席结算用的基点。接受时用席位 id。</p>
+          <p className="hint">
+            表里是服务端展开后的席位。share_bps 是这一席结算用的基点。接受时用席位 id。
+            {mode === "per_seat"
+              ? " 分别结算：已提交的席位可以单独确认拨付；空席确认会把该份额退回发布者。全部席位拨付或退回后任务才 settled。"
+              : " 统一结算：坐满后由发布者开始。每一席都提交、且没有空席时才能一次确认。开始后退出会重开该席，任务保持 active。"}
+          </p>
           <table>
             <thead>
               <tr>
@@ -245,13 +274,44 @@ export function TaskDetail({ id }: { id: string }) {
             </Button>
           </ActionRow>
 
+          {task.kind === "collaborative" ? (
+            <ActionRow title="开始 start" reason={startReason(task, me)}>
+              <Button
+                type="button"
+                kind="primary"
+                pending={pending === "start"}
+                disabled={startReason(task, me) !== null || pending !== null}
+                onClick={() => void run("start", () => client.startTask(task.id, { idempotencyKey: createIdempotencyKey("start") }))}
+              >
+                开始任务
+              </Button>
+            </ActionRow>
+          ) : null}
+
           <ActionRow title="确认 confirm" reason={confirmReason(task, me)}>
             <Button
               type="button"
               kind="primary"
               pending={pending === "confirm"}
               disabled={confirmReason(task, me) !== null || pending !== null}
-              onClick={() =>
+              onClick={() => {
+                if (mode === "per_seat") {
+                  if (!selectedConfirm) {
+                    setError("请选择席位");
+                    return;
+                  }
+                  if ((selectedConfirm.status ?? "open") === "open") {
+                    if (!window.confirm(`退回 ${selectedConfirm.id} 的份额给发布者？这一席不会支付执行者。`)) return;
+                  }
+                  void run("confirm", () =>
+                    client.confirmTask(
+                      task.id,
+                      { role_id: selectedConfirm.id },
+                      { idempotencyKey: createIdempotencyKey("confirm") },
+                    ),
+                  );
+                  return;
+                }
                 void run("confirm", () => {
                   if (submissionIds && submissionIds.length > 0 && !chosen) {
                     throw new Error("请选择一份 submission_id");
@@ -260,12 +320,30 @@ export function TaskDetail({ id }: { id: string }) {
                   if (chosen && (task.kind === "competitive" || submissionIds)) body.submission_id = chosen;
                   if (task.payment.mode === "milestone" && milestoneId.trim()) body.milestone_id = milestoneId.trim();
                   return client.confirmTask(task.id, body, { idempotencyKey: createIdempotencyKey("confirm") });
-                })
-              }
+                });
+              }}
             >
-              {submissionIds ? "按所选提交确认" : "确认结算"}
+              {mode === "per_seat"
+                ? (selectedConfirm?.status ?? "open") === "open"
+                  ? "退回该席份额"
+                  : "确认拨付该席"
+                : submissionIds
+                  ? "按所选提交确认"
+                  : "确认结算"}
             </Button>
           </ActionRow>
+          {mode === "per_seat" ? (
+            <Field label="确认席位 role_id" hint="已提交的席位拨付给执行者。空席把该份额退回发布者。">
+              <select value={selectedConfirm?.id ?? ""} onChange={(event) => setConfirmSeat(event.target.value)}>
+                {confirmSeats.length === 0 ? <option value="">没有可确认的席位</option> : null}
+                {confirmSeats.map((role) => (
+                  <option key={role.id} value={role.id}>
+                    {role.id} · {ROLE_STATUS_LABEL[role.status ?? "open"] ?? role.status} · {role.share_bps} bps
+                  </option>
+                ))}
+              </select>
+            </Field>
+          ) : null}
           {task.kind === "competitive" && task.status === "in_review" ? (
             <div className="picker">
               <p className="hint">
@@ -439,8 +517,32 @@ function fundReason(task: Task, me: string): string | null {
   return null;
 }
 
+function startReason(task: Task, me: string): string | null {
+  const mode = settlementMode(task);
+  if (mode === null) return "只有统一结算的协作任务需要开始";
+  if (mode === "per_seat") return "分别结算不需要开始，入席后即可提交";
+  if (me !== task.publisher_id) return "只有发布者可以开始";
+  if (task.status === "active" || task.status === "in_review") return "任务已经开始";
+  if (task.status !== "open") return "只有 open 可以开始";
+  const open = (task.collaborative?.roles ?? []).filter((role) => (role.status ?? "open") === "open");
+  if (open.length > 0) return "坐满后才能开始";
+  return null;
+}
+
 function confirmReason(task: Task, me: string): string | null {
   if (me !== task.publisher_id) return "只有发布者可以确认";
+  const mode = settlementMode(task);
+  if (mode === "per_seat") {
+    if (task.status !== "open" && task.status !== "active" && task.status !== "in_review") return "当前状态不能按席确认";
+    const roles = task.collaborative?.roles ?? [];
+    const waiting = roles.some((role) => (role.status ?? "open") === "submitted" || (role.status ?? "open") === "open");
+    if (!waiting) return "没有可确认或退回的席位";
+    return null;
+  }
+  if (mode === "unified") {
+    if (task.status === "open") return "统一结算要先开始，并等全部席位提交";
+    if (task.status === "active") return "还有席位未提交或未坐满，确认会失败";
+  }
   if (task.status !== "in_review") return "只有 in_review 可以确认";
   return null;
 }
@@ -455,7 +557,11 @@ function acceptReason(task: Task, me: string, roleId: string): string | null {
   if (!me) return "请在左侧填写当前用户 id";
   if (me === task.publisher_id) return "发布者不能接受自己的任务";
   if (task.kind === "collaborative") {
-    if ((task.collaborative?.roles ?? []).some((role) => role.assignee_user_id === me && role.status === "filled")) {
+    if (
+      (task.collaborative?.roles ?? []).some(
+        (role) => role.assignee_user_id === me && (role.status === "filled" || role.status === "submitted"),
+      )
+    ) {
       return "你已经占了一个席位";
     }
     if (task.status !== "open" && task.status !== "active") return "当前状态不能接受";
@@ -475,6 +581,15 @@ function acceptReason(task: Task, me: string, roleId: string): string | null {
 
 function submitReason(task: Task, me: string): string | null {
   if (!me) return "请在左侧填写当前用户 id";
+  if (task.kind === "collaborative") {
+    const mine = (task.collaborative?.roles ?? []).find((role) => role.assignee_user_id === me);
+    if (!mine) return "只有当前席位的执行者可以提交";
+    if (mine.status === "submitted") return "你已经提交过";
+    if (mine.status !== "filled") return "你没有可提交的席位";
+    if (settlementMode(task) === "unified" && task.status === "open") return "统一结算要等发布者开始";
+    if (task.status !== "active" && task.status !== "in_review") return "任务需要处于 active";
+    return null;
+  }
   if (!(task.executor_ids ?? []).includes(me)) return "只有执行者可以提交";
   if (task.kind === "competitive") {
     if (task.status !== "active" && task.status !== "in_review") return "竞争任务在 active 或 in_review 时提交";
@@ -486,8 +601,15 @@ function submitReason(task: Task, me: string): string | null {
 
 function dropoutReason(task: Task, me: string): string | null {
   if (task.kind !== "collaborative") return "只有协作任务可以退出";
-  if (task.status !== "active") return "只有 active 时可以退出";
+  if (task.status !== "open" && task.status !== "active") return "只有 open 或 active 时可以退出";
+  const submitted = (task.collaborative?.roles ?? []).find((role) => role.assignee_user_id === me && role.status === "submitted");
+  if (submitted) return "已提交的席位不能退出";
   const seat = (task.collaborative?.roles ?? []).find((role) => role.assignee_user_id === me && role.status === "filled");
   if (!seat) return "你没有已入席的 role";
   return null;
+}
+
+function settlementMode(task: Task): "per_seat" | "unified" | null {
+  if (task.kind !== "collaborative") return null;
+  return task.collaborative?.settlement_mode === "per_seat" ? "per_seat" : "unified";
 }

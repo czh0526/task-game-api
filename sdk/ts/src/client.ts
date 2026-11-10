@@ -153,6 +153,21 @@ export class TaskGameClient {
     );
   }
 
+  /**
+   * `POST /v1/tasks/{taskId}/start`
+   * Publisher only. Unified collaborative tasks move open → active once every seat is filled.
+   */
+  startTask(taskId: string, options?: CallOptions): Promise<Task> {
+    return this.send(
+      "POST",
+      `${this.apiBase}/tasks/${segment(taskId, "taskId")}/start`,
+      options,
+      undefined,
+      false,
+      "header",
+    );
+  }
+
   /** `POST /v1/tasks/{taskId}/accept` */
   acceptTask(taskId: string, body?: AcceptTaskBody, options?: CallOptions): Promise<Task> {
     return this.send(

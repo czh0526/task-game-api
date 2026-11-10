@@ -195,6 +195,9 @@ func TestCollaborativeDropoutAndSettle(t *testing.T) {
 	if created.Collaborative.OnDropout != model.DropoutReplace {
 		t.Fatalf("dropout rule %s", created.Collaborative.OnDropout)
 	}
+	if created.Collaborative.SettlementMode != model.SettlementUnified {
+		t.Fatalf("default settlement %s", created.Collaborative.SettlementMode)
+	}
 	if len(created.Collaborative.Roles) != 2 {
 		t.Fatalf("roles %+v", created.Collaborative.Roles)
 	}
@@ -229,7 +232,24 @@ func TestCollaborativeDropoutAndSettle(t *testing.T) {
 	if _, err := eng.AcceptTask(ctx, "usr_executor", &types.AcceptTaskReq{TaskId: created.Id, RoleId: "copy"}); err != nil {
 		t.Fatal(err)
 	}
+	open, err := eng.GetTask(ctx, created.Id)
+	if err != nil || open.Status != model.StatusOpen {
+		t.Fatalf("unified stays open until start: %+v %v", open.Status, err)
+	}
+	if _, err := eng.SubmitTask(ctx, "usr_executor_2", &types.SubmitTaskReq{TaskId: created.Id, Payload: map[string]any{"ok": true}}); codeOf(err) != "conflict" {
+		t.Fatalf("submit before start: %v", err)
+	}
+	started, err := eng.StartTask(ctx, "usr_publisher", &types.StartTaskReq{TaskId: created.Id})
+	if err != nil || started.Status != model.StatusActive {
+		t.Fatalf("start %+v %v", started.Status, err)
+	}
 	if _, err := eng.SubmitTask(ctx, "usr_executor_2", &types.SubmitTaskReq{TaskId: created.Id, Payload: map[string]any{"ok": true}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.ConfirmTask(ctx, "usr_publisher", &types.ConfirmTaskReq{TaskId: created.Id}); codeOf(err) != "conflict" {
+		t.Fatalf("confirm before every seat submits: %v", err)
+	}
+	if _, err := eng.SubmitTask(ctx, "usr_executor", &types.SubmitTaskReq{TaskId: created.Id, Payload: map[string]any{"copy": true}}); err != nil {
 		t.Fatal(err)
 	}
 	settled, err := eng.ConfirmTask(ctx, "usr_publisher", &types.ConfirmTaskReq{TaskId: created.Id})
@@ -523,8 +543,19 @@ func TestCollaborativeQuantityMaterializesSeats(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if _, err := eng.StartTask(ctx, "usr_publisher", &types.StartTaskReq{TaskId: created.Id}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := eng.SubmitTask(ctx, users[0], &types.SubmitTaskReq{TaskId: created.Id, Payload: map[string]any{"page": "final"}}); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := eng.ConfirmTask(ctx, "usr_publisher", &types.ConfirmTaskReq{TaskId: created.Id}); codeOf(err) != "conflict" {
+		t.Fatalf("quantity confirm before every seat submits: %v", err)
+	}
+	for _, user := range users[1:] {
+		if _, err := eng.SubmitTask(ctx, user, &types.SubmitTaskReq{TaskId: created.Id, Payload: map[string]any{"page": user}}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	settled, err := eng.ConfirmTask(ctx, "usr_publisher", &types.ConfirmTaskReq{TaskId: created.Id})
 	if err != nil {

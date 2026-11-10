@@ -98,6 +98,9 @@ func (e *Engine) buildTask(publisherID string, req *types.CreateTaskReq) (model.
 		if req.Collaborative == nil || req.Competitive != nil {
 			return model.Task{}, biz.Invalid("collaborative tasks require collaborative and no competitive block")
 		}
+		if req.Payment.Mode != model.PayOneShot {
+			return model.Task{}, biz.Invalid("collaborative tasks require payment.mode one_shot")
+		}
 		block, err := cleanCollaborative(req.Collaborative)
 		if err != nil {
 			return model.Task{}, err
@@ -264,6 +267,13 @@ func cleanCollaborative(in *types.Collaborative) (*model.Collaborative, error) {
 	if rule != model.DropoutReplace {
 		return nil, biz.Invalid("collaborative.on_dropout must be replace")
 	}
+	mode := trim(in.SettlementMode)
+	if mode == "" {
+		mode = model.SettlementUnified
+	}
+	if mode != model.SettlementUnified && mode != model.SettlementPerSeat {
+		return nil, biz.Invalid("collaborative.settlement_mode must be per_seat or unified")
+	}
 	if len(in.Roles) == 0 || len(in.Roles) > maxCollaborativeSeats {
 		return nil, biz.Invalid("collaborative tasks require between 1 and 20 roles")
 	}
@@ -337,7 +347,7 @@ func cleanCollaborative(in *types.Collaborative) (*model.Collaborative, error) {
 	if len(roles) == 0 || len(roles) > maxCollaborativeSeats {
 		return nil, biz.Invalid("collaborative tasks expand to at most 20 seats")
 	}
-	return &model.Collaborative{Roles: roles, OnDropout: rule}, nil
+	return &model.Collaborative{Roles: roles, OnDropout: rule, SettlementMode: mode}, nil
 }
 
 func roleQuantity(q *int64) (int, error) {

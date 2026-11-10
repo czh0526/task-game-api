@@ -11,6 +11,7 @@ export const protocolOperations = [
   "getTask",
   "fundTask",
   "acceptTask",
+  "startTask",
   "submitTask",
   "confirmTask",
   "disputeTask",
