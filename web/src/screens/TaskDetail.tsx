@@ -24,7 +24,6 @@ export function TaskDetail({ id }: { id: string }) {
   const [submissionIds, setSubmissionIds] = useState<string[] | null>(null);
   const [chosen, setChosen] = useState("");
   const [roleId, setRoleId] = useState("");
-  const [confirmSeat, setConfirmSeat] = useState("");
   const [payloadText, setPayloadText] = useState('{\n  "body": ""\n}');
   const [note, setNote] = useState("");
   const [milestoneId, setMilestoneId] = useState("");
@@ -54,14 +53,6 @@ export function TaskDetail({ id }: { id: string }) {
     if (!task) return;
     const open = (task.collaborative?.roles ?? []).filter((role) => (role.status ?? "open") === "open");
     setRoleId((prev) => (open.some((role) => role.id === prev) ? prev : (open[0]?.id ?? "")));
-    const payable = (task.collaborative?.roles ?? []).filter((role) => {
-      const status = role.status ?? "open";
-      return status === "submitted" || status === "open";
-    });
-    setConfirmSeat((prev) => {
-      if (payable.some((role) => role.id === prev)) return prev;
-      return payable.find((role) => role.status === "submitted")?.id ?? payable[0]?.id ?? "";
-    });
   }, [task]);
 
   async function run(name: string, fn: () => Promise<Task>) {
@@ -122,11 +113,6 @@ export function TaskDetail({ id }: { id: string }) {
   const me = settings.userId;
   const mode = settlementMode(task);
   const openRoles = (task.collaborative?.roles ?? []).filter((role) => (role.status ?? "open") === "open");
-  const confirmSeats = (task.collaborative?.roles ?? []).filter((role) => {
-    const status = role.status ?? "open";
-    return status === "submitted" || status === "open";
-  });
-  const selectedConfirm = confirmSeats.find((role) => role.id === confirmSeat) ?? confirmSeats[0];
   const mySeat = (task.collaborative?.roles ?? []).find(
     (role) => role.assignee_user_id === me && (role.status === "filled" || role.status === "submitted"),
   );
@@ -209,7 +195,7 @@ export function TaskDetail({ id }: { id: string }) {
           <p className="hint">
             表里是服务端展开后的席位。share_bps 是这一席结算用的基点。接受时用席位 id。
             {mode === "per_seat"
-              ? " 分别结算：已提交的席位可以单独确认拨付；空席确认会把该份额退回发布者。全部席位拨付或退回后任务才 settled。"
+              ? " 分别结算：拨付和退回在这一席上。已提交的席位可以确认拨付；空席或已退出的席位可以把份额退回发布者。全部席位拨付或退回后任务才 settled。"
               : " 统一结算：坐满后由发布者开始。每一席都提交、且没有空席时才能一次确认。开始后退出会重开该席，任务保持 active。"}
           </p>
           <table>
@@ -221,23 +207,73 @@ export function TaskDetail({ id }: { id: string }) {
                 <th>template_id</th>
                 <th>状态</th>
                 <th>assignee_user_id</th>
+                {mode === "per_seat" ? <th>操作</th> : null}
               </tr>
             </thead>
             <tbody>
-              {task.collaborative.roles.map((role) => (
-                <tr key={role.id} className={role.assignee_user_id === me ? "mine-row" : undefined}>
-                  <td>
-                    <IdText value={role.id} />
-                  </td>
-                  <td>{role.name}</td>
-                  <td>
-                    {role.share_bps} <span className="en">{(role.share_bps / 100).toFixed(2)}%</span>
-                  </td>
-                  <td>{role.template_id ? <IdText value={role.template_id} /> : "—"}</td>
-                  <td>{ROLE_STATUS_LABEL[role.status ?? "open"] ?? role.status} <span className="en">{role.status ?? "open"}</span></td>
-                  <td>{role.assignee_user_id ? <IdText value={role.assignee_user_id} /> : "—"}</td>
-                </tr>
-              ))}
+              {task.collaborative.roles.map((role) => {
+                const action = perSeatRowAction(task, me, role.status);
+                return (
+                  <tr key={role.id} className={role.assignee_user_id === me ? "mine-row" : undefined}>
+                    <td>
+                      <IdText value={role.id} />
+                    </td>
+                    <td>{role.name}</td>
+                    <td>
+                      {role.share_bps} <span className="en">{(role.share_bps / 100).toFixed(2)}%</span>
+                    </td>
+                    <td>{role.template_id ? <IdText value={role.template_id} /> : "—"}</td>
+                    <td>{ROLE_STATUS_LABEL[role.status ?? "open"] ?? role.status} <span className="en">{role.status ?? "open"}</span></td>
+                    <td>{role.assignee_user_id ? <IdText value={role.assignee_user_id} /> : "—"}</td>
+                    {mode === "per_seat" ? (
+                      <td className="seat-action">
+                        {action === "pay" ? (
+                          <Button
+                            type="button"
+                            kind="primary"
+                            className="compact"
+                            pending={pending === `seat-${role.id}`}
+                            disabled={pending !== null}
+                            onClick={() =>
+                              void run(`seat-${role.id}`, () =>
+                                client.confirmTask(
+                                  task.id,
+                                  { role_id: role.id },
+                                  { idempotencyKey: createIdempotencyKey(`confirm-${role.id}`) },
+                                ),
+                              )
+                            }
+                          >
+                            确认拨付
+                          </Button>
+                        ) : null}
+                        {action === "refund" ? (
+                          <Button
+                            type="button"
+                            kind="danger"
+                            className="compact"
+                            pending={pending === `seat-${role.id}`}
+                            disabled={pending !== null}
+                            onClick={() => {
+                              if (!window.confirm(`退回 ${role.id} 的份额给发布者？这一席不会支付执行者。`)) return;
+                              void run(`seat-${role.id}`, () =>
+                                client.confirmTask(
+                                  task.id,
+                                  { role_id: role.id },
+                                  { idempotencyKey: createIdempotencyKey(`refund-${role.id}`) },
+                                ),
+                              );
+                            }}
+                          >
+                            退回该席
+                          </Button>
+                        ) : null}
+                        {action === null ? "—" : null}
+                      </td>
+                    ) : null}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </section>
@@ -288,62 +324,31 @@ export function TaskDetail({ id }: { id: string }) {
             </ActionRow>
           ) : null}
 
-          <ActionRow title="确认 confirm" reason={confirmReason(task, me)}>
-            <Button
-              type="button"
-              kind="primary"
-              pending={pending === "confirm"}
-              disabled={confirmReason(task, me) !== null || pending !== null}
-              onClick={() => {
-                if (mode === "per_seat") {
-                  if (!selectedConfirm) {
-                    setError("请选择席位");
-                    return;
-                  }
-                  if ((selectedConfirm.status ?? "open") === "open") {
-                    if (!window.confirm(`退回 ${selectedConfirm.id} 的份额给发布者？这一席不会支付执行者。`)) return;
-                  }
-                  void run("confirm", () =>
-                    client.confirmTask(
-                      task.id,
-                      { role_id: selectedConfirm.id },
-                      { idempotencyKey: createIdempotencyKey("confirm") },
-                    ),
-                  );
-                  return;
-                }
-                void run("confirm", () => {
-                  if (submissionIds && submissionIds.length > 0 && !chosen) {
-                    throw new Error("请选择一份 submission_id");
-                  }
-                  const body: { submission_id?: string; milestone_id?: string } = {};
-                  if (chosen && (task.kind === "competitive" || submissionIds)) body.submission_id = chosen;
-                  if (task.payment.mode === "milestone" && milestoneId.trim()) body.milestone_id = milestoneId.trim();
-                  return client.confirmTask(task.id, body, { idempotencyKey: createIdempotencyKey("confirm") });
-                });
-              }}
-            >
-              {mode === "per_seat"
-                ? (selectedConfirm?.status ?? "open") === "open"
-                  ? "退回该席份额"
-                  : "确认拨付该席"
-                : submissionIds
-                  ? "按所选提交确认"
-                  : "确认结算"}
-            </Button>
-          </ActionRow>
           {mode === "per_seat" ? (
-            <Field label="确认席位 role_id" hint="已提交的席位拨付给执行者。空席把该份额退回发布者。">
-              <select value={selectedConfirm?.id ?? ""} onChange={(event) => setConfirmSeat(event.target.value)}>
-                {confirmSeats.length === 0 ? <option value="">没有可确认的席位</option> : null}
-                {confirmSeats.map((role) => (
-                  <option key={role.id} value={role.id}>
-                    {role.id} · {ROLE_STATUS_LABEL[role.status ?? "open"] ?? role.status} · {role.share_bps} bps
-                  </option>
-                ))}
-              </select>
-            </Field>
-          ) : null}
+            <p className="hint">分别结算不在这里确认。已提交的席位点该行的「确认拨付」，空席或已退出的席位点「退回该席」。</p>
+          ) : (
+            <ActionRow title="确认 confirm" reason={confirmReason(task, me)}>
+              <Button
+                type="button"
+                kind="primary"
+                pending={pending === "confirm"}
+                disabled={confirmReason(task, me) !== null || pending !== null}
+                onClick={() =>
+                  void run("confirm", () => {
+                    if (submissionIds && submissionIds.length > 0 && !chosen) {
+                      throw new Error("请选择一份 submission_id");
+                    }
+                    const body: { submission_id?: string; milestone_id?: string } = {};
+                    if (chosen && (task.kind === "competitive" || submissionIds)) body.submission_id = chosen;
+                    if (task.payment.mode === "milestone" && milestoneId.trim()) body.milestone_id = milestoneId.trim();
+                    return client.confirmTask(task.id, body, { idempotencyKey: createIdempotencyKey("confirm") });
+                  })
+                }
+              >
+                {submissionIds ? "按所选提交确认" : "确认结算"}
+              </Button>
+            </ActionRow>
+          )}
           {task.kind === "competitive" && task.status === "in_review" ? (
             <div className="picker">
               <p className="hint">
@@ -529,16 +534,19 @@ function startReason(task: Task, me: string): string | null {
   return null;
 }
 
+function perSeatRowAction(task: Task, me: string, status: string | undefined): "pay" | "refund" | null {
+  if (settlementMode(task) !== "per_seat") return null;
+  if (me !== task.publisher_id) return null;
+  if (task.status !== "open" && task.status !== "active" && task.status !== "in_review") return null;
+  const seat = status || "open";
+  if (seat === "submitted") return "pay";
+  if (seat === "open" || seat === "dropped") return "refund";
+  return null;
+}
+
 function confirmReason(task: Task, me: string): string | null {
   if (me !== task.publisher_id) return "只有发布者可以确认";
   const mode = settlementMode(task);
-  if (mode === "per_seat") {
-    if (task.status !== "open" && task.status !== "active" && task.status !== "in_review") return "当前状态不能按席确认";
-    const roles = task.collaborative?.roles ?? [];
-    const waiting = roles.some((role) => (role.status ?? "open") === "submitted" || (role.status ?? "open") === "open");
-    if (!waiting) return "没有可确认或退回的席位";
-    return null;
-  }
   if (mode === "unified") {
     if (task.status === "open") return "统一结算要先开始，并等全部席位提交";
     if (task.status === "active") return "还有席位未提交或未坐满，确认会失败";
