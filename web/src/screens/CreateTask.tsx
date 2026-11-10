@@ -2,12 +2,13 @@ import { useState } from "react";
 import {
   createIdempotencyKey,
   type CollaborativeRole,
+  type SettlementMode,
   type Task,
   type TaskCreate,
   type TaskKind,
 } from "taskgame-client";
 import { useApp } from "../context";
-import { KIND_LABEL, formatError, parseIntStrict } from "../format";
+import { KIND_LABEL, SETTLEMENT_MODE_LABEL, formatError, parseIntStrict } from "../format";
 import { href } from "../route";
 import { type ExpandedSeat, type RoleTemplate, SHARE_BPS_TOTAL, expandRoleTemplates, templatesFromSeats } from "../roles";
 import { PRESETS } from "../settings";
@@ -22,6 +23,7 @@ interface FormState {
   quality: string;
   reviewHours: string;
   slots: string;
+  settlementMode: SettlementMode;
   templates: RoleTemplate[];
   adjustShares: boolean;
   shareDrafts: string[];
@@ -45,6 +47,7 @@ export function CreateTask() {
     quality: "达到书面验收标准",
     reviewHours: "72",
     slots: "2",
+    settlementMode: "unified",
     templates: DEFAULT_TEMPLATES.map((template) => ({ ...template })),
     adjustShares: false,
     shareDrafts: [],
@@ -90,7 +93,8 @@ export function CreateTask() {
     patch({
       ...common,
       title: "撰写发布页",
-      description: "4 名设计、2 名文案。退出后席位重新开放，退出者佣金和能力分都是 0。",
+      description: "4 名设计、2 名文案。默认统一结算：坐满后由发布者开始，全部提交后再一次确认。退出后席位重新开放，退出者佣金和能力分都是 0。",
+      settlementMode: "unified",
       templates: EXAMPLE_TEMPLATES.map((template) => ({ ...template })),
       adjustShares: false,
       shareDrafts: [],
@@ -214,7 +218,28 @@ export function CreateTask() {
         {form.kind === "collaborative" ? (
           <div className="card">
             <h2>协作 collaborative</h2>
+            <fieldset>
+              <legend>结算方式 settlement_mode</legend>
+              {(["unified", "per_seat"] as const).map((mode) => (
+                <label className="choice" key={mode}>
+                  <input
+                    type="radio"
+                    name="settlement_mode"
+                    value={mode}
+                    checked={form.settlementMode === mode}
+                    onChange={() => patch({ settlementMode: mode })}
+                  />
+                  <span>
+                    {SETTLEMENT_MODE_LABEL[mode]} <span className="en">{mode}</span>
+                  </span>
+                </label>
+              ))}
+            </fieldset>
             <p className="hint">
+              {form.settlementMode === "per_seat"
+                ? "分别结算：任一席位入席后即可提交。确认时带 role_id，只拨付该席份额，其余继续托管。空席确认会把该份额退回发布者。不需要 start。"
+                : "统一结算（默认）：席位在 open 时坐满，发布者 start 后才开始。每一席都提交后才能一次确认。开始前退出任务仍是 open；开始后退出席位重开，任务保持 active。"}
+              {" "}
               on_dropout = replace。按「角色 × 人数」填写。未勾选手动调整时，请求发送角色模板：quantity 是人数，share_bps 是这一角色的合计，各角色相加为 10000。服务端展开席位。人数为 1 时席位 id 就是基础 id；大于 1 时是 <code className="mono">基础id_1</code> … <code className="mono">基础id_人数</code>。10000 在全部席位间均分，余数在最后几席。
             </p>
             {form.templates.map((template, index) => (
@@ -429,7 +454,11 @@ function buildTask(form: FormState): TaskCreate | string {
   }
   const roles = collaborativeRoles(form);
   if (typeof roles === "string") return roles;
-  return { kind: "collaborative", ...common, collaborative: { on_dropout: "replace", roles } };
+  return {
+    kind: "collaborative",
+    ...common,
+    collaborative: { on_dropout: "replace", settlement_mode: form.settlementMode, roles },
+  };
 }
 
 function collaborativeRoles(form: FormState): CollaborativeRole[] | string {

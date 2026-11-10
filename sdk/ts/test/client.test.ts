@@ -354,6 +354,25 @@ describe("typed errors", () => {
     });
   });
 
+  it("starts a unified task and confirms one per-seat role", async () => {
+    const calls: Captured[] = [];
+    const client = new TaskGameClient({
+      baseUrl: "http://127.0.0.1:8891",
+      apiKey: "dev-publisher-key",
+      fetch: (url, init) => {
+        calls.push({ url, method: init.method, headers: init.headers, body: init.body });
+        return Promise.resolve(jsonResponse(200, { ...task, status: "active" }));
+      },
+    });
+    await client.startTask("tsk_1", { idempotencyKey: "start-1" });
+    await client.confirmTask("tsk_1", { role_id: "design" });
+    assert.equal(calls[0]?.method, "POST");
+    assert.equal(calls[0]?.url, "http://127.0.0.1:8891/v1/tasks/tsk_1/start");
+    assert.equal(calls[0]?.body, undefined);
+    assert.equal(calls[0]?.headers["Idempotency-Key"], "start-1");
+    assert.deepEqual(JSON.parse(calls[1]?.body ?? ""), { role_id: "design" });
+  });
+
   it("reads competitive submission ids from the confirm 400", () => {
     const error = new InvalidArgumentError(
       400,

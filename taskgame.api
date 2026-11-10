@@ -56,11 +56,12 @@ type (
 		ShareBps       int64   `json:"share_bps"`
 		TemplateId     string  `json:"template_id,optional,omitempty"`
 		AssigneeUserId *string `json:"assignee_user_id,optional"`
-		Status         string  `json:"status,optional,options=open|filled|dropped"`
+		Status         string  `json:"status,optional,options=open|filled|dropped|submitted|settled|refunded"`
 	}
 	Collaborative {
-		Roles     []CollaborativeRole `json:"roles"`
-		OnDropout string              `json:"on_dropout,optional,options=replace"`
+		Roles          []CollaborativeRole `json:"roles"`
+		OnDropout      string              `json:"on_dropout,optional,options=replace"`
+		SettlementMode string              `json:"settlement_mode,optional,options=per_seat|unified"`
 	}
 	CreateTaskReq {
 		IdempotencyKey string         `header:"Idempotency-Key,optional" json:"-"`
@@ -129,6 +130,11 @@ type (
 		IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
 		SubmissionId   string `json:"submission_id,optional"`
 		MilestoneId    string `json:"milestone_id,optional"`
+		RoleId         string `json:"role_id,optional"`
+	}
+	StartTaskReq {
+		TaskId         string `path:"taskId" json:"-"`
+		IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
 	}
 	DisputeTaskReq {
 		TaskId         string `path:"taskId" json:"-"`
@@ -252,6 +258,9 @@ service taskgame {
 
 	@handler acceptTask
 	post /tasks/:taskId/accept (AcceptTaskReq) returns (Task)
+
+	@handler startTask
+	post /tasks/:taskId/start (StartTaskReq) returns (Task)
 
 	@handler submitTask
 	post /tasks/:taskId/submit (SubmitTaskReq) returns (Task)

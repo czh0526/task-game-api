@@ -67,6 +67,7 @@ export type {
   PaymentMode,
   RoleStatus,
   ScoreChange,
+  SettlementMode,
   SettlementRule,
   SubmissionCreate,
   Task,

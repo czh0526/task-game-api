@@ -52,9 +52,12 @@ const (
 	EscrowRefund  = "refund"
 	EscrowFreeze  = "freeze"
 
-	RoleOpen    = "open"
-	RoleFilled  = "filled"
-	RoleDropped = "dropped"
+	RoleOpen      = "open"
+	RoleFilled    = "filled"
+	RoleDropped   = "dropped"
+	RoleSubmitted = "submitted"
+	RoleSettled   = "settled"
+	RoleRefunded  = "refunded"
 
 	MilestonePending   = "pending"
 	MilestoneSubmitted = "submitted"
@@ -62,6 +65,8 @@ const (
 	MilestoneDisputed  = "disputed"
 
 	SettlementWinnerTakeAll = "winner_take_all"
+	SettlementPerSeat       = "per_seat"
+	SettlementUnified       = "unified"
 	DropoutReplace          = "replace"
 	CurrencyCredits         = "credits"
 
@@ -73,6 +78,7 @@ const (
 const (
 	EventTaskFunded           = "task.funded"
 	EventTaskAccepted         = "task.accepted"
+	EventTaskStarted          = "task.started"
 	EventTaskSubmitted        = "task.submitted"
 	EventTaskInReview         = "task.in_review"
 	EventTaskConfirmed        = "task.confirmed"
@@ -92,6 +98,7 @@ const (
 var WebhookEventTypes = map[string]struct{}{
 	EventTaskFunded:           {},
 	EventTaskAccepted:         {},
+	EventTaskStarted:          {},
 	EventTaskSubmitted:        {},
 	EventTaskInReview:         {},
 	EventTaskConfirmed:        {},
@@ -149,8 +156,9 @@ type Role struct {
 }
 
 type Collaborative struct {
-	Roles     []Role `json:"roles"`
-	OnDropout string `json:"on_dropout"`
+	Roles          []Role `json:"roles"`
+	OnDropout      string `json:"on_dropout"`
+	SettlementMode string `json:"settlement_mode,omitempty"`
 }
 
 type Task struct {

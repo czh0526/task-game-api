@@ -80,6 +80,28 @@ export function collaborativeQuantityBody(deadline: string): TaskCreate {
   };
 }
 
+/** per_seat pays each submitted seat on its own. unified is the default when the field is omitted. */
+export function perSeatBody(deadline: string): TaskCreate {
+  const body = collaborativeBody(deadline);
+  return {
+    ...body,
+    description: "Design can settle before copy is filled.",
+    collaborative: {
+      on_dropout: "replace",
+      settlement_mode: "per_seat",
+      roles: body.collaborative?.roles ?? [],
+    },
+  };
+}
+
+export async function startUnified(publisher: TaskGameClient, taskId: string) {
+  return publisher.startTask(taskId);
+}
+
+export async function confirmSeat(publisher: TaskGameClient, taskId: string, roleId: string) {
+  return publisher.confirmTask(taskId, { role_id: roleId });
+}
+
 export function collaborativeBody(deadline: string): TaskCreate {
   return {
     kind: "collaborative",

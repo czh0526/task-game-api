@@ -89,6 +89,11 @@ func RegisterHandlers(server *rest.Server, serverCtx *svc.ServiceContext) {
 				},
 				{
 					Method:  http.MethodPost,
+					Path:    "/tasks/:taskId/start",
+					Handler: task.StartTaskHandler(serverCtx),
+				},
+				{
+					Method:  http.MethodPost,
 					Path:    "/tasks/:taskId/confirm",
 					Handler: task.ConfirmTaskHandler(serverCtx),
 				},

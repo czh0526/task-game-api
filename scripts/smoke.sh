@@ -3,8 +3,9 @@
 #
 #   exclusive:      create → fund → accept → submit → confirm → settled
 #   competitive:    winner_take_all, two executors, confirm one submission_id
-#   collaborative:  on_dropout=replace, dropout pays 0, seat reopens, then settle
-#                   plus one template quantity=4, share_bps=10000 (template total)
+#   collaborative:  unified (default): start after full, dropout stays active,
+#                   confirm waits for every seat. quantity=4 template total 10000.
+#                   per_seat: each role_id confirm releases only that share.
 #
 # Start the API first, from the repo root:
 #   CGO_ENABLED=0 go run . -f etc/taskgame.yaml
@@ -54,6 +55,8 @@ COMP_WINNER="usr_s${STAMP}cw"
 COLLAB_EXIT="usr_s${STAMP}dx"
 COLLAB_STAY="usr_s${STAMP}ds"
 COLLAB_REPL="usr_s${STAMP}dr"
+PER_DESIGN="usr_s${STAMP}pd"
+PER_COPY="usr_s${STAMP}pc"
 
 RESP_CODE=""
 RESP_BODY=""
@@ -231,6 +234,39 @@ elif op == "quantity_seats":
             fail("seat should be open: %s" % role)
     if total != 10000:
         fail("seat share_bps sum %s" % total)
+elif op == "error_has":
+    code, needle = args[0], args[1]
+    if doc.get("code") != code or needle not in str(doc.get("message") or ""):
+        fail("expected %s containing %r, got %s %s" % (code, needle, doc.get("code"), doc.get("message")))
+elif op == "settlement_mode":
+    if (doc.get("collaborative") or {}).get("settlement_mode") != args[0]:
+        fail("settlement_mode %s" % (doc.get("collaborative") or {}).get("settlement_mode"))
+elif op == "seat_status":
+    role_id, status = args
+    roles = {r["id"]: r for r in (doc.get("collaborative") or {}).get("roles") or []}
+    seat = roles.get(role_id) or {}
+    if seat.get("status") != status:
+        fail("seat %s status %s" % (role_id, seat))
+elif op == "per_seat_partial":
+    paid_user, paid_amt, held = args[0], int(args[1]), int(args[2])
+    settled_role, open_role = args[3], args[4]
+    if doc.get("status") != "active":
+        fail("per_seat should stay active")
+    if (doc.get("escrow") or {}).get("held") != held:
+        fail("held")
+    if (doc.get("collaborative") or {}).get("settlement_mode") != "per_seat":
+        fail("mode")
+    rel = releases()
+    if len(rel) != 1 or rel[0].get("to_user_id") != paid_user or rel[0].get("amount") != paid_amt:
+        fail("partial release %s" % rel)
+    roles = {r["id"]: r for r in (doc.get("collaborative") or {}).get("roles") or []}
+    if (roles.get(settled_role) or {}).get("status") != "settled":
+        fail("settled seat %s" % roles.get(settled_role))
+    if (roles.get(open_role) or {}).get("status") != "open":
+        fail("open seat %s" % roles.get(open_role))
+    entries = (doc.get("escrow") or {}).get("entries") or []
+    if any(e.get("type") == "refund" for e in entries):
+        fail("unexpected refund")
 elif op == "quantity_settled":
     users = args[:4]
     amount = int(args[4])
@@ -462,6 +498,48 @@ run_competitive() {
   echo "competitive ok task=${id} winner_submission=${second}"
 }
 
+run_collaborative_per_seat() {
+  local amount=500 design_amt=300 copy_amt=200 body id
+  local design_tok copy_tok
+  echo "== collaborative settlement_mode=per_seat =="
+  design_tok="$(mint "$PER_DESIGN")"
+  copy_tok="$(mint "$PER_COPY")"
+  body="$(task_body collaborative "$DEADLINE" "$amount" "Per-seat launch page" "Design settles before copy is filled.")"
+  body="$(python3 -c 'import json,sys; doc=json.loads(sys.argv[1]); doc["collaborative"]["settlement_mode"]="per_seat"; print(json.dumps(doc, separators=(",", ":")))' "$body")"
+  request POST "${BASE}/v1/tasks" key "$PUB_KEY" "$body" "smoke-per-${STAMP}"
+  expect_code 201 "per_seat create"
+  id="$(json_id "$RESP_BODY")"
+  check "$RESP_BODY" settlement_mode per_seat
+
+  request POST "${BASE}/v1/tasks/${id}/fund" key "$PUB_KEY" "" "fund-per-${STAMP}"
+  expect_code 200 "per_seat fund"
+  request POST "${BASE}/v1/tasks/${id}/start" key "$PUB_KEY" "" "start-per-${STAMP}"
+  expect_code 409 "per_seat has no start"
+  check "$RESP_BODY" error_has conflict "unified settlement"
+
+  request POST "${BASE}/v1/tasks/${id}/accept" bearer "$design_tok" '{"role_id":"design"}'
+  expect_code 200 "per_seat accept design"
+  check "$RESP_BODY" status active
+  check "$RESP_BODY" seat_status copy open
+  request POST "${BASE}/v1/tasks/${id}/submit" bearer "$design_tok" '{"payload":{"page":"design"}}'
+  expect_code 200 "per_seat submit design"
+  request POST "${BASE}/v1/tasks/${id}/confirm" key "$PUB_KEY" '{"role_id":"design"}'
+  expect_code 200 "per_seat confirm design"
+  check "$RESP_BODY" per_seat_partial "$PER_DESIGN" "$design_amt" "$((amount - design_amt))" design copy
+
+  request POST "${BASE}/v1/tasks/${id}/accept" bearer "$copy_tok" '{"role_id":"copy"}'
+  expect_code 200 "per_seat accept copy"
+  request POST "${BASE}/v1/tasks/${id}/confirm" key "$PUB_KEY" '{"role_id":"copy"}'
+  expect_code 409 "copy has not submitted"
+  check "$RESP_BODY" error_has conflict "seat has not submitted"
+  request POST "${BASE}/v1/tasks/${id}/submit" bearer "$copy_tok" '{"payload":{"page":"copy"}}'
+  expect_code 200 "per_seat submit copy"
+  request POST "${BASE}/v1/tasks/${id}/confirm" key "$PUB_KEY" '{"role_id":"copy"}'
+  expect_code 200 "per_seat confirm copy"
+  check "$RESP_BODY" collab_settled "usr_nobody" "$PER_DESIGN" "$PER_COPY" "$design_amt" "$copy_amt"
+  echo "per_seat ok task=${id}"
+}
+
 run_collaborative() {
   # share_bps 6000 and 4000 are the API's existing split (sum must be 10000).
   # Of 500 credits that is 300 to design and 200 to copy. The exitee gets neither.
@@ -477,6 +555,7 @@ run_collaborative() {
   request POST "${BASE}/v1/tasks" key "$PUB_KEY" "$body" "smoke-collab-${STAMP}"
   expect_code 201 "collaborative create"
   id="$(json_id "$RESP_BODY")"
+  check "$RESP_BODY" settlement_mode unified
   echo "created ${id}"
 
   request POST "${BASE}/v1/tasks/${id}/fund" key "$PUB_KEY" "" "fund-collab-${STAMP}"
@@ -489,7 +568,17 @@ run_collaborative() {
   request POST "${BASE}/v1/tasks/${id}/accept" bearer "$stay_tok" '{"role_id":"copy"}'
   expect_code 200 "accept copy"
   check "$RESP_BODY" seat_filled copy "$COLLAB_STAY"
-  echo "both seats filled"
+  check "$RESP_BODY" status open
+  echo "both seats filled; still open until start"
+
+  request POST "${BASE}/v1/tasks/${id}/submit" bearer "$stay_tok" '{"payload":{"page":"early"}}'
+  expect_code 409 "submit before start"
+  check "$RESP_BODY" error_has conflict "task has not started"
+
+  request POST "${BASE}/v1/tasks/${id}/start" key "$PUB_KEY" "" "start-collab-${STAMP}"
+  expect_code 200 "unified start"
+  check "$RESP_BODY" status active
+  echo "started"
 
   request POST "${BASE}/v1/tasks/${id}/dropout" bearer "$exit_tok" '{}'
   expect_code 200 "dropout"
@@ -497,16 +586,24 @@ run_collaborative() {
   request GET "${BASE}/v1/users/${COLLAB_EXIT}/scores" key "$PUB_KEY"
   expect_code 200 "dropout scores"
   check "$RESP_BODY" scores_dropout "$id"
-  echo "dropout reopened design; exitee ability 0"
+  echo "dropout reopened design; task stayed active; exitee ability 0"
 
   request POST "${BASE}/v1/tasks/${id}/accept" bearer "$repl_tok" '{"role_id":"design"}'
   expect_code 200 "replace design"
   check "$RESP_BODY" seat_filled design "$COLLAB_REPL"
   echo "design replaced"
 
-  request POST "${BASE}/v1/tasks/${id}/submit" bearer "$stay_tok" '{"payload":{"page":"final"},"note":"copy and design are in"}'
-  expect_code 200 "collaborative submit"
-  echo "submitted"
+  request POST "${BASE}/v1/tasks/${id}/submit" bearer "$stay_tok" '{"payload":{"page":"final"},"note":"copy is in"}'
+  expect_code 200 "collaborative submit copy"
+  echo "copy submitted"
+
+  request POST "${BASE}/v1/tasks/${id}/confirm" key "$PUB_KEY" '{}'
+  expect_code 409 "confirm before every seat submits"
+  check "$RESP_BODY" error_has conflict "missing:"
+
+  request POST "${BASE}/v1/tasks/${id}/submit" bearer "$repl_tok" '{"payload":{"page":"design"},"note":"design is in"}'
+  expect_code 200 "collaborative submit design"
+  echo "both seats submitted"
 
   request POST "${BASE}/v1/tasks/${id}/confirm" key "$PUB_KEY" '{}'
   expect_code 200 "collaborative confirm"
@@ -553,9 +650,21 @@ run_collaborative_quantity() {
     check "$RESP_BODY" seat_filled "$seat" "${users[$((i - 1))]}"
   done
   echo "four seats filled"
+  check "$RESP_BODY" status open
+
+  request POST "${BASE}/v1/tasks/${id}/start" key "$PUB_KEY" "" "start-qty-${STAMP}"
+  expect_code 200 "quantity start"
+  check "$RESP_BODY" status active
 
   request POST "${BASE}/v1/tasks/${id}/submit" bearer "${toks[0]}" '{"payload":{"page":"final"},"note":"four writers"}'
-  expect_code 200 "quantity submit"
+  expect_code 200 "quantity submit one"
+  request POST "${BASE}/v1/tasks/${id}/confirm" key "$PUB_KEY" '{}'
+  expect_code 409 "quantity confirm before every seat submits"
+  check "$RESP_BODY" error_has conflict "missing:"
+  for i in 2 3 4; do
+    request POST "${BASE}/v1/tasks/${id}/submit" bearer "${toks[$((i - 1))]}" "{\"payload\":{\"page\":\"${i}\"}}"
+    expect_code 200 "quantity submit writer_${i}"
+  done
   request POST "${BASE}/v1/tasks/${id}/confirm" key "$PUB_KEY" '{}'
   expect_code 200 "quantity confirm"
   check "$RESP_BODY" quantity_settled "${users[0]}" "${users[1]}" "${users[2]}" "${users[3]}" "$seat_amt"
@@ -567,4 +676,5 @@ run_exclusive
 run_competitive
 run_collaborative
 run_collaborative_quantity
-echo "smoke ok exclusive + competitive winner_take_all + collaborative replace + quantity"
+run_collaborative_per_seat
+echo "smoke ok exclusive + competitive winner_take_all + collaborative unified + quantity + per_seat"

@@ -43,3 +43,27 @@ func TestSplitBps(t *testing.T) {
 		t.Fatalf("dropped share not refunded: %+v refund=%d", pays, refund)
 	}
 }
+
+func TestSeatPayoutAmountSumsToPool(t *testing.T) {
+	t.Parallel()
+	roles := []model.Role{
+		{ID: "writer_1", ShareBps: 3333},
+		{ID: "writer_2", ShareBps: 3333},
+		{ID: "writer_3", ShareBps: 3334},
+	}
+	var sum int64
+	for _, role := range roles {
+		amt, err := seatPayoutAmount(100, roles, role.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum += amt
+	}
+	if sum != 100 {
+		t.Fatalf("sum %d", sum)
+	}
+	largest, err := seatPayoutAmount(100, roles, "writer_3")
+	if err != nil || largest != 34 {
+		t.Fatalf("largest %d err %v", largest, err)
+	}
+}

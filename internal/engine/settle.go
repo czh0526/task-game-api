@@ -19,6 +19,7 @@ type confirmInput struct {
 	TaskID       string
 	SubmissionID string
 	MilestoneID  string
+	RoleID       string
 	Auto         bool
 }
 
@@ -31,6 +32,7 @@ func (e *Engine) ConfirmTask(ctx context.Context, userID string, req *types.Conf
 			TaskID:       req.TaskId,
 			SubmissionID: req.SubmissionId,
 			MilestoneID:  req.MilestoneId,
+			RoleID:       req.RoleId,
 		})
 	})
 }
@@ -39,6 +41,31 @@ func (e *Engine) confirm(ctx context.Context, r store.Repos, in confirmInput) (*
 	t, err := loadTask(ctx, r, in.TaskID)
 	if err != nil {
 		return nil, err
+	}
+	if isPerSeatCollab(t) {
+		return e.confirmPerSeat(ctx, r, t, in)
+	}
+	if trim(in.RoleID) != "" {
+		return nil, biz.Invalid("role_id is only valid when settlement_mode is per_seat")
+	}
+	if isUnifiedCollab(t) && t.Status == model.StatusOpen {
+		if in.Auto {
+			return nil, errAutoDeferred
+		}
+		return nil, biz.Conflict("task has not started")
+	}
+	if isUnifiedCollab(t) && t.Status == model.StatusActive {
+		if in.Auto {
+			return nil, errAutoDeferred
+		}
+		subs, err := r.Submissions().ListByTask(ctx, t.ID)
+		if err != nil {
+			return nil, err
+		}
+		if err := ensureUnifiedReady(t, subs, ""); err != nil {
+			return nil, err
+		}
+		t.Status = model.StatusInReview
 	}
 	if t.Status != model.StatusInReview {
 		if in.Auto {
@@ -96,6 +123,15 @@ func (e *Engine) confirm(ctx context.Context, r store.Repos, in confirmInput) (*
 			return nil, errAutoDeferred
 		}
 		return nil, biz.Conflict("task has no submission to confirm")
+	}
+	if isUnifiedCollab(t) {
+		markSubmittedSeats(&t, relevant)
+		if err := ensureUnifiedReady(t, relevant, milestoneID); err != nil {
+			if in.Auto {
+				return nil, errAutoDeferred
+			}
+			return nil, err
+		}
 	}
 	chosen, err := chooseSubmission(t, relevant, trim(in.SubmissionID), in.Auto)
 	if err != nil {
@@ -174,6 +210,14 @@ func (e *Engine) confirm(ctx context.Context, r store.Repos, in confirmInput) (*
 	}
 	if fully {
 		t.Status = model.StatusSettled
+		if isUnifiedCollab(t) && t.Collaborative != nil {
+			for i := range t.Collaborative.Roles {
+				role := &t.Collaborative.Roles[i]
+				if role.Status == model.RoleFilled || role.Status == model.RoleSubmitted {
+					role.Status = model.RoleSettled
+				}
+			}
+		}
 		if chosen != nil {
 			win := chosen.ID
 			t.WinningSubmissionID = &win
@@ -309,7 +353,7 @@ func (e *Engine) planPayout(t model.Task, pool int64, chosen *model.Submission) 
 		// Locked rule: competitive.settlement_rule = winner_take_all.
 		return []payout{{UserID: chosen.ExecutorID, Amount: pool}}, 0, []string{chosen.ExecutorID}, nil
 	case model.KindCollaborative:
-		filled := filledRoles(t)
+		filled := settlingRoles(t)
 		if len(filled) == 0 {
 			return nil, 0, nil, biz.Conflict("no filled seats to settle")
 		}

@@ -11,6 +11,9 @@ info:
     - competitive.settlement_rule = winner_take_all
     - collaborative.on_dropout = replace (dropout gets 0 commission, 0 ability score)
     - Additive in v0.1: collaborative roles take optional quantity (default 1). share_bps is the template total and those totals still sum to 10000. The server materializes that many seats and splits the share (extra basis points go to the last seats of that template). Task responses list seats, not templates. Accept uses the seat id. A flat roles[] array with no quantity is unchanged.
+    - collaborative.settlement_mode = per_seat | unified, default unified. Omitting the field means unified, including tasks stored before the field existed. Collaborative tasks use payment.mode one_shot in v0.1 so seat shares apply to one escrow pool.
+      unified: executors may fill seats while the task is open. Work does not start, and status does not become active, until the publisher calls POST /tasks/{taskId}/start and every seat is filled. Confirm is all-or-nothing: it fails until every current seat has submitted and no seat is open, then one settlement splits the whole pool by seat share_bps. After start, dropout replace still reopens that seat and the task stays active. Confirm stays blocked until the seat is filled again and every current seat has submitted.
+      per_seat: each executor accepts an open seat after fund. That seat can submit and be confirmed on its own. POST /tasks/{taskId}/confirm with role_id releases only that seat's share_bps of the original pool (escrow.release) and leaves the rest held. An open seat is not paid; confirming it refunds that share to the publisher. The task is settled only when every seat is settled or refunded. v0.1 auto-settle for per_seat runs only after every non-terminal seat has submitted and the review window has passed. Confirm earlier seats manually. Ability and commission for an executor apply when that seat is paid; unified still applies them in one batch on confirm.
     - API / Webhook first; no UI required for third parties
     - Additive in v0.1: POST /register and POST /login are public. They store a bcrypt password hash (never plaintext) and return an HS256 access token with the same claims as `make token` (`sub` is the user id, plus `iat` and `exp`). X-Api-Key dev users such as usr_publisher and usr_executor stay valid. GET /me returns the caller id and email.
 servers:
@@ -195,8 +198,13 @@ paths:
   /tasks/{taskId}/accept:
     post:
       tags: [Tasks]
-      summary: Executor accepts task → active
+      summary: Executor accepts an open task or an open collaborative seat
       operationId: acceptTask
+      description: |
+        Exclusive moves open to active. Competitive fills a slot and is active once the first executor accepts.
+        Collaborative unified fills one seat and leaves the task open until POST /tasks/{taskId}/start.
+        After that start, accept only fills a seat reopened by dropout, and the task stays active.
+        Collaborative per_seat fills one seat. The first filled seat moves the task to active so that seat can submit without the others.
       parameters:
         - $ref: '#/components/parameters/TaskId'
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -218,6 +226,39 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Task'
+  /tasks/{taskId}/start:
+    post:
+      tags: [Tasks]
+      summary: Start a unified collaborative task once every seat is filled
+      operationId: startTask
+      description: |
+        Publisher only. Valid when collaborative.settlement_mode is unified, including tasks created without the field.
+        Status must be open, and every materialized seat must be filled.
+        The task then becomes active. Executors cannot submit before this call.
+        per_seat tasks do not use start. A filled seat submits while the task is active.
+        Emits task.started. Subscribers opt in by listing that event.
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '403':
+          description: Caller is not the publisher
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Not a unified open task, or a seat is still open
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /tasks/{taskId}/submit:
     post:
       tags: [Tasks]
@@ -242,8 +283,25 @@ paths:
   /tasks/{taskId}/confirm:
     post:
       tags: [Tasks, Escrow]
-      summary: Publisher confirms → settled (competitive winner_take_all)
+      summary: Publisher confirms delivery and releases escrow
       operationId: confirmTask
+      description: |
+        Exclusive and competitive tasks must be in_review. Competitive winner_take_all pays the submission_id you choose.
+        Milestone mode releases one milestone and returns the task to active until the last milestone.
+
+        Collaborative unified (the default): confirm fails until the publisher has started the task, every seat is filled, and every filled seat has submitted.
+        One confirm then splits the whole pool by seat share_bps. After start, dropout replace reopens that seat and the task stays active.
+        Confirm keeps failing until that seat is filled and every current seat has submitted.
+        The failure names the open seats (`unified settlement requires every seat to be filled; open: ...`) or the seats that have not submitted (`unified settlement requires a submission from every filled seat; missing: ...`).
+
+        Collaborative per_seat: confirm one seat. role_id is that seat id.
+        A submitted seat releases that seat's share of the original escrow pool to its executor and leaves the rest held.
+        An open seat refunds that share to the publisher and pays nobody. A filled seat that has not submitted is rejected (`seat has not submitted`).
+        Omit role_id only when exactly one seat is awaiting confirmation, or when every remaining seat is open (those shares are refunded together).
+        When more than one seat is awaiting confirmation the error is `role_id is required when multiple seats are awaiting confirmation: ...`.
+        The task stays active while any seat is still open or filled. It becomes settled only when every seat is settled or refunded.
+        v0.1 does not auto-settle a per_seat task until every non-terminal seat has submitted and review_deadline has passed. Confirm earlier seats manually.
+        role_id is rejected unless settlement_mode is per_seat.
       parameters:
         - $ref: '#/components/parameters/TaskId'
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -255,16 +313,27 @@ paths:
               properties:
                 submission_id:
                   type: string
-                  description: Required for competitive; winning submission
+                  description: Required for competitive when more than one submission exists. Optional on per_seat; it must match that seat's submission.
                 milestone_id:
                   type: string
+                role_id:
+                  type: string
+                  description: |
+                    Seat id. Used when settlement_mode is per_seat.
+                    Confirms that one submitted seat, or refunds that one open seat.
       responses:
         '200':
-          description: Settled or milestone released
+          description: Settled, one seat released or refunded, or a milestone released
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Task'
+        '409':
+          description: Unified seats are incomplete, the per-seat target is not ready, or escrow is frozen
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /tasks/{taskId}/dispute:
     post:
       tags: [Tasks, Escrow]
@@ -474,6 +543,7 @@ components:
       enum:
         - task.funded
         - task.accepted
+        - task.started
         - task.submitted
         - task.in_review
         - task.confirmed
@@ -553,7 +623,12 @@ components:
           type: [string, 'null']
         status:
           type: string
-          enum: [open, filled, dropped]
+          description: |
+            Server-assigned on a task. submitted means that seat's delivery is awaiting confirm.
+            settled means that seat's share was released to its executor.
+            refunded means that share was returned to the publisher.
+            Dropout replace sets the seat back to open. It does not stay dropped.
+          enum: [open, filled, dropped, submitted, settled, refunded]
     TaskCreate:
       type: object
       required: [kind, title, description, payment, acceptance, assignee_policy]
@@ -598,7 +673,19 @@ components:
               default: winner_take_all
         collaborative:
           type: object
+          description: |
+            Required when kind is collaborative. v0.1 collaborative tasks use payment.mode one_shot.
+            Seat shares are parts of that single escrow pool. on_dropout stays replace.
+            quantity and share_bps rules are unchanged.
           properties:
+            settlement_mode:
+              type: string
+              enum: [per_seat, unified]
+              default: unified
+              description: |
+                Chosen at create time. Omitted means unified, including tasks stored before this field existed.
+                unified fills seats while open, then the publisher starts the task, then one confirm splits the pool.
+                per_seat lets each filled seat submit and settle on its own for that seat's share_bps.
             roles:
               type: array
               description: |
@@ -609,6 +696,9 @@ components:
               type: string
               enum: [replace]
               default: replace
+              description: |
+                Dropout reopens the same seat. The exitee gets 0 commission and 0 ability.
+                Before a unified start the task stays open. After start the task stays active even if a seat is open again.
     Task:
       allOf:
         - $ref: '#/components/schemas/TaskCreate'

@@ -42,9 +42,14 @@ func toTask(t model.Task, acc *model.EscrowAccount) types.Task {
 			}
 			roles = append(roles, item)
 		}
+		mode := t.Collaborative.SettlementMode
+		if mode == "" {
+			mode = model.SettlementUnified
+		}
 		out.Collaborative = &types.Collaborative{
-			Roles:     roles,
-			OnDropout: t.Collaborative.OnDropout,
+			Roles:          roles,
+			OnDropout:      t.Collaborative.OnDropout,
+			SettlementMode: mode,
 		}
 	}
 	if t.WinningSubmissionID != nil && *t.WinningSubmissionID != "" {

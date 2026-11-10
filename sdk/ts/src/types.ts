@@ -25,9 +25,12 @@ export type EscrowEntryType = "hold" | "release" | "refund" | "freeze";
 
 export type MilestoneStatus = "pending" | "submitted" | "released" | "disputed";
 
-export type RoleStatus = "open" | "filled" | "dropped";
+export type RoleStatus = "open" | "filled" | "dropped" | "submitted" | "settled" | "refunded";
 
 export type SettlementRule = "winner_take_all";
+
+/** Collaborative create-time settlement. Omitted means `unified`. */
+export type SettlementMode = "per_seat" | "unified";
 
 export type DropoutRule = "replace";
 
@@ -38,6 +41,7 @@ export type MessageType = "text" | "attachment_ref";
 export type WebhookEventType =
   | "task.funded"
   | "task.accepted"
+  | "task.started"
   | "task.submitted"
   | "task.in_review"
   | "task.confirmed"
@@ -88,6 +92,11 @@ export interface CollaborativeRole {
   /** Server-assigned on materialized seats. The template id from create. */
   template_id?: string;
   assignee_user_id?: string | null;
+  /**
+   * Server-assigned. `submitted` is awaiting confirm.
+   * `settled` was paid. `refunded` returned that share to the publisher.
+   * Dropout replace sets the seat back to `open`.
+   */
   status?: RoleStatus;
 }
 
@@ -120,6 +129,12 @@ export interface CollaborativeSettings {
    */
   roles: CollaborativeRole[];
   on_dropout?: DropoutRule;
+  /**
+   * Chosen at create time. Omitted means `unified`, including tasks stored before the field existed.
+   * `unified` fills seats while open, then the publisher calls `startTask`, then one confirm splits the pool.
+   * `per_seat` lets each filled seat submit and settle on its own.
+   */
+  settlement_mode?: SettlementMode;
 }
 
 export interface TaskCreate {
@@ -194,6 +209,11 @@ export interface ConfirmTaskBody {
    */
   submission_id?: string;
   milestone_id?: string;
+  /**
+   * Seat id when `settlement_mode` is `per_seat`.
+   * Confirms that submitted seat, or refunds that open seat.
+   */
+  role_id?: string;
 }
 
 export interface DisputeTaskBody {

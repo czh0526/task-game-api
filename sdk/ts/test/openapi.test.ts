@@ -47,6 +47,7 @@ describe("OpenAPI parity", () => {
       "/tasks/{taskId}/dispute",
       "/tasks/{taskId}/dropout",
       "/tasks/{taskId}/fund",
+      "/tasks/{taskId}/start",
       "/tasks/{taskId}/submit",
       "/users/{userId}/scores",
       "/webhooks",
@@ -58,6 +59,8 @@ describe("OpenAPI parity", () => {
     assert.match(yaml, /version:\s*0\.1\.0/);
     assert.match(yaml, /share_bps is the template total on create/);
     assert.match(yaml, /quantity N materializes/);
+    assert.match(yaml, /settlement_mode/);
+    assert.match(yaml, /per_seat \| unified/);
     assert.equal(PROTOCOL_VERSION, "0.1.0");
     assert.match(yaml, /HMAC-SHA256\(raw_body, secret\)/);
   });

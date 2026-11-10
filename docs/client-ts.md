@@ -174,11 +174,17 @@ const settled = await publisher.confirmTask(taskId, { submission_id: ids[1] });
 
 多份提交时，72 小时自动结算不会猜赢家，任务留在 `in_review`。
 
-### 协作：退出即 replace
+### 协作：结算方式与退出
 
-`collaborative.on_dropout` 固定为 `replace`。各席位 `share_bps` 合计必须是 10000。冒烟用 6000 与 4000：500 积分结算为 300 与 200。
+`collaborative.on_dropout` 固定为 `replace`。各席位 `share_bps` 合计必须是 10000。冒烟用 6000 与 4000：500 积分结算为 300 与 200。v0.1 的协作任务使用 `payment.mode = one_shot`。
 
-两席都坐满后，一人 `dropoutTask`：退出者佣金 0、能力分 0（积分记录原因 `collaborative_dropout`），该席位回到 `open`，另一席位仍是 `filled`，任务保持 `active`。替补用同一个 `role_id` 再 `acceptTask`。之后提交、确认，按仍在席的 `share_bps` 结算，退出者拿不到 release。
+`settlement_mode` 在创建时选定，省略则为 `unified`（含这个字段出现之前已经存下的任务）。
+
+**统一结算 `unified`（默认）。** 执行者在 `open` 时入席，任务仍是 `open`，此时不能提交。席位坐满后，发布者调用 `startTask`，状态变为 `active`。之后每一席都要提交。`confirmTask` 在还有空席、或有席位没提交时失败，错误会列出 `open:` 或 `missing:` 的席位 id。全部提交后一次确认，按各席 `share_bps` 分完整个托管。开始前退出，任务保持 `open`。开始后退出仍是 replace：该席回到 `open`，任务保持 `active`，确认继续被挡住，直到补位并且当前每一席都已提交。退出者佣金 0、能力分 0（原因 `collaborative_dropout`）。
+
+**分别结算 `per_seat`。** 任一席位入席后任务即可变为 `active`，该席可以单独提交。`confirmTask({ role_id })` 只拨付这一席占原始托管的份额，其余继续 `held`。空席不会被支付；对 `open` 席位调用确认会把该份额 `refund` 给发布者。每一席都是 `settled` 或 `refunded` 之后，任务才是 `settled`。多席同时等待确认时必须带 `role_id`。执行者的能力分和完整度在该席拨付时记入；发布者的完整度在任务最终 `settled` 时记一次。v0.1 不会在只提交了部分席位时自动结算；全部非终态席位都提交并且复核窗口结束，才会自动把这些席位一起拨付。分别结算不要调用 `startTask`。
+
+统一结算开始时会发 `task.started`。按席拨付沿用 `task.confirmed` 和 `escrow.release`。空席退回沿用 `escrow.refund`。
 
 ```ts
 await publisher.createTask({
@@ -194,6 +200,7 @@ await publisher.createTask({
   assignee_policy: { type: "open" },
   collaborative: {
     on_dropout: "replace",
+    settlement_mode: "unified",
     roles: [
       { id: "design", name: "Design", share_bps: 6000 },
       { id: "copy", name: "Copy", share_bps: 4000 },
@@ -203,10 +210,44 @@ await publisher.createTask({
 
 await exitee.acceptTask(taskId, { role_id: "design" });
 await stayer.acceptTask(taskId, { role_id: "copy" });
+await publisher.startTask(taskId);
 const dropped = await exitee.dropoutTask(taskId);
 // dropped.status === "active"
 // design 席位 status === "open"，assignee 已清空
 await replacement.acceptTask(taskId, { role_id: "design" });
+await replacement.submitTask(taskId, { payload: { page: "design" } });
+await stayer.submitTask(taskId, { payload: { page: "copy" } });
+await publisher.confirmTask(taskId, {});
+```
+
+分别结算只确认已经提交的那一席：
+
+```ts
+await publisher.createTask({
+  kind: "collaborative",
+  title: "Write the launch page",
+  description: "Design can settle before copy is filled.",
+  payment: { mode: "one_shot", amount: 500 },
+  acceptance: {
+    deadline,
+    quality: "Meets the written acceptance bar",
+    review_hours: 72,
+  },
+  assignee_policy: { type: "open" },
+  collaborative: {
+    on_dropout: "replace",
+    settlement_mode: "per_seat",
+    roles: [
+      { id: "design", name: "Design", share_bps: 6000 },
+      { id: "copy", name: "Copy", share_bps: 4000 },
+    ],
+  },
+});
+await design.acceptTask(taskId, { role_id: "design" });
+await design.submitTask(taskId, { payload: { page: "design" } });
+const partial = await publisher.confirmTask(taskId, { role_id: "design" });
+// partial.status === "active"，托管仍持有文案席的份额
+// 空着的文案席：await publisher.confirmTask(taskId, { role_id: "copy" }) 退回该份额
 ```
 
 ### 角色人数 quantity
@@ -433,11 +474,17 @@ const settled = await publisher.confirmTask(taskId, { submission_id: ids[1] });
 
 Auto-settle after the review window does not guess a winner when more than one submission exists. The task stays `in_review`.
 
-### Collaborative dropout is replace
+### Collaborative settlement and dropout
 
-`collaborative.on_dropout` is `replace`. `share_bps` across seats must sum to 10000. The smoke script uses 6000 and 4000, which settles 500 credits as 300 and 200.
+`collaborative.on_dropout` is `replace`. `share_bps` across seats must sum to 10000. The smoke script uses 6000 and 4000, which settles 500 credits as 300 and 200. Collaborative tasks in v0.1 use `payment.mode = one_shot`.
 
-After both seats are filled, `dropoutTask` from one participant pays that person 0 commission and writes ability 0 (score reason `collaborative_dropout`). That seat returns to `open`, the other seat stays `filled`, and the task stays `active`. The replacement calls `acceptTask` with the same `role_id`. Submit and confirm then pay the seats that are still filled. The exitee gets no release.
+`settlement_mode` is chosen at create time. Omitting it means `unified`, including tasks stored before the field existed.
+
+**`unified` (default).** Executors fill seats while the task is `open`. Submit is rejected until the publisher calls `startTask`, which requires every seat to be filled and moves the task to `active`. `confirmTask` fails while any seat is open or has not submitted. The error lists those seat ids after `open:` or `missing:`. One confirm then splits the whole pool by seat `share_bps`. Dropout before start leaves the task `open`. Dropout after start still reopens that seat and the task stays `active`; confirm stays blocked until the seat is filled and every current seat has submitted. The exitee gets 0 commission and ability 0 (score reason `collaborative_dropout`).
+
+**`per_seat`.** The task becomes `active` when the first seat is filled, and that seat can submit alone. `confirmTask({ role_id })` releases only that seat's share of the original pool and leaves the rest held. An open seat is not paid; confirming it refunds that share to the publisher. The task is `settled` only when every seat is `settled` or `refunded`. If more than one seat is awaiting confirmation, `role_id` is required. The executor's ability and integrity are recorded when that seat is paid. The publisher's integrity is recorded once, when the task becomes `settled`. v0.1 does not auto-settle a per-seat task until every non-terminal seat has submitted and the review window has passed. Do not call `startTask` for `per_seat`.
+
+Starting a unified task emits `task.started`. A per-seat payout reuses `task.confirmed` and `escrow.release`. Refunding an open seat reuses `escrow.refund`.
 
 ```ts
 await publisher.createTask({
@@ -453,6 +500,7 @@ await publisher.createTask({
   assignee_policy: { type: "open" },
   collaborative: {
     on_dropout: "replace",
+    settlement_mode: "unified",
     roles: [
       { id: "design", name: "Design", share_bps: 6000 },
       { id: "copy", name: "Copy", share_bps: 4000 },
@@ -462,10 +510,44 @@ await publisher.createTask({
 
 await exitee.acceptTask(taskId, { role_id: "design" });
 await stayer.acceptTask(taskId, { role_id: "copy" });
+await publisher.startTask(taskId);
 const dropped = await exitee.dropoutTask(taskId);
 // dropped.status === "active"
 // the design seat status is "open" and its assignee is cleared
 await replacement.acceptTask(taskId, { role_id: "design" });
+await replacement.submitTask(taskId, { payload: { page: "design" } });
+await stayer.submitTask(taskId, { payload: { page: "copy" } });
+await publisher.confirmTask(taskId, {});
+```
+
+Per-seat confirm pays only the submitted seat:
+
+```ts
+await publisher.createTask({
+  kind: "collaborative",
+  title: "Write the launch page",
+  description: "Design can settle before copy is filled.",
+  payment: { mode: "one_shot", amount: 500 },
+  acceptance: {
+    deadline,
+    quality: "Meets the written acceptance bar",
+    review_hours: 72,
+  },
+  assignee_policy: { type: "open" },
+  collaborative: {
+    on_dropout: "replace",
+    settlement_mode: "per_seat",
+    roles: [
+      { id: "design", name: "Design", share_bps: 6000 },
+      { id: "copy", name: "Copy", share_bps: 4000 },
+    ],
+  },
+});
+await design.acceptTask(taskId, { role_id: "design" });
+await design.submitTask(taskId, { payload: { page: "design" } });
+const partial = await publisher.confirmTask(taskId, { role_id: "design" });
+// partial.status === "active", and escrow still holds the copy seat's share.
+// An empty copy seat: await publisher.confirmTask(taskId, { role_id: "copy" }) refunds that share.
 ```
 
 ### Role quantity

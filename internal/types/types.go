@@ -29,8 +29,9 @@ type Chat struct {
 }
 
 type Collaborative struct {
-	Roles     []CollaborativeRole `json:"roles"`
-	OnDropout string              `json:"on_dropout,optional,options=replace"`
+	Roles          []CollaborativeRole `json:"roles"`
+	OnDropout      string              `json:"on_dropout,optional,options=replace"`
+	SettlementMode string              `json:"settlement_mode,optional,options=per_seat|unified"`
 }
 
 type CollaborativeRole struct {
@@ -40,7 +41,7 @@ type CollaborativeRole struct {
 	ShareBps       int64   `json:"share_bps"`
 	TemplateId     string  `json:"template_id,optional,omitempty"`
 	AssigneeUserId *string `json:"assignee_user_id,optional"`
-	Status         string  `json:"status,optional,options=open|filled|dropped"`
+	Status         string  `json:"status,optional,options=open|filled|dropped|submitted|settled|refunded"`
 }
 
 type Competitive struct {
@@ -53,6 +54,12 @@ type ConfirmTaskReq struct {
 	IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
 	SubmissionId   string `json:"submission_id,optional"`
 	MilestoneId    string `json:"milestone_id,optional"`
+	RoleId         string `json:"role_id,optional"`
+}
+
+type StartTaskReq struct {
+	TaskId         string `path:"taskId" json:"-"`
+	IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
 }
 
 type CreateChatReq struct {

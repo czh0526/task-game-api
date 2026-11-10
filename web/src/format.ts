@@ -20,6 +20,14 @@ export const ROLE_STATUS_LABEL: Record<string, string> = {
   open: "空席",
   filled: "已入席",
   dropped: "已退出",
+  submitted: "已提交",
+  settled: "已拨付",
+  refunded: "已退回",
+};
+
+export const SETTLEMENT_MODE_LABEL: Record<string, string> = {
+  per_seat: "分别结算",
+  unified: "统一结算",
 };
 
 export const ENTRY_LABEL: Record<string, string> = {

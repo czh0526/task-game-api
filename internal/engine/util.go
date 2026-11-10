@@ -97,3 +97,22 @@ func filledRoles(t model.Task) []model.Role {
 	}
 	return out
 }
+
+// settlingRoles are the seats a unified confirm pays: still filled, or already
+// marked submitted, with an assignee. Open seats stay out so their share is
+// the refund side of splitBps.
+func settlingRoles(t model.Task) []model.Role {
+	if t.Collaborative == nil {
+		return nil
+	}
+	var out []model.Role
+	for _, role := range t.Collaborative.Roles {
+		if role.AssigneeUserID == "" {
+			continue
+		}
+		if role.Status == model.RoleFilled || role.Status == model.RoleSubmitted {
+			out = append(out, role)
+		}
+	}
+	return out
+}
