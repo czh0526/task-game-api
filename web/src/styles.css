@@ -156,6 +156,7 @@ code.mono, .mono { font-family: var(--mono); font-size: 0.86em; }
 .btn.secondary, a.btn.secondary { border-color: #cfc4b2; background: var(--bg-raised); }
 .btn.danger { background: transparent; color: var(--bad); border-color: #e4b2a8; }
 .btn.ghost, a.btn.ghost { background: transparent; border-color: transparent; color: var(--ink-soft); }
+.btn.compact { padding: 4px 10px; font-size: 0.85rem; }
 .btn:disabled { opacity: 0.55; cursor: not-allowed; }
 .btn:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
   outline: 2px solid var(--accent);
@@ -228,6 +229,7 @@ code.mono, .mono { font-family: var(--mono); font-size: 0.86em; }
 table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
 th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
 .mine-row { background: #f8f1e4; }
+.seat-action { white-space: nowrap; }
 
 .actions { display: grid; gap: 12px; }
 .action { padding-bottom: 8px; border-bottom: 1px solid var(--line); }
