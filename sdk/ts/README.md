@@ -31,8 +31,9 @@ Auth is one header. `apiKey(...)` sends `X-Api-Key`. `bearer(...)` sends `Author
 | --- | --- |
 | `X-Api-Key: dev-publisher-key` | `usr_publisher` |
 | `X-Api-Key: dev-executor-key` | `usr_executor` |
+| `X-Api-Key: dev-arbiter-key` | `usr_arbiter` |
 
-Mint a JWT with `make token` (`sub` is the user id) and pass the raw token to `bearer`. `register` and `login` are public and return that same HS256 token (`access_token`, `sub` is `user.id`). They do not send credentials already set on the client. `me()` reads the caller. Passwords are 8 to 72 bytes; the server stores bcrypt.
+Mint a JWT with `make token` (`sub` is the user id) and pass the raw token to `bearer`. `register` and `login` are public and return that same HS256 token (`access_token`, `sub` is `user.id`). They do not send credentials already set on the client. `me()` reads the caller, including `is_arbiter` when the user is in `Escrow.ArbiterUserIds`. Passwords are 8 to 72 bytes; the server stores bcrypt.
 
 ```ts
 import { TaskGameClient, bearer } from "taskgame-client";
