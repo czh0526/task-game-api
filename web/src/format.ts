@@ -41,7 +41,14 @@ export const ENTRY_LABEL: Record<string, string> = {
 
 export const PAYMENT_MODE_LABEL: Record<string, string> = {
   one_shot: "一次性",
-  milestone: "里程碑",
+  milestone: "分阶段",
+};
+
+export const MILESTONE_STATUS_LABEL: Record<string, string> = {
+  pending: "待提交",
+  submitted: "待确认",
+  released: "已拨付",
+  disputed: "争议中",
 };
 
 export function formatCredits(amount: number | null | undefined): string {

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ListTasksQuery, Task, TaskKind, TaskStatus } from "taskgame-client";
 import { useApp } from "../context";
-import { KIND_LABEL, STATUS_LABEL, formatCredits, formatError, isAbort } from "../format";
+import { KIND_LABEL, PAYMENT_MODE_LABEL, STATUS_LABEL, formatCredits, formatError, isAbort } from "../format";
 import { href } from "../route";
 import { ErrorNote, KindPill, Screen, StatusPill } from "../ui";
 
@@ -148,6 +148,7 @@ export function TaskList() {
               <h2>{task.title}</h2>
               <p className="meta">
                 <span>{formatCredits(task.payment.amount)}</span>
+                <span>{PAYMENT_MODE_LABEL[task.payment.mode] ?? task.payment.mode}</span>
                 <span className="en">{task.payment.mode}</span>
                 <code className="mono">{task.id}</code>
               </p>
