@@ -50,8 +50,25 @@ func (e *Engine) FundTask(ctx context.Context, userID string, req *types.FundTas
 		}
 		t.EscrowID = acc.ID
 		t.Status = model.StatusOpen
+		t.FundedAt = &now
+		if t.Collaborative != nil {
+			for i := range t.Collaborative.Roles {
+				if t.Collaborative.Roles[i].Status == model.RoleOpen || t.Collaborative.Roles[i].Status == "" {
+					opened := now
+					t.Collaborative.Roles[i].OpenedAt = &opened
+				}
+			}
+		}
+		chat, err := e.bindTaskChat(ctx, r, &t, t.PublisherID)
+		if err != nil {
+			return nil, err
+		}
+		t.ChatID = chat.ID
 		t.UpdatedAt = now
 		if err := r.Tasks().Update(ctx, t); err != nil {
+			return nil, err
+		}
+		if err := e.inviteSpecificOnFund(ctx, r, t); err != nil {
 			return nil, err
 		}
 		dto, err := e.dto(ctx, r, t)
@@ -93,7 +110,7 @@ func (e *Engine) AcceptTask(ctx context.Context, userID string, req *types.Accep
 		if err != nil {
 			return nil, err
 		}
-		if err := checkPolicy(t, userID, ability); err != nil {
+		if err := e.allowAccept(ctx, r, t, userID, ability); err != nil {
 			return nil, err
 		}
 		switch t.Kind {
@@ -156,8 +173,24 @@ func (e *Engine) AcceptTask(ctx context.Context, userID string, req *types.Accep
 			e.syncCollaborativeProgress(&t)
 		case isUnifiedCollab(t):
 			// Seats fill while the task is open. Publisher start moves it to active.
+			if unifiedReadyToStart(t) && t.Status == model.StatusOpen {
+				deadline := e.now().Add(e.startTimeout())
+				t.StartDeadline = &deadline
+			} else {
+				t.StartDeadline = nil
+			}
 		default:
 			t.Status = model.StatusActive
+		}
+		chat, err := e.bindTaskChat(ctx, r, &t, userID)
+		if err != nil {
+			return nil, err
+		}
+		if t.ChatID == "" {
+			t.ChatID = chat.ID
+		}
+		if err := e.markInviteAccepted(ctx, r, t.ID, userID); err != nil {
+			return nil, err
 		}
 		t.UpdatedAt = e.now()
 		if err := r.Tasks().Update(ctx, t); err != nil {
@@ -275,7 +308,7 @@ func (e *Engine) SubmitTask(ctx context.Context, userID string, req *types.Submi
 			return nil, err
 		}
 		for _, s := range subs {
-			if s.MilestoneID != milestoneID {
+			if s.MilestoneID != milestoneID || !submissionCurrent(s) {
 				continue
 			}
 			if t.Kind == model.KindCompetitive || t.Kind == model.KindCollaborative {
@@ -287,9 +320,14 @@ func (e *Engine) SubmitTask(ctx context.Context, userID string, req *types.Submi
 			return nil, biz.Conflict("delivery already submitted")
 		}
 		now := e.now()
+		roleID := ""
+		if seatIdx >= 0 {
+			roleID = t.Collaborative.Roles[seatIdx].ID
+		}
 		sub := model.Submission{
 			ID: id.New("sub_"), TaskID: t.ID, MilestoneID: milestoneID, ExecutorID: userID,
-			Payload: json.RawMessage(raw), Note: note, CreatedAt: now,
+			RoleID: roleID, Payload: json.RawMessage(raw), Note: note,
+			Status: model.SubmissionCurrent, CreatedAt: now,
 		}
 		if err := r.Submissions().Insert(ctx, sub); err != nil {
 			return nil, err
@@ -381,6 +419,9 @@ func (e *Engine) DisputeTask(ctx context.Context, userID string, req *types.Disp
 		if err != nil {
 			return nil, err
 		}
+		if isPerSeatCollab(t) {
+			return e.disputeSeat(ctx, r, t, userID, reason, trim(req.RoleId))
+		}
 		if t.Status != model.StatusInReview {
 			return nil, biz.Conflict("task is not in review")
 		}
@@ -394,7 +435,7 @@ func (e *Engine) DisputeTask(ctx context.Context, userID string, req *types.Disp
 		if err != nil {
 			return nil, err
 		}
-		if acc.Frozen > 0 {
+		if acc.Frozen > 0 || t.DisputeRoleID != "" {
 			return nil, biz.Conflict("escrow is already frozen")
 		}
 		now := e.now()
@@ -417,7 +458,9 @@ func (e *Engine) DisputeTask(ctx context.Context, userID string, req *types.Disp
 		}
 		t.Status = model.StatusDisputed
 		t.DisputeReason = reason
-		t.ReviewDeadline = nil
+		t.DisputeRoleID = ""
+		t.Resolve = model.ResolveState{}
+		clearReview(&t)
 		t.UpdatedAt = now
 		if err := r.Tasks().Update(ctx, t); err != nil {
 			return nil, err
@@ -460,6 +503,8 @@ func (e *Engine) DropoutTask(ctx context.Context, userID string, req *types.Drop
 			if role.AssigneeUserID == userID && role.Status == model.RoleFilled {
 				role.Status = model.RoleOpen
 				role.AssigneeUserID = ""
+				opened := e.now()
+				role.OpenedAt = &opened
 				dropped = true
 				break
 			}
@@ -477,6 +522,9 @@ func (e *Engine) DropoutTask(ctx context.Context, userID string, req *types.Drop
 			t.ExecutorIDs = removeID(t.ExecutorIDs, userID)
 		}
 		e.syncCollaborativeProgress(&t)
+		if isUnifiedCollab(t) && t.Status == model.StatusOpen {
+			t.StartDeadline = nil
+		}
 		t.UpdatedAt = e.now()
 		if err := r.Tasks().Update(ctx, t); err != nil {
 			return nil, err

@@ -3,6 +3,7 @@ export const SETTINGS_KEY = "taskgame.web.settings";
 export const PRESETS = {
   publisher: { apiKey: "dev-publisher-key", userId: "usr_publisher", label: "发布者" },
   executor: { apiKey: "dev-executor-key", userId: "usr_executor", label: "执行者" },
+  arbiter: { apiKey: "dev-arbiter-key", userId: "usr_arbiter", label: "裁定者" },
 } as const;
 
 export type Role = keyof typeof PRESETS;

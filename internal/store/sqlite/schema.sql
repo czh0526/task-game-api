@@ -38,12 +38,23 @@ CREATE TABLE IF NOT EXISTS tasks (
     review_deadline TEXT,
     escrow_id TEXT NOT NULL DEFAULT '',
     dispute_reason TEXT NOT NULL DEFAULT '',
+    cancel_reason TEXT NOT NULL DEFAULT '',
+    cancel_code TEXT NOT NULL DEFAULT '',
+    cancelled_at TEXT,
+    chat_id TEXT NOT NULL DEFAULT '',
+    funded_at TEXT,
+    start_deadline TEXT,
+    winner_select_deadline TEXT,
+    dispute_role_id TEXT NOT NULL DEFAULT '',
+    resolve_json TEXT NOT NULL DEFAULT '',
+    max_revisions INTEGER NOT NULL DEFAULT 3,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks (created_at, id);
 CREATE INDEX IF NOT EXISTS idx_tasks_review ON tasks (status, review_deadline);
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks (status, created_at, id);
 
 CREATE TABLE IF NOT EXISTS submissions (
     id TEXT PRIMARY KEY,
@@ -52,6 +63,8 @@ CREATE TABLE IF NOT EXISTS submissions (
     executor_id TEXT NOT NULL,
     payload TEXT NOT NULL,
     note TEXT NOT NULL DEFAULT '',
+    role_id TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'current',
     created_at TEXT NOT NULL
 );
 
@@ -107,6 +120,21 @@ CREATE TABLE IF NOT EXISTS chats (
     member_ids TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_chats_task ON chats (task_id);
+
+CREATE TABLE IF NOT EXISTS invites (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_invites_task ON invites (task_id, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_invites_user ON invites (user_id, status, created_at, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_invites_task_user ON invites (task_id, user_id);
 
 CREATE TABLE IF NOT EXISTS messages (
     id TEXT PRIMARY KEY,

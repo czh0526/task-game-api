@@ -51,7 +51,7 @@ func (e *Engine) CreateWebhook(ctx context.Context, userID string, req *types.Cr
 	})
 }
 
-// CreateChat opens a free-form chat. task_id stays null in v0.1.
+// CreateChat opens a free-form chat. Optional task_id reuses the task's bound chat.
 func (e *Engine) CreateChat(ctx context.Context, userID string, req *types.CreateChatReq) (*types.Chat, error) {
 	return call(e, ctx, userID, http.MethodPost, "/v1/chats", req.IdempotencyKey, req, func(ctx context.Context, r store.Repos) (*types.Chat, error) {
 		if len(req.MemberIds) == 0 {
@@ -69,6 +69,48 @@ func (e *Engine) CreateChat(ctx context.Context, userID string, req *types.Creat
 		if len(members) > 50 {
 			return nil, biz.Invalid("too many members")
 		}
+		taskID := trim(req.TaskId)
+		if taskID != "" {
+			t, err := loadTask(ctx, r, taskID)
+			if err != nil {
+				return nil, err
+			}
+			if userID != t.PublisherID && !contains(t.ExecutorIDs, userID) {
+				return nil, biz.Forbidden("only the publisher or an executor can bind a task chat")
+			}
+			existing, err := r.Chats().ListByTask(ctx, t.ID)
+			if err != nil {
+				return nil, err
+			}
+			if len(existing) > 0 {
+				c := existing[0]
+				c.MemberIDs = dedupe(append(c.MemberIDs, members...))
+				if err := r.Chats().UpdateChat(ctx, c); err != nil {
+					return nil, err
+				}
+				if t.ChatID == "" {
+					t.ChatID = c.ID
+					t.UpdatedAt = e.now()
+					if err := r.Tasks().Update(ctx, t); err != nil {
+						return nil, err
+					}
+				}
+				return toChat(c), nil
+			}
+			now := e.now()
+			c := model.Chat{ID: id.New("cht_"), TaskID: t.ID, MemberIDs: members, CreatedAt: now}
+			if err := r.Chats().InsertChat(ctx, c); err != nil {
+				return nil, err
+			}
+			if t.ChatID == "" {
+				t.ChatID = c.ID
+				t.UpdatedAt = now
+				if err := r.Tasks().Update(ctx, t); err != nil {
+					return nil, err
+				}
+			}
+			return toChat(c), nil
+		}
 		now := e.now()
 		c := model.Chat{ID: id.New("cht_"), MemberIDs: members, CreatedAt: now}
 		if err := r.Chats().InsertChat(ctx, c); err != nil {
@@ -76,6 +118,134 @@ func (e *Engine) CreateChat(ctx context.Context, userID string, req *types.Creat
 		}
 		return toChat(c), nil
 	})
+}
+
+// bindTaskChat returns the single chat bound to a task, creating it if needed, and adds userID.
+func (e *Engine) bindTaskChat(ctx context.Context, r store.Repos, t *model.Task, userID string) (model.Chat, error) {
+	existing, err := r.Chats().ListByTask(ctx, t.ID)
+	if err != nil {
+		return model.Chat{}, err
+	}
+	if len(existing) == 0 && t.ChatID != "" {
+		c, err := r.Chats().GetChat(ctx, t.ChatID)
+		if err == nil {
+			existing = []model.Chat{c}
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return model.Chat{}, err
+		}
+	}
+	if len(existing) > 0 {
+		c := existing[0]
+		if c.TaskID == "" {
+			c.TaskID = t.ID
+		}
+		if !contains(c.MemberIDs, userID) {
+			c.MemberIDs = append(c.MemberIDs, userID)
+		}
+		if err := r.Chats().UpdateChat(ctx, c); err != nil {
+			return model.Chat{}, err
+		}
+		return c, nil
+	}
+	now := e.now()
+	c := model.Chat{ID: id.New("cht_"), TaskID: t.ID, MemberIDs: []string{userID}, CreatedAt: now}
+	if err := r.Chats().InsertChat(ctx, c); err != nil {
+		return model.Chat{}, err
+	}
+	return c, nil
+}
+
+// GetChat returns chat metadata for a member.
+func (e *Engine) GetChat(ctx context.Context, userID, chatID string) (*types.Chat, error) {
+	if !id.ValidChatID(chatID) {
+		return nil, biz.Invalid("chatId must match ^cht_")
+	}
+	chat, err := e.store.Chats().GetChat(ctx, chatID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, biz.NotFound("chat not found")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !contains(chat.MemberIDs, userID) {
+		return nil, biz.Forbidden("only members can read this chat")
+	}
+	return toChat(chat), nil
+}
+
+// ListChats returns the task chat when the caller is a member or the publisher.
+func (e *Engine) ListChats(ctx context.Context, userID, taskID string) (*types.ChatList, error) {
+	taskID = trim(taskID)
+	if taskID == "" {
+		return nil, biz.Invalid("task_id is required")
+	}
+	t, err := loadTask(ctx, e.store, taskID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := e.store.Chats().ListByTask(ctx, t.ID)
+	if err != nil {
+		return nil, err
+	}
+	if userID != t.PublisherID {
+		visible := make([]model.Chat, 0, len(rows))
+		for _, row := range rows {
+			if contains(row.MemberIDs, userID) {
+				visible = append(visible, row)
+			}
+		}
+		if len(visible) == 0 && len(rows) > 0 {
+			return nil, biz.Forbidden("only members can read this chat")
+		}
+		rows = visible
+	}
+	items := make([]types.Chat, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, *toChat(row))
+	}
+	return &types.ChatList{Items: items}, nil
+}
+
+// ListMessages returns one page of history, oldest first. Only members can read.
+func (e *Engine) ListMessages(ctx context.Context, userID string, req *types.ListMessagesReq) (*types.MessageList, error) {
+	if !id.ValidChatID(req.ChatId) {
+		return nil, biz.Invalid("chatId must match ^cht_")
+	}
+	if req.Limit < 0 || req.Limit > 100 {
+		return nil, biz.Invalid("limit must be between 1 and 100")
+	}
+	limit := int(req.Limit)
+	if limit == 0 {
+		limit = 50
+	}
+	offset, err := decodeCursor(req.Cursor)
+	if err != nil {
+		return nil, err
+	}
+	chat, err := e.store.Chats().GetChat(ctx, req.ChatId)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, biz.NotFound("chat not found")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !contains(chat.MemberIDs, userID) {
+		return nil, biz.Forbidden("only members can read this chat")
+	}
+	rows, err := e.store.Chats().ListMessages(ctx, chat.ID, limit+1, offset)
+	if err != nil {
+		return nil, err
+	}
+	var next *string
+	if len(rows) > limit {
+		rows = rows[:limit]
+		next = encodeCursor(offset + limit)
+	}
+	items := make([]types.Message, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, *toMessage(row))
+	}
+	return &types.MessageList{Items: items, NextCursor: next}, nil
 }
 
 // PostMessage appends a text or attachment_ref message from a member.
@@ -162,10 +332,15 @@ func (e *Engine) GetUserScores(ctx context.Context, userID string) (*types.UserS
 }
 
 func toChat(c model.Chat) *types.Chat {
-	return &types.Chat{
+	out := &types.Chat{
 		Id:        c.ID,
 		MemberIds: append([]string{}, c.MemberIDs...),
 	}
+	if c.TaskID != "" {
+		taskID := c.TaskID
+		out.TaskId = &taskID
+	}
+	return out
 }
 
 func toMessage(m model.Message) *types.Message {

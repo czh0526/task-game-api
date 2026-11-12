@@ -10,6 +10,15 @@ const KINDS: TaskKind[] = ["exclusive", "competitive", "collaborative"];
 
 type Tab = "all" | "published" | "open" | "mine";
 
+function listQuery(status: "" | TaskStatus, kind: "" | TaskKind, tab: Tab, cursor?: string): ListTasksQuery {
+  const query: ListTasksQuery = { limit: 50 };
+  if (cursor) query.cursor = cursor;
+  if (status) query.status = status;
+  if (kind) query.kind = kind;
+  if (tab === "open") query.assignable = "me";
+  return query;
+}
+
 export function TaskList() {
   const { client, clientError, settings } = useApp();
   const [items, setItems] = useState<Task[]>([]);
@@ -28,11 +37,8 @@ export function TaskList() {
     const ac = new AbortController();
     setLoading(true);
     setError(null);
-    const query: ListTasksQuery = { limit: 50 };
-    if (status) query.status = status;
-    if (kind) query.kind = kind;
     client
-      .listTasks(query, { signal: ac.signal })
+      .listTasks(listQuery(status, kind, tab), { signal: ac.signal })
       .then((page) => {
         if (ac.signal.aborted || seq !== requestSeq.current) return;
         setItems(page.items);
@@ -46,7 +52,7 @@ export function TaskList() {
         if (!ac.signal.aborted && seq === requestSeq.current) setLoading(false);
       });
     return () => ac.abort();
-  }, [client, status, kind, reloadToken]);
+  }, [client, status, kind, tab, reloadToken]);
 
   async function loadMore() {
     if (!client || !nextCursor) return;
@@ -55,10 +61,7 @@ export function TaskList() {
     setLoading(true);
     setError(null);
     try {
-      const query: ListTasksQuery = { limit: 50, cursor };
-      if (status) query.status = status;
-      if (kind) query.kind = kind;
-      const page = await client.listTasks(query);
+      const page = await client.listTasks(listQuery(status, kind, tab, cursor));
       if (seq !== requestSeq.current) return;
       setItems((prev) => [...prev, ...page.items]);
       setNextCursor(page.next_cursor || null);
@@ -75,7 +78,7 @@ export function TaskList() {
   return (
     <Screen
       title="任务列表"
-      lede="服务端返回整个市场。下面的页签只过滤已经加载的任务。状态和类型会传给 listTasks。"
+      lede="「可接任务」向服务端要 assignable=me。其他页签仍加载市场，再按发布者和参与关系在本地过滤。状态和类型会传给 listTasks。"
     >
       <ErrorNote message={client ? error : clientError} />
       <div className="toolbar">
@@ -84,7 +87,7 @@ export function TaskList() {
             [
               ["all", "全部"],
               ["published", "我发布的"],
-              ["open", "可接的"],
+              ["open", "可接任务"],
               ["mine", "我参与的"],
             ] as const
           ).map(([value, label]) => (
@@ -165,7 +168,7 @@ export function TaskList() {
 }
 
 function matchesTab(task: Task, tab: Tab, userId: string): boolean {
-  if (tab === "all") return true;
+  if (tab === "all" || tab === "open") return true;
   if (tab === "published") return task.publisher_id === userId;
   if (tab === "mine") {
     if ((task.executor_ids ?? []).includes(userId)) return true;

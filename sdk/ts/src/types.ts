@@ -21,11 +21,17 @@ export type PaymentMode = "one_shot" | "milestone";
 
 export type AssigneePolicyType = "specific" | "criteria" | "open";
 
-export type EscrowEntryType = "hold" | "release" | "refund" | "freeze";
+export type EscrowEntryType = "hold" | "release" | "refund" | "freeze" | "unfreeze";
 
 export type MilestoneStatus = "pending" | "submitted" | "released" | "disputed";
 
-export type RoleStatus = "open" | "filled" | "dropped" | "submitted" | "settled" | "refunded";
+export type RoleStatus = "open" | "filled" | "dropped" | "submitted" | "settled" | "refunded" | "disputed";
+
+export type SubmissionStatus = "current" | "superseded";
+
+export type ResolutionOutcome = "pay_executor" | "refund_publisher" | "split";
+
+export type InviteStatus = "pending" | "accepted" | "declined";
 
 export type SettlementRule = "winner_take_all";
 
@@ -50,9 +56,15 @@ export type WebhookEventType =
   | "task.settled"
   | "task.cancelled"
   | "task.executor_replaced"
+  | "task.revision_requested"
+  | "task.resolve_proposed"
+  | "task.arbitrated"
+  | "task.invited"
+  | "task.invite_declined"
   | "escrow.hold"
   | "escrow.release"
   | "escrow.refund"
+  | "escrow.unfreeze"
   | "chat.message.created"
   | "score.updated";
 
@@ -98,6 +110,8 @@ export interface CollaborativeRole {
    * Dropout replace sets the seat back to `open`.
    */
   status?: RoleStatus;
+  /** When an open per_seat seat auto-refunds. */
+  refund_deadline?: string | null;
 }
 
 export interface Payment {
@@ -114,6 +128,8 @@ export interface Acceptance {
   constraints?: string[];
   /** Defaults to 72 on the server when omitted or 0. */
   review_hours?: number;
+  /** Defaults to 3. How many revise calls are allowed. */
+  max_revisions?: number;
 }
 
 export interface CompetitiveSettings {
@@ -159,8 +175,37 @@ export interface EscrowEntry {
 export interface EscrowAccount {
   id?: string;
   held?: MoneyAmount;
+  frozen?: MoneyAmount;
   currency?: string;
   entries?: EscrowEntry[];
+}
+
+export interface Submission {
+  id: string;
+  executor_id: string;
+  role_id?: string | null;
+  milestone_id?: string | null;
+  payload: Record<string, unknown>;
+  note?: string;
+  status: SubmissionStatus;
+  created_at: string;
+}
+
+export interface SplitLine {
+  user_id: string;
+  amount?: MoneyAmount;
+  share_bps?: number;
+}
+
+export interface ResolveProposal {
+  user_id: string;
+  side: "publisher" | "executor";
+  outcome: ResolutionOutcome;
+  reason?: string;
+  role_id?: string;
+  submission_id?: string;
+  splits?: SplitLine[];
+  created_at: string;
 }
 
 export interface Task extends TaskCreate {
@@ -170,6 +215,16 @@ export interface Task extends TaskCreate {
   executor_ids?: string[];
   winning_submission_id?: string | null;
   review_deadline?: string | null;
+  open_deadline?: string | null;
+  start_deadline?: string | null;
+  winner_select_deadline?: string | null;
+  chat_id?: string | null;
+  cancel_reason?: string | null;
+  cancel_code?: string | null;
+  cancelled_at?: string | null;
+  dispute_role_id?: string | null;
+  resolve_proposals?: ResolveProposal[];
+  submissions?: Submission[];
   escrow?: EscrowAccount;
   created_at: string;
   updated_at: string;
@@ -186,6 +241,8 @@ export interface ListTasksQuery {
   /** Integer from 1 to 100. The server default is 20. */
   limit?: number;
   cursor?: string;
+  /** `me` returns tasks the caller can accept right now. */
+  assignable?: "me";
 }
 
 export interface AcceptTaskBody {
@@ -218,6 +275,43 @@ export interface ConfirmTaskBody {
 
 export interface DisputeTaskBody {
   reason: string;
+  /** per_seat: the submitted seat to freeze. Required when more than one seat is submitted. */
+  role_id?: string;
+}
+
+export interface CancelTaskBody {
+  reason?: string;
+}
+
+export interface ReviseTaskBody {
+  reason: string;
+  role_id?: string;
+  submission_id?: string;
+}
+
+export interface ResolutionBody {
+  outcome: ResolutionOutcome;
+  reason?: string;
+  role_id?: string;
+  submission_id?: string;
+  splits?: SplitLine[];
+}
+
+export interface InviteUsersBody {
+  user_ids: string[];
+}
+
+export interface Invite {
+  id: string;
+  task_id: string;
+  user_id: string;
+  status: InviteStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InviteList {
+  items: Invite[];
 }
 
 export interface WebhookCreate {
@@ -242,6 +336,7 @@ export interface WebhookEnvelope<T = Record<string, unknown>> {
 
 export interface ChatCreate {
   member_ids: string[];
+  task_id?: string;
 }
 
 export interface Chat {
@@ -261,6 +356,20 @@ export interface Message extends MessageCreate {
   chat_id: string;
   sender_id: string;
   created_at: string;
+}
+
+export interface ChatList {
+  items: Chat[];
+}
+
+export interface MessageList {
+  items: Message[];
+  next_cursor?: string | null;
+}
+
+export interface ListMessagesQuery {
+  limit?: number;
+  cursor?: string;
 }
 
 export interface ScoreChange {
@@ -293,6 +402,7 @@ export interface PasswordCredentials {
 export interface UserSummary {
   id: string;
   email: string;
+  is_arbiter?: boolean;
 }
 
 /**

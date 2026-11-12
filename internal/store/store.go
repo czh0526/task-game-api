@@ -37,6 +37,7 @@ type Repos interface {
 	Webhooks() WebhookRepo
 	Deliveries() DeliveryRepo
 	Chats() ChatRepo
+	Invites() InviteRepo
 	Idem() IdemRepo
 }
 
@@ -64,6 +65,7 @@ type TaskRepo interface {
 type SubmissionRepo interface {
 	Insert(ctx context.Context, s model.Submission) error
 	ListByTask(ctx context.Context, taskID string) ([]model.Submission, error)
+	MarkStatus(ctx context.Context, id, status string) error
 }
 
 type EscrowRepo interface {
@@ -86,8 +88,20 @@ type DeliveryRepo interface {
 
 type ChatRepo interface {
 	InsertChat(ctx context.Context, c model.Chat) error
+	UpdateChat(ctx context.Context, c model.Chat) error
 	GetChat(ctx context.Context, id string) (model.Chat, error)
+	ListByTask(ctx context.Context, taskID string) ([]model.Chat, error)
 	InsertMessage(ctx context.Context, m model.Message) error
+	ListMessages(ctx context.Context, chatID string, limit, offset int) ([]model.Message, error)
+}
+
+type InviteRepo interface {
+	Upsert(ctx context.Context, inv model.Invite) error
+	Update(ctx context.Context, inv model.Invite) error
+	Get(ctx context.Context, id string) (model.Invite, error)
+	Find(ctx context.Context, taskID, userID string) (model.Invite, error)
+	ListByTask(ctx context.Context, taskID string) ([]model.Invite, error)
+	ListByUser(ctx context.Context, userID, status string) ([]model.Invite, error)
 }
 
 type IdemRepo interface {

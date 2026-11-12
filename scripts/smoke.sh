@@ -11,11 +11,9 @@
 #   CGO_ENABLED=0 go run . -f etc/taskgame.yaml
 #   # or: make run
 #
-# Competitive confirm needs a submission id. v0.1 does not list submissions on
-# the task. Omitting submission_id returns 400 invalid_argument and names the
-# ids in created_at order (the same order as these submits). task.submitted
-# webhooks also carry submission_id and executor_id when Webhook.Mode=post.
-# This script uses the 400 body so it works with the default log mode.
+# Competitive confirm needs a submission id. The task lists submissions[].
+# Omitting submission_id still returns 400 and names the ids. This script
+# checks that 400, then confirms the winner id taken from submissions[].
 #
 # The 72h auto-settle path is not waited on here. winner_take_all with more
 # than one submission stays in_review; see
@@ -132,6 +130,50 @@ elif op == "exclusive_settled":
         fail("expected settled")
     if (doc.get("escrow") or {}).get("held") != 0:
         fail("exclusive escrow still held")
+elif op == "chat_bound":
+    chat_id = doc.get("chat_id")
+    if not chat_id:
+        fail("missing chat_id")
+    print(chat_id)
+elif op == "members_include":
+    if args[0] not in (doc.get("member_ids") or []):
+        fail("missing member %s" % args[0])
+elif op == "message_text":
+    items = doc.get("items") or []
+    texts = [m.get("text") for m in items]
+    if args[0] not in texts:
+        fail("missing message %s in %s" % (args[0], texts))
+elif op == "field_set":
+    if not doc.get(args[0]):
+        fail("missing %s" % args[0])
+elif op == "submission_for":
+    want = args[0]
+    found = ""
+    for sub in doc.get("submissions") or []:
+        if sub.get("executor_id") == want and sub.get("status") == "current":
+            found = sub.get("id") or ""
+            break
+    if not found:
+        fail("no current submission for %s" % want)
+    print(found)
+elif op == "list_has_task":
+    ids = [item.get("task_id") for item in (doc.get("items") or [])]
+    if args[0] not in ids:
+        fail("invite list missing task %s" % args[0])
+elif op == "held":
+    if (doc.get("escrow") or {}).get("held") != int(args[0]):
+        fail("held")
+elif op == "is_arbiter":
+    if bool(doc.get("is_arbiter")) != (args[0] == "true"):
+        fail("is_arbiter %s" % doc.get("is_arbiter"))
+elif op == "list_has":
+    ids = [item.get("id") for item in (doc.get("items") or [])]
+    if args[0] not in ids:
+        fail("list missing %s" % args[0])
+elif op == "list_lacks":
+    ids = [item.get("id") for item in (doc.get("items") or [])]
+    if args[0] in ids:
+        fail("list unexpectedly has %s" % args[0])
 elif op == "submission_ids":
     prefix = "submission_id is required when multiple submissions exist: "
     message = str(doc.get("message") or "")
@@ -407,10 +449,26 @@ run_exclusive() {
 
   request POST "${BASE}/v1/tasks/${id}/fund" key "$PUB_KEY" "" "fund-${idem}"
   expect_code 200 "exclusive fund"
-  echo "funded"
+  local chat_id
+  chat_id="$(check "$RESP_BODY" chat_bound)" || exit 1
+  echo "funded chat=${chat_id}"
+  request GET "${BASE}/v1/chats/${chat_id}" key "$PUB_KEY"
+  expect_code 200 "publisher reads bound chat"
+  request GET "${BASE}/v1/chats/${chat_id}/messages" key "$PUB_KEY"
+  expect_code 200 "empty chat history"
+  request POST "${BASE}/v1/chats/${chat_id}/messages" key "$PUB_KEY" '{"type":"text","text":"funded"}' "msg-${idem}"
+  expect_code 201 "chat message"
+  request GET "${BASE}/v1/chats/${chat_id}/messages" key "$PUB_KEY"
+  expect_code 200 "chat history"
+  check "$RESP_BODY" message_text funded
+  request GET "${BASE}/v1/chats?task_id=${id}" key "$PUB_KEY"
+  expect_code 200 "list task chats"
 
   request POST "${BASE}/v1/tasks/${id}/accept" key "$EXE_KEY" '{}'
   expect_code 200 "exclusive accept"
+  request GET "${BASE}/v1/chats/${chat_id}" key "$EXE_KEY"
+  expect_code 200 "executor joined chat"
+  check "$RESP_BODY" members_include usr_executor
   echo "accepted"
 
   request POST "${BASE}/v1/tasks/${id}/submit" key "$EXE_KEY" '{"payload":{"body":"translated"},"note":"done"}'
@@ -481,13 +539,24 @@ run_competitive() {
   request GET "${BASE}/v1/tasks/${id}" key "$PUB_KEY"
   expect_code 200 "competitive still in review"
   check "$RESP_BODY" competitive_open_choice "$amount"
-  echo "confirm without submission_id left the task in_review"
+  local listed
+  listed="$(check "$RESP_BODY" submission_for "$COMP_WINNER")" || exit 1
+  if [[ "$listed" != "$second" && "$listed" != "$first" ]]; then
+    echo "task.submissions did not list the winner submission ${listed}" >&2
+    exit 1
+  fi
+  # Prefer the id from the task body. created_at order still matches the 400.
+  if [[ "$listed" != "$second" ]]; then
+    echo "winner submission id ${listed} was not the second submit ${second}" >&2
+    exit 1
+  fi
+  echo "confirm without submission_id left the task in_review; submissions listed ${listed}"
 
   local confirm
-  confirm="$(python3 -c 'import json,sys; print(json.dumps({"submission_id": sys.argv[1]}))' "$second")"
+  confirm="$(python3 -c 'import json,sys; print(json.dumps({"submission_id": sys.argv[1]}))' "$listed")"
   request POST "${BASE}/v1/tasks/${id}/confirm" key "$PUB_KEY" "$confirm"
   expect_code 200 "competitive confirm winner"
-  check "$RESP_BODY" competitive_settled "$second" "$COMP_WINNER" "$COMP_LOSER" "$amount"
+  check "$RESP_BODY" competitive_settled "$listed" "$COMP_WINNER" "$COMP_LOSER" "$amount"
 
   request GET "${BASE}/v1/users/${COMP_WINNER}/scores" key "$PUB_KEY"
   expect_code 200 "winner scores"
@@ -495,7 +564,7 @@ run_competitive() {
   request GET "${BASE}/v1/users/${COMP_LOSER}/scores" key "$PUB_KEY"
   expect_code 200 "loser scores"
   check "$RESP_BODY" scores_exact 0 0
-  echo "competitive ok task=${id} winner_submission=${second}"
+  echo "competitive ok task=${id} winner_submission=${listed}"
 }
 
 run_collaborative_per_seat() {
@@ -569,7 +638,8 @@ run_collaborative() {
   expect_code 200 "accept copy"
   check "$RESP_BODY" seat_filled copy "$COLLAB_STAY"
   check "$RESP_BODY" status open
-  echo "both seats filled; still open until start"
+  check "$RESP_BODY" field_set start_deadline
+  echo "both seats filled; still open until start; start_deadline is set"
 
   request POST "${BASE}/v1/tasks/${id}/submit" bearer "$stay_tok" '{"payload":{"page":"early"}}'
   expect_code 409 "submit before start"
@@ -671,10 +741,113 @@ run_collaborative_quantity() {
   echo "collaborative quantity ok task=${id}"
 }
 
+run_workflow() {
+  # Exception closure and policy. Seat auto-refund and winner-select timeout move the
+  # clock in TestTimeouts; this script does not sleep 72h.
+  local id body tok other invite_id arbiter_key
+  arbiter_key="${ARB_KEY:-dev-arbiter-key}"
+  echo "== workflow cancel / revise / resolve / arbitrate / policy =="
+
+  body="$(task_body exclusive "$DEADLINE" 400 "Cancel me" "Funded, then cancelled before anyone accepts.")"
+  request POST "${BASE}/v1/tasks" key "$PUB_KEY" "$body" "smoke-cancel-${STAMP}"
+  expect_code 201 "cancel-path create"
+  id="$(json_id "$RESP_BODY")"
+  request POST "${BASE}/v1/tasks/${id}/fund" key "$PUB_KEY" "" "fund-cancel-${STAMP}"
+  expect_code 200 "cancel-path fund"
+  request POST "${BASE}/v1/tasks/${id}/cancel" key "$PUB_KEY" '{"reason":"no longer needed"}' "cancel-${STAMP}"
+  expect_code 200 "cancel funded open task"
+  check "$RESP_BODY" status cancelled
+  check "$RESP_BODY" held 0
+
+  body="$(task_body exclusive "$DEADLINE" 450 "Revise me" "Submit, revise, submit again, confirm.")"
+  request POST "${BASE}/v1/tasks" key "$PUB_KEY" "$body" "smoke-revise-${STAMP}"
+  expect_code 201 "revise create"
+  id="$(json_id "$RESP_BODY")"
+  request POST "${BASE}/v1/tasks/${id}/fund" key "$PUB_KEY" "" "fund-revise-${STAMP}"
+  expect_code 200 "revise fund"
+  request POST "${BASE}/v1/tasks/${id}/accept" key "$EXE_KEY" '{}'
+  expect_code 200 "revise accept"
+  request POST "${BASE}/v1/tasks/${id}/submit" key "$EXE_KEY" '{"payload":{"body":"draft"}}'
+  expect_code 200 "revise first submit"
+  request POST "${BASE}/v1/tasks/${id}/revise" key "$PUB_KEY" '{"reason":"please tighten the lede"}' "revise-${STAMP}"
+  expect_code 200 "revise"
+  check "$RESP_BODY" status active
+  request POST "${BASE}/v1/tasks/${id}/submit" key "$EXE_KEY" '{"payload":{"body":"final"}}'
+  expect_code 200 "revise resubmit"
+  request POST "${BASE}/v1/tasks/${id}/confirm" key "$PUB_KEY" '{}'
+  expect_code 200 "confirm after revise"
+  check "$RESP_BODY" status settled
+
+  body="$(task_body exclusive "$DEADLINE" 320 "Resolve me" "Dispute, then both sides refund.")"
+  request POST "${BASE}/v1/tasks" key "$PUB_KEY" "$body" "smoke-resolve-${STAMP}"
+  expect_code 201 "resolve create"
+  id="$(json_id "$RESP_BODY")"
+  request POST "${BASE}/v1/tasks/${id}/fund" key "$PUB_KEY" "" "fund-resolve-${STAMP}"
+  expect_code 200 "resolve fund"
+  request POST "${BASE}/v1/tasks/${id}/accept" key "$EXE_KEY" '{}'
+  expect_code 200 "resolve accept"
+  request POST "${BASE}/v1/tasks/${id}/submit" key "$EXE_KEY" '{"payload":{"body":"hmm"}}'
+  expect_code 200 "resolve submit"
+  request POST "${BASE}/v1/tasks/${id}/dispute" key "$PUB_KEY" '{"reason":"not the agreed scope"}'
+  expect_code 200 "resolve dispute"
+  check "$RESP_BODY" status disputed
+  request POST "${BASE}/v1/tasks/${id}/resolve" key "$PUB_KEY" '{"outcome":"refund_publisher","reason":"stop"}' "resolve-pub-${STAMP}"
+  expect_code 200 "publisher proposes refund"
+  check "$RESP_BODY" status disputed
+  request POST "${BASE}/v1/tasks/${id}/resolve" key "$EXE_KEY" '{"outcome":"refund_publisher"}' "resolve-exe-${STAMP}"
+  expect_code 200 "executor accepts refund"
+  check "$RESP_BODY" status cancelled
+  check "$RESP_BODY" held 0
+
+  body="$(task_body exclusive "$DEADLINE" 280 "Arbitrate me" "Dispute, then the dev arbiter pays the executor.")"
+  request POST "${BASE}/v1/tasks" key "$PUB_KEY" "$body" "smoke-arb-${STAMP}"
+  expect_code 201 "arbitrate create"
+  id="$(json_id "$RESP_BODY")"
+  request POST "${BASE}/v1/tasks/${id}/fund" key "$PUB_KEY" "" "fund-arb-${STAMP}"
+  expect_code 200 "arbitrate fund"
+  request POST "${BASE}/v1/tasks/${id}/accept" key "$EXE_KEY" '{}'
+  expect_code 200 "arbitrate accept"
+  request POST "${BASE}/v1/tasks/${id}/submit" key "$EXE_KEY" '{"payload":{"body":"done"}}'
+  expect_code 200 "arbitrate submit"
+  request POST "${BASE}/v1/tasks/${id}/dispute" key "$EXE_KEY" '{"reason":"publisher will not confirm"}'
+  expect_code 200 "arbitrate dispute"
+  request POST "${BASE}/v1/tasks/${id}/arbitrate" key "$PUB_KEY" '{"outcome":"pay_executor","reason":"no"}'
+  expect_code 403 "publisher is not an arbiter"
+  request GET "${BASE}/v1/me" key "$arbiter_key"
+  expect_code 200 "arbiter me"
+  check "$RESP_BODY" is_arbiter true
+  request POST "${BASE}/v1/tasks/${id}/arbitrate" key "$arbiter_key" '{"outcome":"pay_executor","reason":"delivery matches the brief"}' "arb-${STAMP}"
+  expect_code 200 "arbitrate pay"
+  check "$RESP_BODY" status settled
+
+  other="usr_s${STAMP}no"
+  tok="$(mint "usr_s${STAMP}yes")"
+  body="$(task_body exclusive "$DEADLINE" 210 "Specific seat" "Only the invited user may accept.")"
+  body="$(python3 -c 'import json,sys; doc=json.loads(sys.argv[1]); doc["assignee_policy"]={"type":"specific","user_ids":[sys.argv[2]]}; print(json.dumps(doc, separators=(",", ":")))' "$body" "usr_s${STAMP}yes")"
+  request POST "${BASE}/v1/tasks" key "$PUB_KEY" "$body" "smoke-spec-${STAMP}"
+  expect_code 201 "specific create"
+  id="$(json_id "$RESP_BODY")"
+  request POST "${BASE}/v1/tasks/${id}/fund" key "$PUB_KEY" "" "fund-spec-${STAMP}"
+  expect_code 200 "specific fund"
+  request GET "${BASE}/v1/tasks?assignable=me" bearer "$tok"
+  expect_code 200 "assignable=me"
+  check "$RESP_BODY" list_has "$id"
+  request POST "${BASE}/v1/tasks/${id}/accept" key "$EXE_KEY" '{}'
+  expect_code 403 "specific policy rejects usr_executor"
+  request POST "${BASE}/v1/tasks/${id}/accept" bearer "$tok" '{}'
+  expect_code 200 "specific invitee accepts"
+  check "$RESP_BODY" status active
+  request GET "${BASE}/v1/me/invites?status=accepted" bearer "$tok"
+  expect_code 200 "accepted invites"
+  check "$RESP_BODY" list_has_task "$id"
+  echo "workflow ok"
+}
+
 wait_health
 run_exclusive
 run_competitive
 run_collaborative
 run_collaborative_quantity
 run_collaborative_per_seat
-echo "smoke ok exclusive + competitive winner_take_all + collaborative unified + quantity + per_seat"
+run_workflow
+echo "smoke ok exclusive + competitive winner_take_all + collaborative unified + quantity + per_seat + workflow"

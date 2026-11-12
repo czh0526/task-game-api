@@ -5,7 +5,8 @@ export type Route =
   | { name: "new" }
   | { name: "task"; id: string }
   | { name: "scores" }
-  | { name: "chat" };
+  | { name: "chat" }
+  | { name: "invites" };
 
 export const href = {
   tasks: "#/tasks",
@@ -13,6 +14,7 @@ export const href = {
   task: (id: string) => `#/tasks/${encodeURIComponent(id)}`,
   scores: "#/scores",
   chat: "#/chat",
+  invites: "#/invites",
 };
 
 export function parseRoute(hash: string): Route {
@@ -22,6 +24,7 @@ export function parseRoute(hash: string): Route {
   const head = parts[0];
   if (head === "scores") return { name: "scores" };
   if (head === "chat") return { name: "chat" };
+  if (head === "invites") return { name: "invites" };
   if (head === "tasks" && parts[1] === "new") return { name: "new" };
   if (head === "tasks" && parts[1]) return { name: "task", id: safeDecode(parts[1]) };
   return { name: "tasks" };

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { createIdempotencyKey, type Task } from "taskgame-client";
+import { createIdempotencyKey, type Message, type ResolutionOutcome, type Task } from "taskgame-client";
 import { useApp } from "../context";
 import {
   ENTRY_LABEL,
@@ -28,6 +28,13 @@ export function TaskDetail({ id }: { id: string }) {
   const [note, setNote] = useState("");
   const [milestoneId, setMilestoneId] = useState("");
   const [reason, setReason] = useState("");
+  const [reviseReason, setReviseReason] = useState("");
+  const [outcome, setOutcome] = useState<ResolutionOutcome>("pay_executor");
+  const [inviteUser, setInviteUser] = useState("");
+  const [chatText, setChatText] = useState("");
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [chatNote, setChatNote] = useState<string | null>(null);
+  const [isArbiter, setIsArbiter] = useState(false);
 
   useEffect(() => {
     if (!client) return;
@@ -53,7 +60,41 @@ export function TaskDetail({ id }: { id: string }) {
     if (!task) return;
     const open = (task.collaborative?.roles ?? []).filter((role) => (role.status ?? "open") === "open");
     setRoleId((prev) => (open.some((role) => role.id === prev) ? prev : (open[0]?.id ?? "")));
+    const current = (task.submissions ?? []).filter((item) => item.status === "current");
+    setChosen((prev) => (current.some((item) => item.id === prev) ? prev : (current[0]?.id ?? "")));
   }, [task]);
+
+  useEffect(() => {
+    if (!client) return;
+    const ac = new AbortController();
+    client
+      .me({ signal: ac.signal })
+      .then((profile) => {
+        if (!ac.signal.aborted) setIsArbiter(Boolean(profile.is_arbiter));
+      })
+      .catch(() => {
+        if (!ac.signal.aborted) setIsArbiter(false);
+      });
+    return () => ac.abort();
+  }, [client]);
+
+  useEffect(() => {
+    if (!client || !task?.chat_id) return;
+    const ac = new AbortController();
+    const chatId = task.chat_id;
+    setChatNote(null);
+    client
+      .listMessages(chatId, { limit: 50 }, { signal: ac.signal })
+      .then((page) => {
+        if (!ac.signal.aborted) setMessages(page.items);
+      })
+      .catch((err: unknown) => {
+        if (isAbort(err)) return;
+        setMessages([]);
+        setChatNote(formatError(err));
+      });
+    return () => ac.abort();
+  }, [client, task?.chat_id, task?.updated_at]);
 
   async function run(name: string, fn: () => Promise<Task>) {
     setPending(name);
@@ -136,7 +177,10 @@ export function TaskDetail({ id }: { id: string }) {
         <Fact label="验收截止" value={formatTime(task.acceptance.deadline)} raw={task.acceptance.deadline} />
         <Fact label="验收标准" value={task.acceptance.quality} />
         <Fact label="review_hours" value={String(task.acceptance.review_hours ?? "—")} />
-        <Fact label="复核截止 review_deadline" value={formatTime(task.review_deadline)} raw={task.review_deadline ?? undefined} />
+        <Fact label="开放截止" value={formatTime(task.open_deadline)} raw={task.open_deadline ?? undefined} />
+        <Fact label="开始截止" value={formatTime(task.start_deadline)} raw={task.start_deadline ?? undefined} />
+        <Fact label="评审截止 review_deadline" value={formatTime(task.review_deadline)} raw={task.review_deadline ?? undefined} />
+        <Fact label="选赢家截止" value={formatTime(task.winner_select_deadline)} raw={task.winner_select_deadline ?? undefined} />
         <Fact label="胜出提交 winning_submission_id" value={task.winning_submission_id ?? "—"} />
         {task.kind === "competitive" ? (
           <Fact
@@ -152,6 +196,31 @@ export function TaskDetail({ id }: { id: string }) {
         ) : null}
         {task.kind === "collaborative" ? <Fact label="退出规则" value={task.collaborative?.on_dropout ?? "replace"} /> : null}
       </div>
+      <section className="card">
+        <h2>下一步</h2>
+        <p>{nextStep(task)}</p>
+      </section>
+
+      <section className="card">
+        <h2>提交 submissions</h2>
+        {(task.submissions ?? []).length === 0 ? <p className="hint">还没有提交。</p> : null}
+        <ul className="plain">
+          {(task.submissions ?? []).map((submission) => (
+            <li key={submission.id}>
+              <IdText value={submission.id} /> · <IdText value={submission.executor_id} />
+              {submission.role_id ? (
+                <>
+                  {" "}
+                  · 席位 <IdText value={submission.role_id} />
+                </>
+              ) : null}{" "}
+              · {submission.status === "current" ? "当前" : "已作废"} · {formatTime(submission.created_at)}
+              {submission.note ? <div>{submission.note}</div> : null}
+              <div className="hint mono">{JSON.stringify(submission.payload)}</div>
+            </li>
+          ))}
+        </ul>
+      </section>
 
       <section className="card">
         <h2>托管 escrow</h2>
@@ -206,6 +275,7 @@ export function TaskDetail({ id }: { id: string }) {
                 <th>share_bps</th>
                 <th>template_id</th>
                 <th>状态</th>
+                <th>席位退回截止</th>
                 <th>assignee_user_id</th>
                 {mode === "per_seat" ? <th>操作</th> : null}
               </tr>
@@ -224,6 +294,7 @@ export function TaskDetail({ id }: { id: string }) {
                     </td>
                     <td>{role.template_id ? <IdText value={role.template_id} /> : "—"}</td>
                     <td>{ROLE_STATUS_LABEL[role.status ?? "open"] ?? role.status} <span className="en">{role.status ?? "open"}</span></td>
+                    <td title={role.refund_deadline ?? undefined}>{formatTime(role.refund_deadline)}</td>
                     <td>{role.assignee_user_id ? <IdText value={role.assignee_user_id} /> : "—"}</td>
                     {mode === "per_seat" ? (
                       <td className="seat-action">
@@ -339,7 +410,8 @@ export function TaskDetail({ id }: { id: string }) {
                       throw new Error("请选择一份 submission_id");
                     }
                     const body: { submission_id?: string; milestone_id?: string } = {};
-                    if (chosen && (task.kind === "competitive" || submissionIds)) body.submission_id = chosen;
+                    if (task.kind === "competitive" && chosen) body.submission_id = chosen;
+                    else if (chosen && submissionIds) body.submission_id = chosen;
                     if (task.payment.mode === "milestone" && milestoneId.trim()) body.milestone_id = milestoneId.trim();
                     return client.confirmTask(task.id, body, { idempotencyKey: createIdempotencyKey("confirm") });
                   })
@@ -352,30 +424,79 @@ export function TaskDetail({ id }: { id: string }) {
           {task.kind === "competitive" && task.status === "in_review" ? (
             <div className="picker">
               <p className="hint">
-                多份提交时，不带 submission_id 的确认会返回 400。页面用 submissionIdsFromConfirmError 解析 message，请选一份再确认。
+                从任务上的 submissions 里选一份当前提交作为赢家。多份时必须带 submission_id，页面不再从 400 的 message 里猜。
+                {task.winner_select_deadline ? ` 选赢家截止 ${formatTime(task.winner_select_deadline)}，到点未选定会把托管退回发布者。` : ""}
               </p>
-              {submissionIds ? (
-                <fieldset>
-                  <legend>submission_id（created_at 顺序）</legend>
-                  {submissionIds.map((submissionId, index) => (
-                    <label key={submissionId} className="choice">
+              <fieldset>
+                <legend>submission_id</legend>
+                {(task.submissions ?? [])
+                  .filter((submission) => submission.status === "current")
+                  .map((submission) => (
+                    <label key={submission.id} className="choice">
                       <input
                         type="radio"
                         name="submission"
-                        value={submissionId}
-                        checked={chosen === submissionId}
-                        onChange={() => setChosen(submissionId)}
+                        value={submission.id}
+                        checked={chosen === submission.id}
+                        onChange={() => setChosen(submission.id)}
                       />
-                      <span>第 {index + 1} 份</span>
-                      <code className="mono">{submissionId}</code>
+                      <IdText value={submission.executor_id} />
+                      <code className="mono">{submission.id}</code>
                     </label>
                   ))}
-                </fieldset>
-              ) : (
-                <p className="hint">还没有提交列表。点「确认结算」；如果只有一份提交，会直接结算。</p>
-              )}
+              </fieldset>
             </div>
           ) : null}
+
+          <ActionRow title="请对方修改 revise" reason={reviseReasonOf(task, me)}>
+            <Button
+              type="button"
+              pending={pending === "revise"}
+              disabled={reviseReasonOf(task, me) !== null || pending !== null}
+              onClick={() => {
+                const text = reviseReason.trim();
+                if (!text) {
+                  setError("请填写修改原因");
+                  return;
+                }
+                const current = (task.submissions ?? []).filter((submission) => submission.status === "current");
+                const submittedSeats = (task.collaborative?.roles ?? []).filter((role) => role.status === "submitted");
+                void run("revise", () =>
+                  client.reviseTask(
+                    task.id,
+                    {
+                      reason: text,
+                      role_id: task.kind === "collaborative" && submittedSeats.length === 1 ? submittedSeats[0]?.id : undefined,
+                      submission_id: task.kind === "competitive" && current.length === 1 ? current[0]?.id : chosen || undefined,
+                    },
+                    { idempotencyKey: createIdempotencyKey("revise") },
+                  ),
+                );
+              }}
+            >
+              请对方修改
+            </Button>
+          </ActionRow>
+          <Field label="修改原因">
+            <input value={reviseReason} maxLength={2000} onChange={(event) => setReviseReason(event.target.value)} />
+          </Field>
+
+          <ActionRow title="取消 cancel" reason={cancelReason(task, me)}>
+            <Button
+              type="button"
+              kind="danger"
+              pending={pending === "cancel"}
+              disabled={cancelReason(task, me) !== null || pending !== null}
+              onClick={() => {
+                if (!window.confirm("取消后，未开始或未提交的托管会退回发布者。已提交的席位不会被这条路径取消。继续？")) return;
+                void run("cancel", () =>
+                  client.cancelTask(task.id, { reason: reason.trim() || undefined }, { idempotencyKey: createIdempotencyKey("cancel") }),
+                );
+              }}
+            >
+              取消任务
+            </Button>
+          </ActionRow>
 
           <ActionRow title="争议 dispute" reason={disputeReason(task, me)}>
             <Button
@@ -494,7 +615,157 @@ export function TaskDetail({ id }: { id: string }) {
             </Button>
           </ActionRow>
           {mySeat ? <p className="hint">你占着 {mySeat.id}。退出后同一 role_id 可以再被接受，用来补位。</p> : null}
+
+          {task.status === "disputed" || task.dispute_role_id ? (
+            <>
+              <Field label="协商结果 outcome">
+                <select value={outcome} onChange={(event) => setOutcome(event.target.value as ResolutionOutcome)}>
+                  <option value="pay_executor">付给执行者 pay_executor</option>
+                  <option value="refund_publisher">退回发布者 refund_publisher</option>
+                  <option value="split">按比例拆分 split</option>
+                </select>
+              </Field>
+              <p className="hint">
+                双方要提交同一个结果才会生效。当前方案：
+                {(task.resolve_proposals ?? []).map((proposal) => `${proposal.side} ${proposal.outcome}`).join("；") || "还没有"}
+              </p>
+              <ActionRow title="协商 resolve" reason={resolveReason(task, me)}>
+                <Button
+                  type="button"
+                  kind="primary"
+                  pending={pending === "resolve"}
+                  disabled={resolveReason(task, me) !== null || pending !== null}
+                  onClick={() =>
+                    void run("resolve", () =>
+                      client.resolveTask(
+                        task.id,
+                        {
+                          outcome,
+                          reason: reason.trim() || undefined,
+                          role_id: task.dispute_role_id || undefined,
+                          submission_id: task.kind === "competitive" ? chosen || undefined : undefined,
+                        },
+                        { idempotencyKey: createIdempotencyKey("resolve") },
+                      ),
+                    )
+                  }
+                >
+                  提交协商
+                </Button>
+              </ActionRow>
+              {isArbiter ? (
+                <ActionRow title="裁定 arbitrate" reason={null}>
+                  <Button
+                    type="button"
+                    kind="danger"
+                    pending={pending === "arbitrate"}
+                    disabled={pending !== null || !reason.trim()}
+                    onClick={() =>
+                      void run("arbitrate", () =>
+                        client.arbitrateTask(
+                          task.id,
+                          {
+                            outcome,
+                            reason: reason.trim(),
+                            role_id: task.dispute_role_id || undefined,
+                            submission_id: task.kind === "competitive" ? chosen || undefined : undefined,
+                          },
+                          { idempotencyKey: createIdempotencyKey("arbitrate") },
+                        ),
+                      )
+                    }
+                  >
+                    裁定
+                  </Button>
+                </ActionRow>
+              ) : (
+                <p className="hint">裁定需要 Escrow.ArbiterUserIds 里的用户。开发配置是 usr_arbiter / dev-arbiter-key。</p>
+              )}
+            </>
+          ) : null}
+
+          {me === task.publisher_id && (task.status === "open" || task.status === "active") ? (
+            <>
+              <Field label="再邀请 user_id" hint="还有空位时可以继续邀请。指定人任务会把 id 加进 assignee_policy。">
+                <input value={inviteUser} spellCheck={false} onChange={(event) => setInviteUser(event.target.value)} />
+              </Field>
+              <Button
+                type="button"
+                pending={pending === "invite"}
+                disabled={pending !== null || !inviteUser.trim()}
+                onClick={() =>
+                  void (async () => {
+                    setPending("invite");
+                    setError(null);
+                    try {
+                      await client.createTaskInvites(
+                        task.id,
+                        { user_ids: inviteUser.split(/[\s,]+/).map((item) => item.trim()).filter(Boolean) },
+                        { idempotencyKey: createIdempotencyKey("invite") },
+                      );
+                      setInviteUser("");
+                      setTask(await client.getTask(task.id));
+                    } catch (err) {
+                      setError(formatError(err));
+                    } finally {
+                      setPending(null);
+                    }
+                  })()
+                }
+              >
+                邀请
+              </Button>
+            </>
+          ) : null}
         </div>
+        {task.chat_id ? (
+          <section className="card">
+            <h2>任务会话</h2>
+            <p className="hint">
+              注资时自动绑定。接受的执行者会加入。 <IdText value={task.chat_id} />
+            </p>
+            {chatNote ? <p className="hint">{chatNote}</p> : null}
+            <ul className="plain">
+              {messages.map((message) => (
+                <li key={message.id}>
+                  <IdText value={message.sender_id} /> · {formatTime(message.created_at)}
+                  <div>{message.text || message.attachment_ref}</div>
+                </li>
+              ))}
+            </ul>
+            {messages.length === 0 && !chatNote ? <p className="hint">还没有消息。</p> : null}
+            <Field label="发一条消息">
+              <input value={chatText} maxLength={8000} onChange={(event) => setChatText(event.target.value)} />
+            </Field>
+            <Button
+              type="button"
+              pending={pending === "chat"}
+              disabled={pending !== null || !chatText.trim()}
+              onClick={() =>
+                void (async () => {
+                  if (!task.chat_id) return;
+                  setPending("chat");
+                  setError(null);
+                  try {
+                    const message = await client.postMessage(
+                      task.chat_id,
+                      { type: "text", text: chatText.trim() },
+                      { idempotencyKey: createIdempotencyKey("task-chat") },
+                    );
+                    setMessages((prev) => [...prev, message]);
+                    setChatText("");
+                  } catch (err) {
+                    setError(formatError(err));
+                  } finally {
+                    setPending(null);
+                  }
+                })()
+              }
+            >
+              发送
+            </Button>
+          </section>
+        ) : null}
         {(task.kind === "competitive" || task.kind === "collaborative") && (
           <p className="hint">
             开发配置只有一把执行者密钥 dev-executor-key（usr_executor）。第二个执行者可以在仓库根目录执行{" "}
@@ -615,6 +886,44 @@ function dropoutReason(task: Task, me: string): string | null {
   const seat = (task.collaborative?.roles ?? []).find((role) => role.assignee_user_id === me && role.status === "filled");
   if (!seat) return "你没有已入席的 role";
   return null;
+}
+
+function nextStep(task: Task): string {
+  if (task.status === "cancelled") {
+    return task.cancel_code ? `任务已取消（${task.cancel_code}）。` : "任务已取消。";
+  }
+  if (task.status === "settled") return "任务已结算。";
+  if (task.status === "disputed" || task.dispute_role_id) return "争议中，可协商或等待裁定。";
+  if (task.status === "draft") return "等待发布者注资。";
+  const mode = settlementMode(task);
+  if (mode === "unified" && task.status === "open" && task.start_deadline) return "席位已坐满，等待发布者开始。";
+  if (task.status === "open") return "等待执行者接受。";
+  if (task.status === "active") return "等待执行者提交。";
+  if (task.status === "in_review" && task.kind === "competitive") return "等待发布者选定赢家。";
+  if (task.status === "in_review") return "等待发布者确认。";
+  return "查看当前状态。";
+}
+
+function reviseReasonOf(task: Task, me: string): string | null {
+  if (me !== task.publisher_id) return "只有发布者可以请对方修改";
+  if (task.status === "disputed") return "争议中请协商或等待裁定";
+  const submitted = (task.collaborative?.roles ?? []).some((role) => role.status === "submitted");
+  if (task.status === "in_review" || submitted) return null;
+  return "现在没有待确认的提交";
+}
+
+function cancelReason(task: Task, me: string): string | null {
+  if (me !== task.publisher_id) return "只有发布者可以取消";
+  if (task.status === "draft" || task.status === "open" || task.status === "active") return null;
+  if (task.status === "in_review" || task.status === "disputed") return "请改用修改、确认、协商或裁定";
+  return "这个状态不能取消";
+}
+
+function resolveReason(task: Task, me: string): string | null {
+  if (task.status !== "disputed" && !task.dispute_role_id) return "只有争议中可以协商";
+  if (me === task.publisher_id) return null;
+  if ((task.executor_ids ?? []).includes(me)) return null;
+  return "只有发布者或执行者可以协商";
 }
 
 function settlementMode(task: Task): "per_seat" | "unified" | null {

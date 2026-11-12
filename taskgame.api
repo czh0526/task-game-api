@@ -16,6 +16,7 @@ type (
 		Kind           string `form:"kind,optional,options=exclusive|competitive|collaborative"`
 		Limit          int64  `form:"limit,optional"`
 		Cursor         string `form:"cursor,optional"`
+		Assignable     string `form:"assignable,optional"`
 		IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
 	}
 	TaskList {
@@ -38,7 +39,8 @@ type (
 		Deadline    string   `json:"deadline"`
 		Quality     string   `json:"quality"`
 		Constraints []string `json:"constraints,optional,omitempty"`
-		ReviewHours int64    `json:"review_hours,optional"`
+		ReviewHours  int64    `json:"review_hours,optional"`
+		MaxRevisions int64    `json:"max_revisions,optional"`
 	}
 	AssigneePolicy {
 		Type       string   `json:"type,options=specific|criteria|open"`
@@ -140,6 +142,61 @@ type (
 		TaskId         string `path:"taskId" json:"-"`
 		IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
 		Reason         string `json:"reason"`
+		RoleId         string `json:"role_id,optional"`
+	}
+	CancelTaskReq {
+		TaskId         string `path:"taskId" json:"-"`
+		IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
+		Reason         string `json:"reason,optional"`
+	}
+	ReviseTaskReq {
+		TaskId         string `path:"taskId" json:"-"`
+		IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
+		Reason         string `json:"reason"`
+		RoleId         string `json:"role_id,optional"`
+		SubmissionId   string `json:"submission_id,optional"`
+	}
+	ResolveTaskReq {
+		TaskId         string `path:"taskId" json:"-"`
+		IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
+		Outcome        string `json:"outcome"`
+		Reason         string `json:"reason,optional"`
+		RoleId         string `json:"role_id,optional"`
+		SubmissionId   string `json:"submission_id,optional"`
+	}
+	ArbitrateTaskReq {
+		TaskId         string `path:"taskId" json:"-"`
+		IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
+		Outcome        string `json:"outcome"`
+		Reason         string `json:"reason"`
+		RoleId         string `json:"role_id,optional"`
+		SubmissionId   string `json:"submission_id,optional"`
+	}
+	InviteUsersReq {
+		TaskId         string   `path:"taskId" json:"-"`
+		IdempotencyKey string   `header:"Idempotency-Key,optional" json:"-"`
+		UserIds        []string `json:"user_ids"`
+	}
+	ListTaskInvitesReq {
+		TaskId string `path:"taskId" json:"-"`
+	}
+	ListMyInvitesReq {
+		Status string `form:"status,optional"`
+	}
+	DeclineInviteReq {
+		InviteId       string `path:"inviteId" json:"-"`
+		IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
+	}
+	GetChatReq {
+		ChatId string `path:"chatId" json:"-"`
+	}
+	ListChatsReq {
+		TaskId string `form:"task_id,optional"`
+	}
+	ListMessagesReq {
+		ChatId string `path:"chatId" json:"-"`
+		Limit  int64  `form:"limit,optional"`
+		Cursor string `form:"cursor,optional"`
 	}
 	DropoutTaskReq {
 		TaskId         string `path:"taskId" json:"-"`
@@ -161,11 +218,30 @@ type (
 	CreateChatReq {
 		IdempotencyKey string   `header:"Idempotency-Key,optional" json:"-"`
 		MemberIds      []string `json:"member_ids"`
+		TaskId         string   `json:"task_id,optional"`
 	}
 	Chat {
 		Id        string   `json:"id"`
 		TaskId    *string  `json:"task_id,optional"`
 		MemberIds []string `json:"member_ids"`
+	}
+	ChatList {
+		Items []Chat `json:"items"`
+	}
+	MessageList {
+		Items      []Message `json:"items"`
+		NextCursor *string   `json:"next_cursor,optional"`
+	}
+	Invite {
+		Id        string `json:"id"`
+		TaskId    string `json:"task_id"`
+		UserId    string `json:"user_id"`
+		Status    string `json:"status"`
+		CreatedAt string `json:"created_at"`
+		UpdatedAt string `json:"updated_at"`
+	}
+	InviteList {
+		Items []Invite `json:"items"`
 	}
 	PostMessageReq {
 		ChatId         string `path:"chatId" json:"-"`
@@ -208,8 +284,9 @@ type (
 		Password string `json:"password"`
 	}
 	UserSummary {
-		Id    string `json:"id"`
-		Email string `json:"email"`
+		Id        string `json:"id"`
+		Email     string `json:"email"`
+		IsArbiter bool   `json:"is_arbiter"`
 	}
 	AuthSession {
 		AccessToken string      `json:"access_token"`
@@ -271,6 +348,24 @@ service taskgame {
 	@handler disputeTask
 	post /tasks/:taskId/dispute (DisputeTaskReq) returns (Task)
 
+	@handler cancelTask
+	post /tasks/:taskId/cancel (CancelTaskReq) returns (Task)
+
+	@handler reviseTask
+	post /tasks/:taskId/revise (ReviseTaskReq) returns (Task)
+
+	@handler resolveTask
+	post /tasks/:taskId/resolve (ResolveTaskReq) returns (Task)
+
+	@handler arbitrateTask
+	post /tasks/:taskId/arbitrate (ArbitrateTaskReq) returns (Task)
+
+	@handler listTaskInvites
+	get /tasks/:taskId/invites (ListTaskInvitesReq) returns (InviteList)
+
+	@handler inviteTask
+	post /tasks/:taskId/invites (InviteUsersReq) returns (InviteList)
+
 	@handler dropoutTask
 	post /tasks/:taskId/dropout (DropoutTaskReq) returns (Task)
 }
@@ -291,8 +386,17 @@ service taskgame {
 	middleware: Auth
 )
 service taskgame {
+	@handler listChats
+	get /chats (ListChatsReq) returns (ChatList)
+
 	@handler createChat
 	post /chats (CreateChatReq) returns (Chat)
+
+	@handler getChat
+	get /chats/:chatId (GetChatReq) returns (Chat)
+
+	@handler listMessages
+	get /chats/:chatId/messages (ListMessagesReq) returns (MessageList)
 
 	@handler postMessage
 	post /chats/:chatId/messages (PostMessageReq) returns (Message)
@@ -306,6 +410,12 @@ service taskgame {
 service taskgame {
 	@handler getMe
 	get /me returns (UserSummary)
+
+	@handler listMyInvites
+	get /me/invites (ListMyInvitesReq) returns (InviteList)
+
+	@handler declineInvite
+	post /invites/:inviteId/decline (DeclineInviteReq) returns (Invite)
 
 	@handler getUserScores
 	get /users/:userId/scores (GetUserScoresReq) returns (UserScores)

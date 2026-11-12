@@ -109,10 +109,10 @@ func (e *Engine) confirm(ctx context.Context, r store.Repos, in confirmInput) (*
 		return nil, biz.Conflict("escrow hold is below the release amount")
 	}
 
-	relevant := subs
+	relevant := currentSubmissions(subs)
 	if milestoneID != "" {
 		relevant = nil
-		for _, s := range subs {
+		for _, s := range currentSubmissions(subs) {
 			if s.MilestoneID == milestoneID {
 				relevant = append(relevant, s)
 			}
@@ -225,7 +225,7 @@ func (e *Engine) confirm(ctx context.Context, r store.Repos, in confirmInput) (*
 	} else {
 		t.Status = model.StatusActive
 	}
-	t.ReviewDeadline = nil
+	clearReview(&t)
 	t.UpdatedAt = now
 	if err := r.Tasks().Update(ctx, t); err != nil {
 		return nil, err

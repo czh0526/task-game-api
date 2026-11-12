@@ -56,6 +56,13 @@ func (e *Engine) buildTask(publisherID string, req *types.CreateTaskReq) (model.
 	if hours < 1 || hours > maxReviewHours {
 		return model.Task{}, biz.Invalid("review_hours must be between 1 and 2160")
 	}
+	maxRev := int(req.Acceptance.MaxRevisions)
+	if maxRev == 0 {
+		maxRev = defaultMaxRevisions
+	}
+	if maxRev < 1 || maxRev > 20 {
+		return model.Task{}, biz.Invalid("max_revisions must be between 1 and 20")
+	}
 	conditions, err := cleanConditions(req.Payment.Conditions)
 	if err != nil {
 		return model.Task{}, err
@@ -115,7 +122,7 @@ func (e *Engine) buildTask(publisherID string, req *types.CreateTaskReq) (model.
 		Status:         model.StatusDraft,
 		PublisherID:    publisherID,
 		Payment:        model.Payment{Mode: req.Payment.Mode, Amount: req.Payment.Amount, Milestones: milestones, Conditions: conditions},
-		Acceptance:     model.Acceptance{Deadline: deadline, Quality: quality, Constraints: constraints, ReviewHours: hours},
+		Acceptance:     model.Acceptance{Deadline: deadline, Quality: quality, Constraints: constraints, ReviewHours: hours, MaxRevisions: maxRev},
 		AssigneePolicy: policy,
 		Competitive:    competitive,
 		Collaborative:  collaborative,

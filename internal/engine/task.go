@@ -51,7 +51,8 @@ func (e *Engine) GetTask(ctx context.Context, taskID string) (*types.Task, error
 }
 
 // ListTasks filters the marketplace. Cursor is an opaque offset.
-func (e *Engine) ListTasks(ctx context.Context, req *types.ListTasksReq) (*types.TaskList, error) {
+// assignable=me returns tasks the caller can accept right now.
+func (e *Engine) ListTasks(ctx context.Context, userID string, req *types.ListTasksReq) (*types.TaskList, error) {
 	if req.Limit < 0 || req.Limit > 100 {
 		return nil, biz.Invalid("limit must be between 1 and 100")
 	}
@@ -62,6 +63,14 @@ func (e *Engine) ListTasks(ctx context.Context, req *types.ListTasksReq) (*types
 	offset, err := decodeCursor(req.Cursor)
 	if err != nil {
 		return nil, err
+	}
+	switch trim(req.Assignable) {
+	case "", "me":
+	default:
+		return nil, biz.Invalid("assignable must be me")
+	}
+	if trim(req.Assignable) == "me" {
+		return e.listAssignable(ctx, userID, req, limit, offset)
 	}
 	rows, err := e.store.Tasks().List(ctx, model.TaskFilter{
 		Status: req.Status,
@@ -79,6 +88,69 @@ func (e *Engine) ListTasks(ctx context.Context, req *types.ListTasksReq) (*types
 	}
 	items := make([]types.Task, 0, len(rows))
 	for _, t := range rows {
+		dto, err := e.dto(ctx, e.store, t)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, *dto)
+	}
+	return &types.TaskList{Items: items, NextCursor: next}, nil
+}
+
+func (e *Engine) listAssignable(ctx context.Context, userID string, req *types.ListTasksReq, limit, offset int) (*types.TaskList, error) {
+	ability, err := e.abilityOf(ctx, e.store, userID)
+	if err != nil {
+		return nil, err
+	}
+	invites, err := e.store.Invites().ListByUser(ctx, userID, "")
+	if err != nil {
+		return nil, err
+	}
+	byTask := map[string]model.Invite{}
+	for _, inv := range invites {
+		byTask[inv.TaskID] = inv
+	}
+	var hits []model.Task
+	var rawAt []int
+	raw := offset
+	for len(hits) <= limit {
+		rows, err := e.store.Tasks().List(ctx, model.TaskFilter{
+			Statuses: []string{model.StatusOpen, model.StatusActive},
+			Kind:     req.Kind,
+			Limit:    100,
+			Offset:   raw,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if len(rows) == 0 {
+			break
+		}
+		for i, row := range rows {
+			if req.Status != "" && row.Status != req.Status {
+				continue
+			}
+			if !e.canAcceptNow(ctx, row, userID, ability, byTask) {
+				continue
+			}
+			hits = append(hits, row)
+			rawAt = append(rawAt, raw+i)
+			if len(hits) > limit {
+				break
+			}
+		}
+		raw += len(rows)
+		if len(hits) > limit || len(rows) < 100 {
+			break
+		}
+	}
+	var next *string
+	if len(hits) > limit {
+		hits = hits[:limit]
+		next = encodeCursor(rawAt[limit])
+	}
+	items := make([]types.Task, 0, len(hits))
+	for _, t := range hits {
 		dto, err := e.dto(ctx, e.store, t)
 		if err != nil {
 			return nil, err

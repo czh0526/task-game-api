@@ -41,6 +41,8 @@ type StoreConf struct {
 type EscrowConf struct {
 	InitialBalance int64  `json:",default=1000000"`
 	Currency       string `json:",default=credits"`
+	// ArbiterUserIds may call POST /tasks/{taskId}/arbitrate. Publisher and executor are not arbiters.
+	ArbiterUserIds []string `json:",optional"`
 }
 
 // WebhookConf controls the outbound delivery worker.
@@ -52,8 +54,13 @@ type WebhookConf struct {
 	MaxAttempts int           `json:",default=3"`
 }
 
-// AutoSettleConf runs the exclusive (and single-submission) review timeout.
+// AutoSettleConf runs review auto-settle and the workflow timeouts.
+// Zero timeout durations mean 72h, the same window as review_hours.
 type AutoSettleConf struct {
-	Enabled  bool          `json:",default=true"`
-	Interval time.Duration `json:",default=30s"`
+	Enabled           bool          `json:",default=true"`
+	Interval          time.Duration `json:",default=30s"`
+	OpenTimeout       time.Duration `json:",default=72h"`
+	StartTimeout      time.Duration `json:",default=72h"`
+	SeatTimeout       time.Duration `json:",default=72h"`
+	WinnerSelectHours int           `json:",default=72"`
 }

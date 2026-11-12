@@ -33,5 +33,5 @@ func (l *GetMeLogic) GetMe() (*types.UserSummary, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &types.UserSummary{Id: profile.ID, Email: profile.Email}, nil
+	return &types.UserSummary{Id: profile.ID, Email: profile.Email, IsArbiter: l.svcCtx.Engine.IsArbiter(userID)}, nil
 }

@@ -20,6 +20,8 @@ Auth:
       UserId: usr_publisher
     - Key: dev-executor-key
       UserId: usr_executor
+    - Key: dev-arbiter-key
+      UserId: usr_arbiter
 
 # modernc.org/sqlite, no cgo. The data directory is created on startup.
 Store:
@@ -27,9 +29,13 @@ Store:
   DSN: "file:data/taskgame.db?mode=rwc&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_txlock=immediate"
 
 # Simulated credits. InitialBalance is granted the first time a user is seen.
+# ArbiterUserIds may POST /v1/tasks/{taskId}/arbitrate. They are not the publisher or the executor.
+# Dev arbiter: X-Api-Key dev-arbiter-key, or `make token USER_ID=usr_arbiter`.
 Escrow:
   InitialBalance: 1000000
   Currency: credits
+  ArbiterUserIds:
+    - usr_arbiter
 
 # log: record X-Signature and do not POST. post: deliver the queued body.
 Webhook:
@@ -38,7 +44,17 @@ Webhook:
   Timeout: 5s
   MaxAttempts: 3
 
-# Exclusive in_review past review_deadline (default 72h) settles without a publisher confirm.
+# Review auto-settle, plus recruiting / start / seat / winner-select timeouts.
+# Exclusive (and a competitive task with exactly one submission) settles at review_deadline.
+# Competitive with more than one submission does not guess a winner. winner_select_deadline
+# is review_deadline + WinnerSelectHours; if the publisher still has not confirmed, the pool is refunded.
+# OpenTimeout: exclusive, competitive with zero accepts, and unified collaborative tasks that are still open.
+# StartTimeout: unified collaborative, measured from the moment the last seat is filled.
+# SeatTimeout: per_seat seats that are still open, measured from fund or from the dropout that reopened the seat.
 AutoSettle:
   Enabled: true
   Interval: 30s
+  OpenTimeout: 72h
+  StartTimeout: 72h
+  SeatTimeout: 72h
+  WinnerSelectHours: 72

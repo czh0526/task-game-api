@@ -85,6 +85,74 @@ func decodeCursor(s string) (int, error) {
 
 func trim(s string) string { return strings.TrimSpace(s) }
 
+func submissionCurrent(s model.Submission) bool {
+	return s.Status == "" || s.Status == model.SubmissionCurrent
+}
+
+func currentSubmissions(subs []model.Submission) []model.Submission {
+	out := make([]model.Submission, 0, len(subs))
+	for _, s := range subs {
+		if submissionCurrent(s) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func hasOpenSeat(t model.Task) bool {
+	if t.Collaborative == nil {
+		return false
+	}
+	for _, role := range t.Collaborative.Roles {
+		if role.Status == model.RoleOpen || role.Status == model.RoleDropped || role.Status == "" {
+			return true
+		}
+	}
+	return false
+}
+
+func unifiedReadyToStart(t model.Task) bool {
+	if !isUnifiedCollab(t) || t.Collaborative == nil || len(t.Collaborative.Roles) == 0 {
+		return false
+	}
+	for _, role := range t.Collaborative.Roles {
+		if role.Status != model.RoleFilled || role.AssigneeUserID == "" {
+			return false
+		}
+	}
+	return true
+}
+
+func taskDisputed(t model.Task) bool {
+	return t.Status == model.StatusDisputed || t.DisputeRoleID != ""
+}
+
+func spendable(acc model.EscrowAccount, t model.Task) int64 {
+	if acc.Frozen <= 0 {
+		return acc.Held
+	}
+	if t.DisputeRoleID == "" {
+		return 0
+	}
+	left := acc.Held - acc.Frozen
+	if left < 0 {
+		return 0
+	}
+	return left
+}
+
+func clearReview(t *model.Task) {
+	t.ReviewDeadline = nil
+	t.WinnerSelectDeadline = nil
+}
+
+func strPtr(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
 func filledRoles(t model.Task) []model.Role {
 	if t.Collaborative == nil {
 		return nil
