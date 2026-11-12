@@ -47,10 +47,11 @@ const (
 	PolicyCriteria = "criteria"
 	PolicyOpen     = "open"
 
-	EscrowHold    = "hold"
-	EscrowRelease = "release"
-	EscrowRefund  = "refund"
-	EscrowFreeze  = "freeze"
+	EscrowHold     = "hold"
+	EscrowRelease  = "release"
+	EscrowRefund   = "refund"
+	EscrowFreeze   = "freeze"
+	EscrowUnfreeze = "unfreeze"
 
 	RoleOpen      = "open"
 	RoleFilled    = "filled"
@@ -58,6 +59,23 @@ const (
 	RoleSubmitted = "submitted"
 	RoleSettled   = "settled"
 	RoleRefunded  = "refunded"
+	RoleDisputed  = "disputed"
+
+	SubmissionCurrent    = "current"
+	SubmissionSuperseded = "superseded"
+
+	InvitePending  = "pending"
+	InviteAccepted = "accepted"
+	InviteDeclined = "declined"
+
+	OutcomePayExecutor     = "pay_executor"
+	OutcomeRefundPublisher = "refund_publisher"
+	OutcomeSplit           = "split"
+
+	CancelOpenTimeout         = "open_timeout"
+	CancelStartTimeout        = "start_timeout"
+	CancelWinnerSelectTimeout = "winner_select_timeout"
+	CancelSeatTimeout         = "seat_timeout"
 
 	MilestonePending   = "pending"
 	MilestoneSubmitted = "submitted"
@@ -76,42 +94,54 @@ const (
 )
 
 const (
-	EventTaskFunded           = "task.funded"
-	EventTaskAccepted         = "task.accepted"
-	EventTaskStarted          = "task.started"
-	EventTaskSubmitted        = "task.submitted"
-	EventTaskInReview         = "task.in_review"
-	EventTaskConfirmed        = "task.confirmed"
-	EventTaskAutoSettled      = "task.auto_settled"
-	EventTaskDisputed         = "task.disputed"
-	EventTaskSettled          = "task.settled"
-	EventTaskCancelled        = "task.cancelled"
-	EventTaskExecutorReplaced = "task.executor_replaced"
-	EventEscrowHold           = "escrow.hold"
-	EventEscrowRelease        = "escrow.release"
-	EventEscrowRefund         = "escrow.refund"
-	EventChatMessageCreated   = "chat.message.created"
-	EventScoreUpdated         = "score.updated"
+	EventTaskFunded            = "task.funded"
+	EventTaskAccepted          = "task.accepted"
+	EventTaskStarted           = "task.started"
+	EventTaskSubmitted         = "task.submitted"
+	EventTaskInReview          = "task.in_review"
+	EventTaskConfirmed         = "task.confirmed"
+	EventTaskAutoSettled       = "task.auto_settled"
+	EventTaskDisputed          = "task.disputed"
+	EventTaskSettled           = "task.settled"
+	EventTaskCancelled         = "task.cancelled"
+	EventTaskExecutorReplaced  = "task.executor_replaced"
+	EventTaskRevisionRequested = "task.revision_requested"
+	EventTaskResolveProposed   = "task.resolve_proposed"
+	EventTaskArbitrated        = "task.arbitrated"
+	EventTaskInvited           = "task.invited"
+	EventTaskInviteDeclined    = "task.invite_declined"
+	EventEscrowHold            = "escrow.hold"
+	EventEscrowRelease         = "escrow.release"
+	EventEscrowRefund          = "escrow.refund"
+	EventEscrowUnfreeze        = "escrow.unfreeze"
+	EventChatMessageCreated    = "chat.message.created"
+	EventScoreUpdated          = "score.updated"
 )
 
 // WebhookEventTypes is the closed set from the OpenAPI enum.
 var WebhookEventTypes = map[string]struct{}{
-	EventTaskFunded:           {},
-	EventTaskAccepted:         {},
-	EventTaskStarted:          {},
-	EventTaskSubmitted:        {},
-	EventTaskInReview:         {},
-	EventTaskConfirmed:        {},
-	EventTaskAutoSettled:      {},
-	EventTaskDisputed:         {},
-	EventTaskSettled:          {},
-	EventTaskCancelled:        {},
-	EventTaskExecutorReplaced: {},
-	EventEscrowHold:           {},
-	EventEscrowRelease:        {},
-	EventEscrowRefund:         {},
-	EventChatMessageCreated:   {},
-	EventScoreUpdated:         {},
+	EventTaskFunded:            {},
+	EventTaskAccepted:          {},
+	EventTaskStarted:           {},
+	EventTaskSubmitted:         {},
+	EventTaskInReview:          {},
+	EventTaskConfirmed:         {},
+	EventTaskAutoSettled:       {},
+	EventTaskDisputed:          {},
+	EventTaskSettled:           {},
+	EventTaskCancelled:         {},
+	EventTaskExecutorReplaced:  {},
+	EventTaskRevisionRequested: {},
+	EventTaskResolveProposed:   {},
+	EventTaskArbitrated:        {},
+	EventTaskInvited:           {},
+	EventTaskInviteDeclined:    {},
+	EventEscrowHold:            {},
+	EventEscrowRelease:         {},
+	EventEscrowRefund:          {},
+	EventEscrowUnfreeze:        {},
+	EventChatMessageCreated:    {},
+	EventScoreUpdated:          {},
 }
 
 type Payment struct {
@@ -129,10 +159,11 @@ type Milestone struct {
 }
 
 type Acceptance struct {
-	Deadline    time.Time
-	Quality     string
-	Constraints []string
-	ReviewHours int
+	Deadline     time.Time
+	Quality      string
+	Constraints  []string
+	ReviewHours  int
+	MaxRevisions int
 }
 
 type AssigneePolicy struct {
@@ -147,12 +178,13 @@ type Competitive struct {
 }
 
 type Role struct {
-	ID             string `json:"id"`
-	Name           string `json:"name"`
-	ShareBps       int64  `json:"share_bps"`
-	TemplateID     string `json:"template_id,omitempty"`
-	AssigneeUserID string `json:"assignee_user_id,omitempty"`
-	Status         string `json:"status"`
+	ID             string     `json:"id"`
+	Name           string     `json:"name"`
+	ShareBps       int64      `json:"share_bps"`
+	TemplateID     string     `json:"template_id,omitempty"`
+	AssigneeUserID string     `json:"assignee_user_id,omitempty"`
+	Status         string     `json:"status"`
+	OpenedAt       *time.Time `json:"opened_at,omitempty"`
 }
 
 type Collaborative struct {
@@ -162,31 +194,66 @@ type Collaborative struct {
 }
 
 type Task struct {
-	ID                  string
-	Kind                string
-	Title               string
-	Description         string
-	Status              string
-	PublisherID         string
-	Payment             Payment
-	Acceptance          Acceptance
-	AssigneePolicy      AssigneePolicy
-	Competitive         *Competitive
-	Collaborative       *Collaborative
-	ExecutorIDs         []string
-	WinningSubmissionID *string
-	ReviewDeadline      *time.Time
-	EscrowID            string
-	DisputeReason       string
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	ID                   string
+	Kind                 string
+	Title                string
+	Description          string
+	Status               string
+	PublisherID          string
+	Payment              Payment
+	Acceptance           Acceptance
+	AssigneePolicy       AssigneePolicy
+	Competitive          *Competitive
+	Collaborative        *Collaborative
+	ExecutorIDs          []string
+	WinningSubmissionID  *string
+	ReviewDeadline       *time.Time
+	EscrowID             string
+	DisputeReason        string
+	DisputeRoleID        string
+	CancelReason         string
+	CancelCode           string
+	CancelledAt          *time.Time
+	ChatID               string
+	FundedAt             *time.Time
+	StartDeadline        *time.Time
+	WinnerSelectDeadline *time.Time
+	Resolve              ResolveState
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+}
+
+// Split is one line of a resolve or arbitrate split.
+// Amount and ShareBps are mutually exclusive across the whole proposal.
+type Split struct {
+	UserID   string `json:"user_id"`
+	Amount   *int64 `json:"amount,omitempty"`
+	ShareBps *int64 `json:"share_bps,omitempty"`
+}
+
+// ResolveProposal is one side's offer. The other side must post the same outcome and split.
+type ResolveProposal struct {
+	UserID       string    `json:"user_id"`
+	Outcome      string    `json:"outcome"`
+	Reason       string    `json:"reason,omitempty"`
+	RoleID       string    `json:"role_id,omitempty"`
+	SubmissionID string    `json:"submission_id,omitempty"`
+	Splits       []Split   `json:"splits,omitempty"`
+	At           time.Time `json:"at"`
+}
+
+// ResolveState holds at most one publisher proposal and one executor proposal.
+type ResolveState struct {
+	Publisher *ResolveProposal `json:"publisher,omitempty"`
+	Executor  *ResolveProposal `json:"executor,omitempty"`
 }
 
 type TaskFilter struct {
-	Status string
-	Kind   string
-	Limit  int
-	Offset int
+	Status   string
+	Statuses []string
+	Kind     string
+	Limit    int
+	Offset   int
 }
 
 type User struct {
@@ -215,8 +282,10 @@ type Submission struct {
 	TaskID      string
 	MilestoneID string
 	ExecutorID  string
+	RoleID      string
 	Payload     json.RawMessage
 	Note        string
+	Status      string
 	CreatedAt   time.Time
 }
 
@@ -266,6 +335,15 @@ type Chat struct {
 	TaskID    string
 	MemberIDs []string
 	CreatedAt time.Time
+}
+
+type Invite struct {
+	ID        string
+	TaskID    string
+	UserID    string
+	Status    string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 type Message struct {

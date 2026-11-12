@@ -2,15 +2,24 @@ import { apiKey, authHeaders, bearer, type Auth, type BearerToken } from "./auth
 import { TaskGameError, taskGameErrorFromResponse } from "./errors.js";
 import type {
   AcceptTaskBody,
+  CancelTaskBody,
   Chat,
   ChatCreate,
+  ChatList,
   ConfirmTaskBody,
   DisputeTaskBody,
   AuthSession,
   HealthStatus,
+  Invite,
+  InviteList,
+  InviteUsersBody,
+  ListMessagesQuery,
   ListTasksQuery,
   Message,
   MessageCreate,
+  MessageList,
+  ResolutionBody,
+  ReviseTaskBody,
   SubmissionCreate,
   Task,
   TaskCreate,
@@ -204,6 +213,98 @@ export class TaskGameClient {
     );
   }
 
+  /** `POST /v1/tasks/{taskId}/cancel`. Publisher only. Optional reason. */
+  cancelTask(taskId: string, body?: CancelTaskBody, options?: CallOptions): Promise<Task> {
+    return this.send(
+      "POST",
+      `${this.apiBase}/tasks/${segment(taskId, "taskId")}/cancel`,
+      options,
+      body ?? {},
+      true,
+      "header",
+    );
+  }
+
+  /** `POST /v1/tasks/{taskId}/revise`. Publisher sends one submission back for another try. */
+  reviseTask(taskId: string, body: ReviseTaskBody, options?: CallOptions): Promise<Task> {
+    return this.send(
+      "POST",
+      `${this.apiBase}/tasks/${segment(taskId, "taskId")}/revise`,
+      options,
+      body,
+      true,
+      "header",
+    );
+  }
+
+  /** `POST /v1/tasks/{taskId}/resolve`. Propose, or accept the other side's proposal. */
+  resolveTask(taskId: string, body: ResolutionBody, options?: CallOptions): Promise<Task> {
+    return this.send(
+      "POST",
+      `${this.apiBase}/tasks/${segment(taskId, "taskId")}/resolve`,
+      options,
+      body,
+      true,
+      "header",
+    );
+  }
+
+  /** `POST /v1/tasks/{taskId}/arbitrate`. Configured arbiters only. Applies immediately. */
+  arbitrateTask(taskId: string, body: ResolutionBody, options?: CallOptions): Promise<Task> {
+    return this.send(
+      "POST",
+      `${this.apiBase}/tasks/${segment(taskId, "taskId")}/arbitrate`,
+      options,
+      body,
+      true,
+      "header",
+    );
+  }
+
+  /** `GET /v1/tasks/{taskId}/invites` */
+  listTaskInvites(taskId: string, options?: CallOptions): Promise<InviteList> {
+    return this.send(
+      "GET",
+      `${this.apiBase}/tasks/${segment(taskId, "taskId")}/invites`,
+      options,
+      undefined,
+      false,
+      "forbidden",
+    );
+  }
+
+  /** `POST /v1/tasks/{taskId}/invites` */
+  createTaskInvites(taskId: string, body: InviteUsersBody, options?: CallOptions): Promise<InviteList> {
+    return this.send(
+      "POST",
+      `${this.apiBase}/tasks/${segment(taskId, "taskId")}/invites`,
+      options,
+      body,
+      true,
+      "header",
+    );
+  }
+
+  /** `GET /v1/me/invites` */
+  listMyInvites(query?: { status?: "pending" | "accepted" | "declined" }, options?: CallOptions): Promise<InviteList> {
+    const params = new URLSearchParams();
+    if (query?.status) params.set("status", query.status);
+    const qs = params.toString();
+    return this.send("GET", `${this.apiBase}/me/invites${qs ? `?${qs}` : ""}`, options, undefined, false, "forbidden");
+  }
+
+  /** `POST /v1/invites/{inviteId}/decline` */
+  declineInvite(inviteId: string, options?: CallOptions): Promise<Invite> {
+    return this.send(
+      "POST",
+      `${this.apiBase}/invites/${segment(inviteId, "inviteId")}/decline`,
+      options,
+      {},
+      true,
+      "header",
+    );
+  }
+
   /** `POST /v1/tasks/{taskId}/dispute` */
   disputeTask(taskId: string, body: DisputeTaskBody, options?: CallOptions): Promise<Task> {
     return this.send(
@@ -231,6 +332,46 @@ export class TaskGameClient {
   /** `POST /v1/webhooks` → 201 */
   createWebhook(body: WebhookCreate, options?: CallOptions): Promise<Webhook> {
     return this.send("POST", `${this.apiBase}/webhooks`, options, body, true, "header");
+  }
+
+  /** `GET /v1/chats?task_id=` */
+  listChats(taskId: string, options?: CallOptions): Promise<ChatList> {
+    const params = new URLSearchParams();
+    params.set("task_id", taskId);
+    return this.send("GET", `${this.apiBase}/chats?${params.toString()}`, options, undefined, false, "forbidden");
+  }
+
+  /** `GET /v1/chats/{chatId}` */
+  getChat(chatId: string, options?: CallOptions): Promise<Chat> {
+    return this.send(
+      "GET",
+      `${this.apiBase}/chats/${segment(chatId, "chatId")}`,
+      options,
+      undefined,
+      false,
+      "forbidden",
+    );
+  }
+
+  /** `GET /v1/chats/{chatId}/messages`. Oldest first within the page. */
+  listMessages(chatId: string, query?: ListMessagesQuery, options?: CallOptions): Promise<MessageList> {
+    if (query?.limit !== undefined) {
+      if (!Number.isInteger(query.limit) || query.limit < 1 || query.limit > 100) {
+        throw new TypeError("limit must be an integer from 1 to 100");
+      }
+    }
+    const params = new URLSearchParams();
+    if (query?.limit !== undefined) params.set("limit", String(query.limit));
+    if (query?.cursor !== undefined) params.set("cursor", query.cursor);
+    const qs = params.toString();
+    return this.send(
+      "GET",
+      `${this.apiBase}/chats/${segment(chatId, "chatId")}/messages${qs ? `?${qs}` : ""}`,
+      options,
+      undefined,
+      false,
+      "forbidden",
+    );
   }
 
   /** `POST /v1/chats` → 201 */
@@ -374,6 +515,7 @@ function listQuery(query: ListTasksQuery | undefined): string {
   if (query.kind !== undefined) params.set("kind", query.kind);
   if (query.limit !== undefined) params.set("limit", String(query.limit));
   if (query.cursor !== undefined) params.set("cursor", query.cursor);
+  if (query.assignable !== undefined) params.set("assignable", query.assignable);
   const text = params.toString();
   return text ? `?${text}` : "";
 }

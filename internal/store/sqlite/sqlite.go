@@ -89,6 +89,7 @@ func (d *DB) Escrow() store.EscrowRepo          { return &escrowRepo{q: d.db} }
 func (d *DB) Webhooks() store.WebhookRepo       { return &webhookRepo{q: d.db} }
 func (d *DB) Deliveries() store.DeliveryRepo    { return &deliveryRepo{q: d.db} }
 func (d *DB) Chats() store.ChatRepo             { return &chatRepo{q: d.db} }
+func (d *DB) Invites() store.InviteRepo         { return &inviteRepo{q: d.db} }
 func (d *DB) Idem() store.IdemRepo              { return &idemRepo{q: d.db} }
 
 func (d *DB) InTx(ctx context.Context, fn func(ctx context.Context, r store.Repos) error) error {
@@ -117,6 +118,7 @@ func (t *txRepos) Escrow() store.EscrowRepo          { return &escrowRepo{q: t.q
 func (t *txRepos) Webhooks() store.WebhookRepo       { return &webhookRepo{q: t.q} }
 func (t *txRepos) Deliveries() store.DeliveryRepo    { return &deliveryRepo{q: t.q} }
 func (t *txRepos) Chats() store.ChatRepo             { return &chatRepo{q: t.q} }
+func (t *txRepos) Invites() store.InviteRepo         { return &inviteRepo{q: t.q} }
 func (t *txRepos) Idem() store.IdemRepo              { return &idemRepo{q: t.q} }
 
 // migrate adds password-account columns on databases created before they existed.
@@ -142,13 +144,69 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("migrate users email index: %w", err)
 	}
+	if err := addColumns(ctx, db, "tasks", map[string]string{
+		"cancel_reason":          "TEXT NOT NULL DEFAULT ''",
+		"cancel_code":            "TEXT NOT NULL DEFAULT ''",
+		"cancelled_at":           "TEXT",
+		"chat_id":                "TEXT NOT NULL DEFAULT ''",
+		"funded_at":              "TEXT",
+		"start_deadline":         "TEXT",
+		"winner_select_deadline": "TEXT",
+		"dispute_role_id":        "TEXT NOT NULL DEFAULT ''",
+		"resolve_json":           "TEXT NOT NULL DEFAULT ''",
+		"max_revisions":          "INTEGER NOT NULL DEFAULT 3",
+	}); err != nil {
+		return err
+	}
+	if err := addColumns(ctx, db, "submissions", map[string]string{
+		"role_id": "TEXT NOT NULL DEFAULT ''",
+		"status":  "TEXT NOT NULL DEFAULT 'current'",
+	}); err != nil {
+		return err
+	}
 	return nil
 }
 
-func userColumns(ctx context.Context, db *sql.DB) (map[string]struct{}, error) {
-	rows, err := db.QueryContext(ctx, `PRAGMA table_info(users)`)
+func addColumns(ctx context.Context, db *sql.DB, table string, cols map[string]string) error {
+	have, err := tableColumns(ctx, db, table)
 	if err != nil {
-		return nil, fmt.Errorf("pragma table_info users: %w", err)
+		return err
+	}
+	names := make([]string, 0, len(cols))
+	for name := range cols {
+		names = append(names, name)
+	}
+	sortStrings(names)
+	for _, name := range names {
+		if _, ok := have[name]; ok {
+			continue
+		}
+		stmt := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, name, cols[name])
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("migrate %s.%s: %w", table, name, err)
+		}
+	}
+	return nil
+}
+
+func sortStrings(ss []string) {
+	for i := 1; i < len(ss); i++ {
+		j := i
+		for j > 0 && ss[j] < ss[j-1] {
+			ss[j], ss[j-1] = ss[j-1], ss[j]
+			j--
+		}
+	}
+}
+
+func userColumns(ctx context.Context, db *sql.DB) (map[string]struct{}, error) {
+	return tableColumns(ctx, db, "users")
+}
+
+func tableColumns(ctx context.Context, db *sql.DB, table string) (map[string]struct{}, error) {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
+	if err != nil {
+		return nil, fmt.Errorf("pragma table_info %s: %w", table, err)
 	}
 	defer rows.Close()
 	cols := map[string]struct{}{}
@@ -166,7 +224,7 @@ func userColumns(ctx context.Context, db *sql.DB) (map[string]struct{}, error) {
 		return nil, err
 	}
 	if len(cols) == 0 {
-		return nil, fmt.Errorf("users table is missing after schema apply")
+		return nil, fmt.Errorf("%s table is missing after schema apply", table)
 	}
 	return cols, nil
 }

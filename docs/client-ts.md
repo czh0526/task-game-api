@@ -17,6 +17,7 @@ Development keys (`etc/taskgame.yaml`):
 | --- | --- |
 | `X-Api-Key: dev-publisher-key` | `usr_publisher` |
 | `X-Api-Key: dev-executor-key` | `usr_executor` |
+| `X-Api-Key: dev-arbiter-key` | `usr_arbiter` |
 
 `make token` (or `make token USER_ID=usr_executor`) prints an HS256 JWT. `sub` is the user id.
 
@@ -618,3 +619,22 @@ if (!(await verifyWebhookSignature(secret, rawBody, header))) {
 const event = parseWebhookEnvelope(rawBody);
 // event.id matches X-Event-Id. event.type is the OpenAPI WebhookEventType.
 ```
+
+## Workflow closure
+
+These calls are additive on v0.1. New task fields are optional for older readers. `submissions` lists `current` and `superseded` deliveries so a competitive confirm can pass `submission_id` from the task, not from an error string.
+
+```ts
+await client.cancelTask(taskId, { reason: "no longer needed" });
+await client.reviseTask(taskId, { reason: "please fix the intro" });
+await client.resolveTask(taskId, { outcome: "refund_publisher" });
+await client.arbitrateTask(taskId, { outcome: "pay_executor", reason: "delivery matches the brief" });
+const chatId = (await client.getTask(taskId)).chat_id;
+if (chatId) {
+  await client.listMessages(chatId, { limit: 50 });
+}
+await client.listTasks({ assignable: "me" });
+await client.listMyInvites({ status: "pending" });
+```
+
+`me().is_arbiter` is true for `usr_arbiter` in the dev config (`X-Api-Key: dev-arbiter-key` or `make token USER_ID=usr_arbiter`). Per-seat disputes freeze only that seat (`role_id`). A task-level refund closes as `cancelled`. A payout closes as `settled`. Message pages are oldest-first. New webhook events: `task.revision_requested`, `task.resolve_proposed`, `task.arbitrated`, `task.invited`, `task.invite_declined`, `escrow.unfreeze`. Timeouts reuse `task.cancelled` with `data.reason` of `open_timeout`, `start_timeout`, or `winner_select_timeout`. A per-seat open-seat refund emits `escrow.refund` with `reason` `seat_timeout`.

@@ -25,8 +25,9 @@ func NewListTasksLogic(ctx context.Context, svcCtx *svc.ServiceContext) *ListTas
 }
 
 func (l *ListTasksLogic) ListTasks(req *types.ListTasksReq) (*types.TaskList, error) {
-	if _, err := auth.Require(l.ctx); err != nil {
+	userID, err := auth.Require(l.ctx)
+	if err != nil {
 		return nil, err
 	}
-	return l.svcCtx.Engine.ListTasks(l.ctx, req)
+	return l.svcCtx.Engine.ListTasks(l.ctx, userID, req)
 }

@@ -10,10 +10,11 @@ type AcceptTaskReq struct {
 }
 
 type Acceptance struct {
-	Deadline    string   `json:"deadline"`
-	Quality     string   `json:"quality"`
-	Constraints []string `json:"constraints,optional,omitempty"`
-	ReviewHours int64    `json:"review_hours,optional"`
+	Deadline     string   `json:"deadline"`
+	Quality      string   `json:"quality"`
+	Constraints  []string `json:"constraints,optional,omitempty"`
+	ReviewHours  int64    `json:"review_hours,optional"`
+	MaxRevisions int64    `json:"max_revisions,optional"`
 }
 
 type AssigneePolicy struct {
@@ -41,7 +42,8 @@ type CollaborativeRole struct {
 	ShareBps       int64   `json:"share_bps"`
 	TemplateId     string  `json:"template_id,optional,omitempty"`
 	AssigneeUserId *string `json:"assignee_user_id,optional"`
-	Status         string  `json:"status,optional,options=open|filled|dropped|submitted|settled|refunded"`
+	Status         string  `json:"status,optional,options=open|filled|dropped|submitted|settled|refunded|disputed"`
+	RefundDeadline *string `json:"refund_deadline,optional"`
 }
 
 type Competitive struct {
@@ -65,6 +67,7 @@ type StartTaskReq struct {
 type CreateChatReq struct {
 	IdempotencyKey string   `header:"Idempotency-Key,optional" json:"-"`
 	MemberIds      []string `json:"member_ids"`
+	TaskId         string   `json:"task_id,optional"`
 }
 
 type CreateTaskReq struct {
@@ -90,6 +93,7 @@ type DisputeTaskReq struct {
 	TaskId         string `path:"taskId" json:"-"`
 	IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
 	Reason         string `json:"reason"`
+	RoleId         string `json:"role_id,optional"`
 }
 
 type DropoutTaskReq struct {
@@ -100,6 +104,7 @@ type DropoutTaskReq struct {
 type EscrowAccount struct {
 	Id       string        `json:"id"`
 	Held     int64         `json:"held"`
+	Frozen   int64         `json:"frozen"`
 	Currency string        `json:"currency"`
 	Entries  []EscrowEntry `json:"entries"`
 }
@@ -134,6 +139,7 @@ type ListTasksReq struct {
 	Kind           string `form:"kind,optional,options=exclusive|competitive|collaborative"`
 	Limit          int64  `form:"limit,optional"`
 	Cursor         string `form:"cursor,optional"`
+	Assignable     string `form:"assignable,optional"`
 	IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
 }
 
@@ -186,23 +192,33 @@ type SubmitTaskReq struct {
 }
 
 type Task struct {
-	Kind                string         `json:"kind"`
-	Title               string         `json:"title"`
-	Description         string         `json:"description"`
-	Payment             Payment        `json:"payment"`
-	Acceptance          Acceptance     `json:"acceptance"`
-	AssigneePolicy      AssigneePolicy `json:"assignee_policy"`
-	Competitive         *Competitive   `json:"competitive,optional,omitempty"`
-	Collaborative       *Collaborative `json:"collaborative,optional,omitempty"`
-	Id                  string         `json:"id"`
-	Status              string         `json:"status"`
-	PublisherId         string         `json:"publisher_id"`
-	ExecutorIds         []string       `json:"executor_ids"`
-	WinningSubmissionId *string        `json:"winning_submission_id,optional"`
-	ReviewDeadline      *string        `json:"review_deadline,optional"`
-	Escrow              *EscrowAccount `json:"escrow,optional,omitempty"`
-	CreatedAt           string         `json:"created_at"`
-	UpdatedAt           string         `json:"updated_at"`
+	Kind                 string            `json:"kind"`
+	Title                string            `json:"title"`
+	Description          string            `json:"description"`
+	Payment              Payment           `json:"payment"`
+	Acceptance           Acceptance        `json:"acceptance"`
+	AssigneePolicy       AssigneePolicy    `json:"assignee_policy"`
+	Competitive          *Competitive      `json:"competitive,optional,omitempty"`
+	Collaborative        *Collaborative    `json:"collaborative,optional,omitempty"`
+	Id                   string            `json:"id"`
+	Status               string            `json:"status"`
+	PublisherId          string            `json:"publisher_id"`
+	ExecutorIds          []string          `json:"executor_ids"`
+	WinningSubmissionId  *string           `json:"winning_submission_id,optional"`
+	ReviewDeadline       *string           `json:"review_deadline,optional"`
+	OpenDeadline         *string           `json:"open_deadline,optional"`
+	StartDeadline        *string           `json:"start_deadline,optional"`
+	WinnerSelectDeadline *string           `json:"winner_select_deadline,optional"`
+	ChatId               *string           `json:"chat_id,optional"`
+	CancelReason         *string           `json:"cancel_reason,optional"`
+	CancelCode           *string           `json:"cancel_code,optional"`
+	CancelledAt          *string           `json:"cancelled_at,optional"`
+	DisputeRoleId        *string           `json:"dispute_role_id,optional"`
+	ResolveProposals     []ResolveProposal `json:"resolve_proposals,optional,omitempty"`
+	Submissions          []Submission      `json:"submissions,omitempty"`
+	Escrow               *EscrowAccount    `json:"escrow,optional,omitempty"`
+	CreatedAt            string            `json:"created_at"`
+	UpdatedAt            string            `json:"updated_at"`
 }
 
 type TaskList struct {
@@ -236,8 +252,126 @@ type LoginReq struct {
 }
 
 type UserSummary struct {
-	Id    string `json:"id"`
-	Email string `json:"email"`
+	Id        string `json:"id"`
+	Email     string `json:"email"`
+	IsArbiter bool   `json:"is_arbiter"`
+}
+
+type Submission struct {
+	Id          string         `json:"id"`
+	ExecutorId  string         `json:"executor_id"`
+	RoleId      *string        `json:"role_id"`
+	MilestoneId *string        `json:"milestone_id"`
+	Payload     map[string]any `json:"payload"`
+	Note        string         `json:"note,omitempty"`
+	Status      string         `json:"status"`
+	CreatedAt   string         `json:"created_at"`
+}
+
+type SplitLine struct {
+	UserId   string `json:"user_id"`
+	Amount   *int64 `json:"amount,optional"`
+	ShareBps *int64 `json:"share_bps,optional"`
+}
+
+type ResolveProposal struct {
+	UserId       string      `json:"user_id"`
+	Side         string      `json:"side"`
+	Outcome      string      `json:"outcome"`
+	Reason       string      `json:"reason,omitempty"`
+	RoleId       string      `json:"role_id,omitempty"`
+	SubmissionId string      `json:"submission_id,omitempty"`
+	Splits       []SplitLine `json:"splits,omitempty"`
+	CreatedAt    string      `json:"created_at"`
+}
+
+type CancelTaskReq struct {
+	TaskId         string `path:"taskId" json:"-"`
+	IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
+	Reason         string `json:"reason,optional"`
+}
+
+type ReviseTaskReq struct {
+	TaskId         string `path:"taskId" json:"-"`
+	IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
+	Reason         string `json:"reason"`
+	RoleId         string `json:"role_id,optional"`
+	SubmissionId   string `json:"submission_id,optional"`
+}
+
+type ResolveTaskReq struct {
+	TaskId         string      `path:"taskId" json:"-"`
+	IdempotencyKey string      `header:"Idempotency-Key,optional" json:"-"`
+	Outcome        string      `json:"outcome"`
+	Reason         string      `json:"reason,optional"`
+	RoleId         string      `json:"role_id,optional"`
+	SubmissionId   string      `json:"submission_id,optional"`
+	Splits         []SplitLine `json:"splits,optional"`
+}
+
+type ArbitrateTaskReq struct {
+	TaskId         string      `path:"taskId" json:"-"`
+	IdempotencyKey string      `header:"Idempotency-Key,optional" json:"-"`
+	Outcome        string      `json:"outcome"`
+	Reason         string      `json:"reason"`
+	RoleId         string      `json:"role_id,optional"`
+	SubmissionId   string      `json:"submission_id,optional"`
+	Splits         []SplitLine `json:"splits,optional"`
+}
+
+type InviteUsersReq struct {
+	TaskId         string   `path:"taskId" json:"-"`
+	IdempotencyKey string   `header:"Idempotency-Key,optional" json:"-"`
+	UserIds        []string `json:"user_ids"`
+}
+
+type ListTaskInvitesReq struct {
+	TaskId string `path:"taskId" json:"-"`
+}
+
+type ListMyInvitesReq struct {
+	Status string `form:"status,optional"`
+}
+
+type DeclineInviteReq struct {
+	InviteId       string `path:"inviteId" json:"-"`
+	IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
+}
+
+type Invite struct {
+	Id        string `json:"id"`
+	TaskId    string `json:"task_id"`
+	UserId    string `json:"user_id"`
+	Status    string `json:"status"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+type InviteList struct {
+	Items []Invite `json:"items"`
+}
+
+type GetChatReq struct {
+	ChatId string `path:"chatId" json:"-"`
+}
+
+type ListChatsReq struct {
+	TaskId string `form:"task_id,optional"`
+}
+
+type ChatList struct {
+	Items []Chat `json:"items"`
+}
+
+type ListMessagesReq struct {
+	ChatId string `path:"chatId" json:"-"`
+	Limit  int64  `form:"limit,optional"`
+	Cursor string `form:"cursor,optional"`
+}
+
+type MessageList struct {
+	Items      []Message `json:"items"`
+	NextCursor *string   `json:"next_cursor,optional"`
 }
 
 type AuthSession struct {

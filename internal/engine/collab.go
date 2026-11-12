@@ -46,6 +46,7 @@ func (e *Engine) StartTask(ctx context.Context, userID string, req *types.StartT
 			return nil, biz.Conflict("unified start requires every seat to be filled; open: " + strings.Join(openIDs, ", "))
 		}
 		t.Status = model.StatusActive
+		t.StartDeadline = nil
 		t.UpdatedAt = e.now()
 		if err := r.Tasks().Update(ctx, t); err != nil {
 			return nil, err
@@ -86,6 +87,13 @@ func (e *Engine) armReview(t *model.Task) {
 	}
 	deadline := e.now().Add(hoursDuration(hours))
 	t.ReviewDeadline = &deadline
+	if t.Kind == model.KindCompetitive {
+		// Known in advance so the publisher can see it before it fires.
+		// A single current submission still auto-settles at review_deadline.
+		// More than one waits until this later deadline, then refunds. No winner is guessed.
+		selectBy := deadline.Add(hoursDuration(e.winnerSelectHours()))
+		t.WinnerSelectDeadline = &selectBy
+	}
 }
 
 // perSeatTaskStatus is the task status implied by seat statuses.
@@ -96,7 +104,7 @@ func perSeatTaskStatus(t model.Task) string {
 	if t.Collaborative == nil {
 		return t.Status
 	}
-	var openN, filledN, submittedN, paidN, refundN int
+	var openN, filledN, submittedN, paidN, refundN, disputedN int
 	for _, role := range t.Collaborative.Roles {
 		switch role.Status {
 		case model.RoleFilled:
@@ -107,18 +115,23 @@ func perSeatTaskStatus(t model.Task) string {
 			paidN++
 		case model.RoleRefunded:
 			refundN++
+		case model.RoleDisputed:
+			disputedN++
 		default:
 			openN++
 		}
 	}
-	if openN+filledN+submittedN+paidN+refundN == 0 {
+	if openN+filledN+submittedN+paidN+refundN+disputedN == 0 {
 		return model.StatusOpen
 	}
-	if openN == 0 && filledN == 0 && submittedN == 0 {
+	if openN == 0 && filledN == 0 && submittedN == 0 && disputedN == 0 {
 		return model.StatusSettled
 	}
-	if filledN == 0 && submittedN == 0 && paidN == 0 {
+	if filledN == 0 && submittedN == 0 && paidN == 0 && disputedN == 0 {
 		return model.StatusOpen
+	}
+	if openN == 0 && filledN == 0 && submittedN == 0 && disputedN > 0 {
+		return model.StatusDisputed
 	}
 	if openN == 0 && filledN == 0 && submittedN > 0 {
 		return model.StatusInReview
@@ -151,7 +164,7 @@ func (e *Engine) syncCollaborativeProgress(t *model.Task) {
 				e.armReview(t)
 			}
 		} else {
-			t.ReviewDeadline = nil
+			clearReview(t)
 		}
 		t.Status = next
 		return
@@ -170,7 +183,7 @@ func (e *Engine) syncCollaborativeProgress(t *model.Task) {
 		return
 	}
 	t.Status = model.StatusActive
-	t.ReviewDeadline = nil
+	clearReview(t)
 }
 
 func markSubmittedSeats(t *model.Task, subs []model.Submission) {
@@ -179,9 +192,10 @@ func markSubmittedSeats(t *model.Task, subs []model.Submission) {
 	}
 	have := map[string]struct{}{}
 	for _, s := range subs {
-		if s.MilestoneID == "" {
-			have[s.ExecutorID] = struct{}{}
+		if s.MilestoneID != "" || !submissionCurrent(s) {
+			continue
 		}
+		have[s.ExecutorID] = struct{}{}
 	}
 	for i := range t.Collaborative.Roles {
 		role := &t.Collaborative.Roles[i]
@@ -208,6 +222,9 @@ func seatIndex(t model.Task, roleID string) int {
 
 func findSubmission(subs []model.Submission, milestoneID, executorID string) *model.Submission {
 	for i := range subs {
+		if !submissionCurrent(subs[i]) {
+			continue
+		}
 		if subs[i].ExecutorID == executorID && subs[i].MilestoneID == milestoneID {
 			return &subs[i]
 		}
@@ -262,6 +279,23 @@ func (e *Engine) creditEscrow(ctx context.Context, r store.Repos, acc *model.Esc
 	return ent, nil
 }
 
+func (e *Engine) unfreeze(ctx context.Context, r store.Repos, acc *model.EscrowAccount, amount int64, now time.Time) (model.EscrowEntry, error) {
+	if amount <= 0 {
+		return model.EscrowEntry{}, nil
+	}
+	if acc.Frozen < amount {
+		return model.EscrowEntry{}, biz.Conflict("frozen amount is below the unfreeze")
+	}
+	ent := model.EscrowEntry{
+		ID: id.New("ent_"), EscrowID: acc.ID, Type: model.EscrowUnfreeze, Amount: amount, CreatedAt: now,
+	}
+	if err := r.Escrow().InsertEntry(ctx, ent); err != nil {
+		return model.EscrowEntry{}, err
+	}
+	acc.Frozen -= amount
+	return ent, nil
+}
+
 type seatAction struct {
 	index int
 	pay   bool
@@ -292,7 +326,7 @@ func (e *Engine) confirmPerSeat(ctx context.Context, r store.Repos, t model.Task
 	if err != nil {
 		return nil, err
 	}
-	if acc.Frozen > 0 {
+	if acc.Frozen > 0 && t.DisputeRoleID == "" {
 		return nil, biz.Conflict("escrow is frozen")
 	}
 	subs, err := r.Submissions().ListByTask(ctx, t.ID)
@@ -315,11 +349,17 @@ func (e *Engine) confirmPerSeat(ctx context.Context, r store.Repos, t model.Task
 	var paidUsers []string
 	for _, act := range actions {
 		role := &t.Collaborative.Roles[act.index]
+		if role.Status == model.RoleDisputed || role.ID == t.DisputeRoleID {
+			if in.Auto {
+				continue
+			}
+			return nil, biz.Conflict("escrow is frozen")
+		}
 		amount, err := seatPayoutAmount(t.Payment.Amount, t.Collaborative.Roles, role.ID)
 		if err != nil {
 			return nil, err
 		}
-		if amount > acc.Held {
+		if amount > spendable(acc, t) {
 			return nil, biz.Conflict("escrow hold is below the release amount")
 		}
 		if act.pay {
@@ -430,7 +470,7 @@ func perSeatActions(t model.Task, roleID string, auto bool) ([]seatAction, error
 			switch role.Status {
 			case model.RoleSubmitted:
 				actions = append(actions, seatAction{index: i, pay: true})
-			case model.RoleSettled, model.RoleRefunded:
+			case model.RoleSettled, model.RoleRefunded, model.RoleDisputed:
 			default:
 				return nil, errAutoDeferred
 			}

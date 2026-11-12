@@ -8,10 +8,11 @@ import (
 )
 
 var (
-	userID = regexp.MustCompile(`^[A-Za-z0-9_.:@-]{1,128}$`)
-	taskID = regexp.MustCompile(`^tsk_[A-Za-z0-9]+$`)
-	chatID = regexp.MustCompile(`^cht_[A-Za-z0-9]+$`)
-	refID  = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+	userID   = regexp.MustCompile(`^[A-Za-z0-9_.:@-]{1,128}$`)
+	taskID   = regexp.MustCompile(`^tsk_[A-Za-z0-9]+$`)
+	chatID   = regexp.MustCompile(`^cht_[A-Za-z0-9]+$`)
+	inviteID = regexp.MustCompile(`^inv_[A-Za-z0-9]+$`)
+	refID    = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 )
 
 // New returns prefix plus 24 hex characters from crypto/rand.
@@ -24,7 +25,8 @@ func New(prefix string) string {
 	return prefix + hex.EncodeToString(b[:])
 }
 
-func ValidUserID(s string) bool { return userID.MatchString(s) }
-func ValidTaskID(s string) bool { return taskID.MatchString(s) }
-func ValidChatID(s string) bool { return chatID.MatchString(s) }
-func ValidRefID(s string) bool  { return refID.MatchString(s) }
+func ValidUserID(s string) bool   { return userID.MatchString(s) }
+func ValidTaskID(s string) bool   { return taskID.MatchString(s) }
+func ValidChatID(s string) bool   { return chatID.MatchString(s) }
+func ValidInviteID(s string) bool { return inviteID.MatchString(s) }
+func ValidRefID(s string) bool    { return refID.MatchString(s) }

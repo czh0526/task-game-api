@@ -15,7 +15,11 @@ info:
       unified: executors may fill seats while the task is open. Work does not start, and status does not become active, until the publisher calls POST /tasks/{taskId}/start and every seat is filled. Confirm is all-or-nothing: it fails until every current seat has submitted and no seat is open, then one settlement splits the whole pool by seat share_bps. After start, dropout replace still reopens that seat and the task stays active. Confirm stays blocked until the seat is filled again and every current seat has submitted.
       per_seat: each executor accepts an open seat after fund. That seat can submit and be confirmed on its own. POST /tasks/{taskId}/confirm with role_id releases only that seat's share_bps of the original pool (escrow.release) and leaves the rest held. An open seat is not paid; confirming it refunds that share to the publisher. The task is settled only when every seat is settled or refunded. v0.1 auto-settle for per_seat runs only after every non-terminal seat has submitted and the review window has passed. Confirm earlier seats manually. Ability and commission for an executor apply when that seat is paid; unified still applies them in one batch on confirm.
     - API / Webhook first; no UI required for third parties
-    - Additive in v0.1: POST /register and POST /login are public. They store a bcrypt password hash (never plaintext) and return an HS256 access token with the same claims as `make token` (`sub` is the user id, plus `iat` and `exp`). X-Api-Key dev users such as usr_publisher and usr_executor stay valid. GET /me returns the caller id and email.
+    - Additive in v0.1: POST /register and POST /login are public. They store a bcrypt password hash (never plaintext) and return an HS256 access token with the same claims as `make token` (`sub` is the user id, plus `iat` and `exp`). X-Api-Key dev users such as usr_publisher and usr_executor stay valid. GET /me returns the caller id, email, and is_arbiter.
+    - Additive in v0.1, workflow closure: POST /tasks/{taskId}/cancel, /revise, /resolve, and /arbitrate. Cancel refunds held funds when work has not been submitted. A per_seat task with submissions cancels only unfinished seats (open or filled, not submitted). Revise marks a submission superseded and returns the seat or task to active, up to acceptance.max_revisions (default 3). Dispute still freezes. Mutual resolve needs both sides to post the same outcome. Arbitrate applies immediately and only for Escrow.ArbiterUserIds. A full refund closes the task as cancelled. A payout closes it as settled. Per-seat disputes freeze only that seat's share; other seats keep their own confirm and refund rules. A single competitive submission still auto-settles at review_deadline (winner_take_all does not guess among multiple submissions). After that, winner_select_deadline refunds the pool if no winner was chosen.
+    - Additive in v0.1, visibility: task responses include submissions[] (current and superseded). Funding a task creates one chat (chat_id) with the publisher; accept adds the executor. GET /chats/{chatId}, GET /chats/{chatId}/messages (oldest first within a page), and GET /chats?task_id= read that thread. Dropout does not remove chat members.
+    - Additive in v0.1, timeouts (default 72h, same ticker as auto-settle): open_timeout cancels an exclusive, an unaccepted competitive task, or a unified collaborative task that still has an open seat, at min(fund+OpenTimeout, acceptance.deadline). A unified task whose seats are all filled sets start_deadline and cancels with start_timeout if the publisher does not start. Per-seat open seats refund that share at min(opened_at+SeatTimeout, acceptance.deadline); filled and submitted seats are not auto-refunded. Competitive tasks with more than one current submission set winner_select_deadline = review_deadline + WinnerSelectHours and then refund with winner_select_timeout. Accepted work with no current submission cancels at acceptance.deadline (reason open_timeout). Executors on those refunds get 0 commission and 0 ability.
+    - Additive in v0.1, assignee_policy is enforced on accept. specific allows user_ids or a pending/accepted invite, and a declined invite blocks until a new invite. criteria requires ability >= min_ability. The publisher cannot accept their own task. Funding a specific task invites each user_id (task.invited). GET /tasks?assignable=me lists tasks the caller can accept now.
 servers:
   - url: https://api.example.com/v1
 security:
@@ -105,7 +109,7 @@ paths:
       operationId: me
       description: |
         Requires Bearer or X-Api-Key. Email is empty when the caller has no password account
-        (development API keys).
+        (development API keys). is_arbiter is true when the caller is listed in Escrow.ArbiterUserIds.
       responses:
         '200':
           description: Caller
@@ -140,6 +144,12 @@ paths:
         - name: cursor
           in: query
           schema: { type: string }
+        - name: assignable
+          in: query
+          schema: { type: string, enum: [me] }
+          description: |
+            When `me`, return tasks the caller can accept right now.
+            The default list is unchanged when the parameter is omitted.
       responses:
         '200':
           description: Task page
@@ -338,6 +348,10 @@ paths:
     post:
       tags: [Tasks, Escrow]
       summary: Open dispute (freeze escrow)
+      description: |
+        Exclusive, competitive, and unified disputes freeze the whole remaining hold and set status to disputed.
+        per_seat freezes only the named submitted seat (role_id; required when more than one seat is submitted) and leaves other seats confirmable.
+        Confirm and auto-settle stay blocked on the frozen amount. Close the dispute with resolve or arbitrate.
       operationId: disputeTask
       parameters:
         - $ref: '#/components/parameters/TaskId'
@@ -351,6 +365,9 @@ paths:
               required: [reason]
               properties:
                 reason: { type: string }
+                role_id:
+                  type: string
+                  description: Required for per_seat when more than one seat is submitted. Freezes that seat's share only.
       responses:
         '200':
           description: Disputed
@@ -358,6 +375,191 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Task'
+  /tasks/{taskId}/cancel:
+    post:
+      tags: [Tasks, Escrow]
+      summary: Cancel a task or unfinished per-seat work
+      operationId: cancelTask
+      description: |
+        Publisher only. draft and open always cancel; open refunds the whole hold.
+        active with no submission in the task's history refunds the whole hold. Executors get 0 commission and 0 ability.
+        active per_seat with submissions refunds only open and filled-but-not-submitted seats. Submitted seats return 409.
+        If every seat is then terminal and at least one was settled, the task is settled; if none were settled, it is cancelled.
+        active unified or exclusive or competitive once any submission exists, in_review, disputed, settled, and cancelled return 409.
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string }
+      responses:
+        '200':
+          description: Cancelled, or per-seat unfinished seats refunded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '403':
+          description: Not the publisher
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Work is in review, disputed, or a submitted seat cannot be cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /tasks/{taskId}/revise:
+    post:
+      tags: [Tasks]
+      summary: Ask the executor to revise a submission
+      operationId: reviseTask
+      description: |
+        Publisher only, while a submission is awaiting review. The submission stays in history with status superseded.
+        The seat or exclusive task returns to active and review_deadline is cleared until the next submit.
+        Competitive revises one submission at a time; omit submission_id only when exactly one current submission exists.
+        per_seat requires role_id when more than one seat is submitted.
+        acceptance.max_revisions (default 3) is counted per exclusive task, per competitive author, and per collaborative seat.
+        Past the limit the error is `revision limit reached; confirm or dispute`.
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string }
+                role_id: { type: string }
+                submission_id: { type: string }
+      responses:
+        '200':
+          description: Revision requested
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '409':
+          description: Not awaiting review, or the revision limit was reached
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /tasks/{taskId}/resolve:
+    post:
+      tags: [Tasks, Escrow]
+      summary: Propose or accept a mutual dispute resolution
+      operationId: resolveTask
+      description: |
+        Publisher or a current executor. For a per_seat dispute, the executor must hold the disputed seat.
+        The first call stores a proposal (task.resolve_proposed). The other side must call again with the same outcome and, for split, the same splits.
+        A different outcome replaces that side's proposal and clears the other side's agreement.
+        pay_executor releases the frozen amount under the original rule. Competitive pay_executor requires submission_id and does not guess a winner.
+        Unified pay splits by seat share_bps. per_seat pays that seat's share to its executor.
+        refund_publisher returns the frozen amount to the publisher and, for a task-level dispute, sets status cancelled.
+        split amounts must sum to the frozen amount, or share_bps must sum to 10000.
+        Agreement unfreezes first, then releases or refunds.
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Resolution'
+      responses:
+        '200':
+          description: Proposal stored, or outcome applied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+  /tasks/{taskId}/arbitrate:
+    post:
+      tags: [Tasks, Escrow]
+      summary: Arbiter decides a dispute immediately
+      operationId: arbitrateTask
+      description: |
+        Caller must be in Escrow.ArbiterUserIds (dev config includes usr_arbiter, X-Api-Key dev-arbiter-key, or `make token USER_ID=usr_arbiter`).
+        Publisher and executor are not arbiters. Same money outcomes as resolve, applied in one call. reason is required.
+        Emits task.arbitrated, escrow.unfreeze, and escrow.release or escrow.refund. task.settled when a payout closes the task; task.cancelled when a task-level refund does.
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Resolution'
+      responses:
+        '200':
+          description: Outcome applied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '403':
+          description: Caller is not an arbiter
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /tasks/{taskId}/invites:
+    get:
+      tags: [Tasks]
+      summary: List invites on a task
+      operationId: listTaskInvites
+      description: The publisher sees every invite. An invitee sees only their own.
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+      responses:
+        '200':
+          description: Invites
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InviteList'
+    post:
+      tags: [Tasks]
+      summary: Invite more users
+      operationId: createTaskInvites
+      description: |
+        Publisher only, while the task still has open capacity (exclusive open, competitive free slots, or a collaborative open seat, including a seat reopened by dropout).
+        For specific policy the ids are appended to assignee_policy.user_ids. Emits task.invited.
+        A declined invite can be re-opened by inviting that user again.
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_ids]
+              properties:
+                user_ids:
+                  type: array
+                  items: { type: string }
+      responses:
+        '200':
+          description: Invites on the task after the call
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InviteList'
   /tasks/{taskId}/dropout:
     post:
       tags: [Tasks]
@@ -393,7 +595,62 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Webhook'
+  /me/invites:
+    get:
+      tags: [Users]
+      summary: Invitations for the caller
+      operationId: listMyInvites
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [pending, accepted, declined] }
+      responses:
+        '200':
+          description: Invites
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InviteList'
+  /invites/{inviteId}/decline:
+    post:
+      tags: [Tasks]
+      summary: Decline an invitation
+      operationId: declineInvite
+      description: |
+        Invitee only. Emits task.invite_declined. A declined specific invite cannot accept until invited again.
+        Accepting the task is how an invitee accepts; there is no separate accept-invite route.
+      parameters:
+        - name: inviteId
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Declined
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invite'
   /chats:
+    get:
+      tags: [Chats]
+      summary: Task chats visible to the caller
+      operationId: listChats
+      description: |
+        Requires task_id. The publisher sees the bound chat. A member sees it. Anyone else receives 403 when a chat exists.
+      parameters:
+        - name: task_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Chats
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatList'
     post:
       tags: [Chats]
       summary: Create free-form chat
@@ -411,6 +668,11 @@ paths:
                 member_ids:
                   type: array
                   items: { type: string }
+                task_id:
+                  type: string
+                  description: |
+                    Optional. Reuses the chat already bound to that task instead of creating a second one.
+                    The caller must be the publisher or an executor. Fund still creates a chat if none exists.
       responses:
         '201':
           description: Created
@@ -418,7 +680,61 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Chat'
+  /chats/{chatId}:
+    get:
+      tags: [Chats]
+      summary: Chat metadata
+      operationId: getChat
+      description: Members only. Includes task_id when the chat is bound to a task.
+      parameters:
+        - name: chatId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Chat
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Chat'
+        '403':
+          description: Not a member
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /chats/{chatId}/messages:
+    get:
+      tags: [Chats]
+      summary: Message history
+      operationId: listMessages
+      description: |
+        Members only. Pages are oldest-to-newest. cursor continues forward in that same order.
+      parameters:
+        - name: chatId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - name: cursor
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Message page, oldest first
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageList'
+        '403':
+          description: Not a member
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
     post:
       tags: [Chats]
       summary: Send message
@@ -523,6 +839,9 @@ components:
         email:
           type: string
           description: Empty when the caller has no password account.
+        is_arbiter:
+          type: boolean
+          description: True when the caller is listed in Escrow.ArbiterUserIds.
     TaskKind:
       type: string
       enum: [exclusive, competitive, collaborative]
@@ -537,7 +856,7 @@ components:
       enum: [specific, criteria, open]
     EscrowEntryType:
       type: string
-      enum: [hold, release, refund, freeze]
+      enum: [hold, release, refund, freeze, unfreeze]
     WebhookEventType:
       type: string
       enum:
@@ -552,9 +871,15 @@ components:
         - task.settled
         - task.cancelled
         - task.executor_replaced
+        - task.revision_requested
+        - task.resolve_proposed
+        - task.arbitrated
+        - task.invited
+        - task.invite_declined
         - escrow.hold
         - escrow.release
         - escrow.refund
+        - escrow.unfreeze
         - chat.message.created
         - score.updated
     MoneyAmount:
@@ -628,7 +953,12 @@ components:
             settled means that seat's share was released to its executor.
             refunded means that share was returned to the publisher.
             Dropout replace sets the seat back to open. It does not stay dropped.
-          enum: [open, filled, dropped, submitted, settled, refunded]
+            disputed means a per_seat dispute froze this seat's share. refund_deadline is when an open per_seat seat auto-refunds.
+          enum: [open, filled, dropped, submitted, settled, refunded, disputed]
+        refund_deadline:
+          type: [string, 'null']
+          format: date-time
+          description: Present on an open per_seat seat. min(opened_at + SeatTimeout, acceptance.deadline).
     TaskCreate:
       type: object
       required: [kind, title, description, payment, acceptance, assignee_policy]
@@ -662,6 +992,12 @@ components:
             review_hours:
               type: integer
               default: 72
+            max_revisions:
+              type: integer
+              minimum: 1
+              maximum: 20
+              default: 3
+              description: How many times the publisher may request revision. Omitted means 3.
         assignee_policy: { $ref: '#/components/schemas/AssigneePolicy' }
         competitive:
           type: object
@@ -713,6 +1049,34 @@ components:
               items: { type: string }
             winning_submission_id: { type: [string, 'null'] }
             review_deadline: { type: [string, 'null'], format: date-time }
+            open_deadline:
+              type: [string, 'null']
+              format: date-time
+              description: When an open exclusive, unaccepted competitive, or not-yet-full unified task auto-cancels.
+            start_deadline:
+              type: [string, 'null']
+              format: date-time
+              description: When a fully seated unified task still waiting for start auto-cancels.
+            winner_select_deadline:
+              type: [string, 'null']
+              format: date-time
+              description: When a competitive task with more than one current submission refunds if no winner is confirmed.
+            chat_id: { type: [string, 'null'] }
+            cancel_reason: { type: [string, 'null'] }
+            cancel_code:
+              type: [string, 'null']
+              description: Machine reason when a timeout cancelled the task. open_timeout, start_timeout, or winner_select_timeout.
+            cancelled_at: { type: [string, 'null'], format: date-time }
+            dispute_role_id:
+              type: [string, 'null']
+              description: Set while a per_seat dispute freezes one seat. Empty for a task-level freeze.
+            resolve_proposals:
+              type: array
+              items: { $ref: '#/components/schemas/ResolveProposal' }
+            submissions:
+              type: array
+              description: Current and superseded deliveries, oldest first. Clients pick a competitive winner from this list.
+              items: { $ref: '#/components/schemas/Submission' }
             escrow:
               $ref: '#/components/schemas/EscrowAccount'
             created_at: { type: string, format: date-time }
@@ -734,11 +1098,97 @@ components:
           type: object
           additionalProperties: true
         note: { type: string }
+    Submission:
+      type: object
+      required: [id, executor_id, payload, status, created_at]
+      properties:
+        id: { type: string }
+        executor_id: { type: string }
+        role_id: { type: [string, 'null'] }
+        milestone_id: { type: [string, 'null'] }
+        payload:
+          type: object
+          additionalProperties: true
+        note: { type: string }
+        status:
+          type: string
+          enum: [current, superseded]
+        created_at: { type: string, format: date-time }
+    SplitLine:
+      type: object
+      required: [user_id]
+      properties:
+        user_id: { type: string }
+        amount: { $ref: '#/components/schemas/MoneyAmount' }
+        share_bps: { type: integer, minimum: 0, maximum: 10000 }
+    Resolution:
+      type: object
+      required: [outcome]
+      properties:
+        outcome:
+          type: string
+          enum: [pay_executor, refund_publisher, split]
+        reason: { type: string }
+        role_id: { type: string }
+        submission_id: { type: string }
+        splits:
+          type: array
+          items: { $ref: '#/components/schemas/SplitLine' }
+    ResolveProposal:
+      type: object
+      required: [user_id, side, outcome, created_at]
+      properties:
+        user_id: { type: string }
+        side: { type: string, enum: [publisher, executor] }
+        outcome: { type: string, enum: [pay_executor, refund_publisher, split] }
+        reason: { type: string }
+        role_id: { type: string }
+        submission_id: { type: string }
+        splits:
+          type: array
+          items: { $ref: '#/components/schemas/SplitLine' }
+        created_at: { type: string, format: date-time }
+    Invite:
+      type: object
+      required: [id, task_id, user_id, status, created_at, updated_at]
+      properties:
+        id: { type: string }
+        task_id: { type: string }
+        user_id: { type: string }
+        status: { type: string, enum: [pending, accepted, declined] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    InviteList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Invite' }
+    ChatList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Chat' }
+    MessageList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Message' }
+        next_cursor: { type: [string, 'null'] }
     EscrowAccount:
       type: object
       properties:
         id: { type: string }
         held: { $ref: '#/components/schemas/MoneyAmount' }
+        frozen:
+          type: integer
+          minimum: 0
+          description: Amount locked by an open dispute. Per-seat disputes freeze only that seat's share.
         currency:
           type: string
           default: credits

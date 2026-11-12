@@ -23,9 +23,24 @@ func RegisterHandlers(server *rest.Server, serverCtx *svc.ServiceContext) {
 			[]rest.Middleware{serverCtx.Auth},
 			[]rest.Route{
 				{
+					Method:  http.MethodGet,
+					Path:    "/chats",
+					Handler: chat.ListChatsHandler(serverCtx),
+				},
+				{
 					Method:  http.MethodPost,
 					Path:    "/chats",
 					Handler: chat.CreateChatHandler(serverCtx),
+				},
+				{
+					Method:  http.MethodGet,
+					Path:    "/chats/:chatId",
+					Handler: chat.GetChatHandler(serverCtx),
+				},
+				{
+					Method:  http.MethodGet,
+					Path:    "/chats/:chatId/messages",
+					Handler: chat.ListMessagesHandler(serverCtx),
 				},
 				{
 					Method:  http.MethodPost,
@@ -89,6 +104,16 @@ func RegisterHandlers(server *rest.Server, serverCtx *svc.ServiceContext) {
 				},
 				{
 					Method:  http.MethodPost,
+					Path:    "/tasks/:taskId/arbitrate",
+					Handler: task.ArbitrateTaskHandler(serverCtx),
+				},
+				{
+					Method:  http.MethodPost,
+					Path:    "/tasks/:taskId/cancel",
+					Handler: task.CancelTaskHandler(serverCtx),
+				},
+				{
+					Method:  http.MethodPost,
 					Path:    "/tasks/:taskId/start",
 					Handler: task.StartTaskHandler(serverCtx),
 				},
@@ -113,6 +138,26 @@ func RegisterHandlers(server *rest.Server, serverCtx *svc.ServiceContext) {
 					Handler: task.FundTaskHandler(serverCtx),
 				},
 				{
+					Method:  http.MethodGet,
+					Path:    "/tasks/:taskId/invites",
+					Handler: task.ListTaskInvitesHandler(serverCtx),
+				},
+				{
+					Method:  http.MethodPost,
+					Path:    "/tasks/:taskId/invites",
+					Handler: task.InviteTaskHandler(serverCtx),
+				},
+				{
+					Method:  http.MethodPost,
+					Path:    "/tasks/:taskId/resolve",
+					Handler: task.ResolveTaskHandler(serverCtx),
+				},
+				{
+					Method:  http.MethodPost,
+					Path:    "/tasks/:taskId/revise",
+					Handler: task.ReviseTaskHandler(serverCtx),
+				},
+				{
 					Method:  http.MethodPost,
 					Path:    "/tasks/:taskId/submit",
 					Handler: task.SubmitTaskHandler(serverCtx),
@@ -127,9 +172,19 @@ func RegisterHandlers(server *rest.Server, serverCtx *svc.ServiceContext) {
 			[]rest.Middleware{serverCtx.Auth},
 			[]rest.Route{
 				{
+					Method:  http.MethodPost,
+					Path:    "/invites/:inviteId/decline",
+					Handler: user.DeclineInviteHandler(serverCtx),
+				},
+				{
 					Method:  http.MethodGet,
 					Path:    "/me",
 					Handler: user.GetMeHandler(serverCtx),
+				},
+				{
+					Method:  http.MethodGet,
+					Path:    "/me/invites",
+					Handler: user.ListMyInvitesHandler(serverCtx),
 				},
 				{
 					Method:  http.MethodGet,

@@ -54,9 +54,17 @@ func NewServiceContext(c config.Config) (*ServiceContext, error) {
 		return nil, err
 	}
 	return &ServiceContext{
-		Config:   c,
-		Auth:     middleware.NewAuthMiddleware(c.Auth).Handle,
-		Engine:   engine.New(st, c.Escrow.Currency),
+		Config: c,
+		Auth:   middleware.NewAuthMiddleware(c.Auth).Handle,
+		Engine: engine.New(st, c.Escrow.Currency,
+			engine.WithTimeouts(engine.TimeoutConfig{
+				OpenTimeout:       c.AutoSettle.OpenTimeout,
+				StartTimeout:      c.AutoSettle.StartTimeout,
+				SeatTimeout:       c.AutoSettle.SeatTimeout,
+				WinnerSelectHours: c.AutoSettle.WinnerSelectHours,
+			}),
+			engine.WithArbiters(c.Escrow.ArbiterUserIds),
+		),
 		Accounts: account.New(st, c.Auth.JwtSecret, c.Auth.TokenTTL),
 		Store:    st,
 		Dispatcher: webhook.NewDispatcher(st, webhook.Config{

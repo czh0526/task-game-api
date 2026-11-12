@@ -23,6 +23,7 @@ export const ROLE_STATUS_LABEL: Record<string, string> = {
   submitted: "已提交",
   settled: "已拨付",
   refunded: "已退回",
+  disputed: "争议中",
 };
 
 export const SETTLEMENT_MODE_LABEL: Record<string, string> = {
@@ -35,6 +36,7 @@ export const ENTRY_LABEL: Record<string, string> = {
   release: "拨付",
   refund: "退回",
   freeze: "冻结",
+  unfreeze: "解冻",
 };
 
 export const PAYMENT_MODE_LABEL: Record<string, string> = {

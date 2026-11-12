@@ -22,7 +22,7 @@ export function DevIdentity() {
   return (
     <details className="dev-id">
       <summary>开发快捷身份</summary>
-      <p className="hint">发布者和执行者的开发密钥仍可用于本地冒烟。点角色会改回该角色的 API Key。</p>
+      <p className="hint">发布者、执行者和裁定者的开发密钥仍可用于本地冒烟。裁定者是 usr_arbiter（dev-arbiter-key），也可以 make token USER_ID=usr_arbiter。点角色会改回该角色的 API Key。</p>
       <div className="role-switch" role="group" aria-label="开发角色">
         {(Object.keys(PRESETS) as Role[]).map((role) => (
           <button

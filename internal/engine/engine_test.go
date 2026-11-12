@@ -133,7 +133,7 @@ func TestExclusiveHappyPath(t *testing.T) {
 		t.Fatalf("scores %+v err %v", scores, err)
 	}
 
-	page, err := eng.ListTasks(ctx, &types.ListTasksReq{Kind: model.KindExclusive, Status: model.StatusSettled, Limit: 10})
+	page, err := eng.ListTasks(ctx, "usr_publisher", &types.ListTasksReq{Kind: model.KindExclusive, Status: model.StatusSettled, Limit: 10})
 	if err != nil || len(page.Items) != 1 || page.NextCursor != nil {
 		t.Fatalf("list %+v err %v", page, err)
 	}

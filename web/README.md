@@ -41,6 +41,7 @@ npm run build
 | --- | --- | --- |
 | 发布者 | `dev-publisher-key` | `usr_publisher` |
 | 执行者 | `dev-executor-key` | `usr_executor` |
+| 裁定者 | `dev-arbiter-key` | `usr_arbiter` |
 
 展开后，两个角色按钮会写回对应的 API Key 和用户 id。Base URL、API Key、用户 id 都可以改。第二个执行者没有静态密钥时：
 
@@ -58,11 +59,11 @@ make token USER_ID=usr_extra
 | `taskgame.web.settings` | JSON：`baseUrl`、`role`、`authMode`（`apiKey` 或 `bearer`）、`apiKey`、`bearerToken`、`userId`、`email`。没有密钥也没有 JWT 时停在登录页 |
 | `taskgame.web.chats` | 本浏览器创建或记下的会话，以及 `postMessage` 返回的消息 |
 
-v0.1 没有列出会话或消息的接口。会话页只展示这份本地记录，方便两个角色在同一浏览器里对看。
+任务详情会读取绑定会话的历史（`GET /chats/{id}/messages`，页内从旧到新）。侧栏「邀请」列出 `GET /me/invites?status=pending`。任务列表的「可接任务」使用 `assignable=me`。创建页可以选择开放、能力门槛或指定人。
 
 ## 三条任务
 
-金额是模拟积分。创建页的报酬模式是 `one_shot`，承接策略是 `open`。
+金额是模拟积分。创建页的报酬模式是 `one_shot`。承接策略可选开放、能力门槛或指定人。任务详情会显示提交、下一步、截止时间、请对方修改、取消、协商和（裁定者登录时）裁定。分别结算的席位仍用「退回该席」和「确认拨付」。
 
 1. **exclusive**：发布者创建并注资，执行者接受、提交，发布者确认。确认体是 `{}`，结束后状态为 `settled`。
 2. **competitive**：`settlement_rule` 固定 `winner_take_all`。两个执行者都接受并提交后，发布者先不带 `submission_id` 确认。400 的 `message` 交给 SDK 的 `submissionIdsFromConfirmError`，页面按 `created_at` 顺序列出 id，选定后再确认。

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import {
   createIdempotencyKey,
+  type AssigneePolicy,
   type CollaborativeRole,
   type SettlementMode,
   type Task,
@@ -8,7 +9,7 @@ import {
   type TaskKind,
 } from "taskgame-client";
 import { useApp } from "../context";
-import { KIND_LABEL, SETTLEMENT_MODE_LABEL, formatError, parseIntStrict } from "../format";
+import { KIND_LABEL, SETTLEMENT_MODE_LABEL, formatError, parseIntStrict, validUserId } from "../format";
 import { href } from "../route";
 import { type ExpandedSeat, type RoleTemplate, SHARE_BPS_TOTAL, expandRoleTemplates, templatesFromSeats } from "../roles";
 import { PRESETS } from "../settings";
@@ -23,6 +24,9 @@ interface FormState {
   quality: string;
   reviewHours: string;
   slots: string;
+  policy: "open" | "specific" | "criteria";
+  policyUsers: string;
+  minAbility: string;
   settlementMode: SettlementMode;
   templates: RoleTemplate[];
   adjustShares: boolean;
@@ -47,6 +51,9 @@ export function CreateTask() {
     quality: "达到书面验收标准",
     reviewHours: "72",
     slots: "2",
+    policy: "open",
+    policyUsers: "",
+    minAbility: "0",
     settlementMode: "unified",
     templates: DEFAULT_TEMPLATES.map((template) => ({ ...template })),
     adjustShares: false,
@@ -201,9 +208,45 @@ export function CreateTask() {
         <Field label="验收标准 acceptance.quality">
           <input value={form.quality} maxLength={2000} onChange={(event) => patch({ quality: event.target.value })} required />
         </Field>
-        <p className="hint">
-          payment.mode = <code className="mono">one_shot</code>，assignee_policy.type = <code className="mono">open</code>
-        </p>
+        <fieldset>
+          <legend>谁可以接 assignee_policy</legend>
+          {(
+            [
+              ["open", "开放"],
+              ["criteria", "能力门槛"],
+              ["specific", "指定人"],
+            ] as const
+          ).map(([value, label]) => (
+            <label className="choice" key={value}>
+              <input
+                type="radio"
+                name="policy"
+                value={value}
+                checked={form.policy === value}
+                onChange={() => patch({ policy: value })}
+              />
+              <span>
+                {label} <span className="en">{value}</span>
+              </span>
+            </label>
+          ))}
+        </fieldset>
+        {form.policy === "specific" ? (
+          <Field label="指定用户 user_ids" hint="用逗号或空格分隔。注资后会给他们发邀请。">
+            <input
+              value={form.policyUsers}
+              spellCheck={false}
+              placeholder="usr_executor"
+              onChange={(event) => patch({ policyUsers: event.target.value })}
+            />
+          </Field>
+        ) : null}
+        {form.policy === "criteria" ? (
+          <Field label="最低能力分 min_ability" hint="接任务时能力分必须达到这个数。">
+            <input value={form.minAbility} inputMode="numeric" onChange={(event) => patch({ minAbility: event.target.value })} />
+          </Field>
+        ) : null}
+        <p className="hint">payment.mode = <code className="mono">one_shot</code></p>
 
         {form.kind === "competitive" ? (
           <div className="card">
@@ -444,7 +487,22 @@ function buildTask(form: FormState): TaskCreate | string {
   }
   const acceptance = { deadline, quality, review_hours: reviewHours };
   const payment = { mode: "one_shot" as const, amount };
-  const assignee_policy = { type: "open" as const };
+  let assignee_policy: AssigneePolicy;
+  if (form.policy === "specific") {
+    const userIds = form.policyUsers
+      .split(/[\s,]+/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+    if (userIds.length === 0) return "指定人需要至少一个用户 id";
+    if (userIds.some((id) => !validUserId(id))) return "user_ids 里有无效的用户 id";
+    assignee_policy = { type: "specific", user_ids: userIds };
+  } else if (form.policy === "criteria") {
+    const minAbility = parseIntStrict(form.minAbility);
+    if (minAbility === null || minAbility < 0) return "min_ability 需要是非负整数";
+    assignee_policy = { type: "criteria", min_ability: minAbility };
+  } else {
+    assignee_policy = { type: "open" };
+  }
   const common = { title, description, payment, acceptance, assignee_policy };
   if (form.kind === "exclusive") return { kind: "exclusive", ...common };
   if (form.kind === "competitive") {

@@ -166,7 +166,7 @@ func (r *userRepo) ListScoreEvents(ctx context.Context, userID string, limit int
 
 type taskRepo struct{ q querier }
 
-const taskCols = `id, kind, title, description, status, publisher_id, payment_mode, payment_amount, payment_conditions, milestones, acceptance_deadline, acceptance_quality, acceptance_constraints, review_hours, assignee_policy, competitive, collaborative, executor_ids, winning_submission_id, review_deadline, escrow_id, dispute_reason, created_at, updated_at`
+const taskCols = `id, kind, title, description, status, publisher_id, payment_mode, payment_amount, payment_conditions, milestones, acceptance_deadline, acceptance_quality, acceptance_constraints, review_hours, assignee_policy, competitive, collaborative, executor_ids, winning_submission_id, review_deadline, escrow_id, dispute_reason, cancel_reason, cancel_code, cancelled_at, chat_id, funded_at, start_deadline, winner_select_deadline, dispute_role_id, resolve_json, max_revisions, created_at, updated_at`
 
 func (r *taskRepo) Insert(ctx context.Context, t model.Task) error {
 	args, err := taskArgs(t)
@@ -217,6 +217,12 @@ func (r *taskRepo) List(ctx context.Context, f model.TaskFilter) ([]model.Task, 
 	if f.Status != "" {
 		q += ` AND status = ?`
 		args = append(args, f.Status)
+	}
+	if len(f.Statuses) > 0 {
+		q += ` AND status IN (` + placeholders(len(f.Statuses)) + `)`
+		for _, status := range f.Statuses {
+			args = append(args, status)
+		}
 	}
 	if f.Kind != "" {
 		q += ` AND kind = ?`
@@ -270,19 +276,23 @@ type scanner interface {
 func scanTask(s scanner) (model.Task, error) {
 	var t model.Task
 	var conditions, milestones, constraints, policy, executors, created, updated, deadline string
-	var competitive, collaborative, winning, review sql.NullString
-	var reviewHours int
+	var resolveJSON string
+	var competitive, collaborative, winning, review, cancelled, funded, startBy, winnerBy sql.NullString
+	var reviewHours, maxRevisions int
 	err := s.Scan(
 		&t.ID, &t.Kind, &t.Title, &t.Description, &t.Status, &t.PublisherID,
 		&t.Payment.Mode, &t.Payment.Amount, &conditions, &milestones,
 		&deadline, &t.Acceptance.Quality, &constraints, &reviewHours,
 		&policy, &competitive, &collaborative, &executors,
-		&winning, &review, &t.EscrowID, &t.DisputeReason, &created, &updated,
+		&winning, &review, &t.EscrowID, &t.DisputeReason,
+		&t.CancelReason, &t.CancelCode, &cancelled, &t.ChatID, &funded, &startBy, &winnerBy,
+		&t.DisputeRoleID, &resolveJSON, &maxRevisions, &created, &updated,
 	)
 	if err != nil {
 		return model.Task{}, err
 	}
 	t.Acceptance.ReviewHours = reviewHours
+	t.Acceptance.MaxRevisions = maxRevisions
 	t.Payment.Conditions, err = unmarshalSlice[string](conditions)
 	if err != nil {
 		return model.Task{}, err
@@ -337,6 +347,27 @@ func scanTask(s scanner) (model.Task, error) {
 		}
 		t.ReviewDeadline = &rt
 	}
+	t.CancelledAt, err = parseNullTime(cancelled)
+	if err != nil {
+		return model.Task{}, err
+	}
+	t.FundedAt, err = parseNullTime(funded)
+	if err != nil {
+		return model.Task{}, err
+	}
+	t.StartDeadline, err = parseNullTime(startBy)
+	if err != nil {
+		return model.Task{}, err
+	}
+	t.WinnerSelectDeadline, err = parseNullTime(winnerBy)
+	if err != nil {
+		return model.Task{}, err
+	}
+	if resolveJSON != "" && resolveJSON != "null" {
+		if err := json.Unmarshal([]byte(resolveJSON), &t.Resolve); err != nil {
+			return model.Task{}, err
+		}
+	}
 	t.CreatedAt, err = model.ParseTime(created)
 	if err != nil {
 		return model.Task{}, err
@@ -388,14 +419,42 @@ func taskArgs(t model.Task) ([]any, error) {
 	if t.ReviewDeadline != nil {
 		review = model.FormatTime(*t.ReviewDeadline)
 	}
+	resolveJSON, err := json.Marshal(t.Resolve)
+	if err != nil {
+		return nil, err
+	}
+	if string(resolveJSON) == "null" || string(resolveJSON) == "{}" {
+		resolveJSON = []byte("{}")
+	}
 	return []any{
 		t.ID, t.Kind, t.Title, t.Description, t.Status, t.PublisherID,
 		t.Payment.Mode, t.Payment.Amount, conditions, milestones,
 		model.FormatTime(t.Acceptance.Deadline), t.Acceptance.Quality, constraints, t.Acceptance.ReviewHours,
 		string(policy), competitive, collaborative, executors,
 		winning, review, t.EscrowID, t.DisputeReason,
+		t.CancelReason, t.CancelCode, formatNullTime(t.CancelledAt), t.ChatID,
+		formatNullTime(t.FundedAt), formatNullTime(t.StartDeadline), formatNullTime(t.WinnerSelectDeadline),
+		t.DisputeRoleID, string(resolveJSON), t.Acceptance.MaxRevisions,
 		model.FormatTime(t.CreatedAt), model.FormatTime(t.UpdatedAt),
 	}, nil
+}
+
+func formatNullTime(t *time.Time) any {
+	if t == nil || t.IsZero() {
+		return nil
+	}
+	return model.FormatTime(*t)
+}
+
+func parseNullTime(v sql.NullString) (*time.Time, error) {
+	if !v.Valid || v.String == "" {
+		return nil, nil
+	}
+	parsed, err := model.ParseTime(v.String)
+	if err != nil {
+		return nil, err
+	}
+	return &parsed, nil
 }
 
 func nilSlice(s []string) []string {
@@ -426,16 +485,35 @@ func (r *submissionRepo) Insert(ctx context.Context, s model.Submission) error {
 	if payload == "" {
 		payload = "{}"
 	}
+	status := s.Status
+	if status == "" {
+		status = model.SubmissionCurrent
+	}
 	_, err := r.q.ExecContext(ctx, `
-		INSERT INTO submissions (id, task_id, milestone_id, executor_id, payload, note, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		s.ID, s.TaskID, s.MilestoneID, s.ExecutorID, payload, s.Note, model.FormatTime(s.CreatedAt))
+		INSERT INTO submissions (id, task_id, milestone_id, executor_id, payload, note, role_id, status, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		s.ID, s.TaskID, s.MilestoneID, s.ExecutorID, payload, s.Note, s.RoleID, status, model.FormatTime(s.CreatedAt))
 	return err
+}
+
+func (r *submissionRepo) MarkStatus(ctx context.Context, id, status string) error {
+	res, err := r.q.ExecContext(ctx, `UPDATE submissions SET status = ? WHERE id = ?`, status, id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return store.ErrNotFound
+	}
+	return nil
 }
 
 func (r *submissionRepo) ListByTask(ctx context.Context, taskID string) ([]model.Submission, error) {
 	rows, err := r.q.QueryContext(ctx, `
-		SELECT id, task_id, milestone_id, executor_id, payload, note, created_at
+		SELECT id, task_id, milestone_id, executor_id, payload, note, role_id, status, created_at
 		FROM submissions WHERE task_id = ? ORDER BY created_at ASC, id ASC`, taskID)
 	if err != nil {
 		return nil, err
@@ -445,8 +523,11 @@ func (r *submissionRepo) ListByTask(ctx context.Context, taskID string) ([]model
 	for rows.Next() {
 		var s model.Submission
 		var payload, created string
-		if err := rows.Scan(&s.ID, &s.TaskID, &s.MilestoneID, &s.ExecutorID, &payload, &s.Note, &created); err != nil {
+		if err := rows.Scan(&s.ID, &s.TaskID, &s.MilestoneID, &s.ExecutorID, &payload, &s.Note, &s.RoleID, &s.Status, &created); err != nil {
 			return nil, err
+		}
+		if s.Status == "" {
+			s.Status = model.SubmissionCurrent
 		}
 		s.Payload = json.RawMessage(payload)
 		s.CreatedAt, err = model.ParseTime(created)
@@ -637,15 +718,60 @@ func (r *chatRepo) InsertChat(ctx context.Context, c model.Chat) error {
 	return err
 }
 
+func (r *chatRepo) UpdateChat(ctx context.Context, c model.Chat) error {
+	members, err := jsonText(nilSlice(c.MemberIDs))
+	if err != nil {
+		return err
+	}
+	res, err := r.q.ExecContext(ctx, `UPDATE chats SET task_id = ?, member_ids = ? WHERE id = ?`, nullString(c.TaskID), members, c.ID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+func (r *chatRepo) ListByTask(ctx context.Context, taskID string) ([]model.Chat, error) {
+	rows, err := r.q.QueryContext(ctx, `
+		SELECT id, task_id, member_ids, created_at FROM chats WHERE task_id = ? ORDER BY created_at ASC, id ASC`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.Chat
+	for rows.Next() {
+		c, err := scanChat(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	if out == nil {
+		out = []model.Chat{}
+	}
+	return out, rows.Err()
+}
+
 func (r *chatRepo) GetChat(ctx context.Context, id string) (model.Chat, error) {
-	var c model.Chat
-	var taskID sql.NullString
-	var members, created string
-	err := r.q.QueryRowContext(ctx, `SELECT id, task_id, member_ids, created_at FROM chats WHERE id = ?`, id).
-		Scan(&c.ID, &taskID, &members, &created)
+	row := r.q.QueryRowContext(ctx, `SELECT id, task_id, member_ids, created_at FROM chats WHERE id = ?`, id)
+	c, err := scanChat(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Chat{}, store.ErrNotFound
 	}
+	return c, err
+}
+
+func scanChat(s scanner) (model.Chat, error) {
+	var c model.Chat
+	var taskID sql.NullString
+	var members, created string
+	err := s.Scan(&c.ID, &taskID, &members, &created)
 	if err != nil {
 		return model.Chat{}, err
 	}
@@ -666,6 +792,132 @@ func (r *chatRepo) InsertMessage(ctx context.Context, m model.Message) error {
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		m.ID, m.ChatID, m.SenderID, m.Type, m.Text, m.AttachmentRef, model.FormatTime(m.CreatedAt))
 	return err
+}
+
+func (r *chatRepo) ListMessages(ctx context.Context, chatID string, limit, offset int) ([]model.Message, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := r.q.QueryContext(ctx, `
+		SELECT id, chat_id, sender_id, type, text, attachment_ref, created_at
+		FROM messages WHERE chat_id = ? ORDER BY created_at ASC, rowid ASC LIMIT ? OFFSET ?`,
+		chatID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.Message
+	for rows.Next() {
+		var m model.Message
+		var created string
+		if err := rows.Scan(&m.ID, &m.ChatID, &m.SenderID, &m.Type, &m.Text, &m.AttachmentRef, &created); err != nil {
+			return nil, err
+		}
+		m.CreatedAt, err = model.ParseTime(created)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	if out == nil {
+		out = []model.Message{}
+	}
+	return out, rows.Err()
+}
+
+type inviteRepo struct{ q querier }
+
+func (r *inviteRepo) Upsert(ctx context.Context, inv model.Invite) error {
+	_, err := r.q.ExecContext(ctx, `
+		INSERT INTO invites (id, task_id, user_id, status, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(task_id, user_id) DO UPDATE SET status = excluded.status, updated_at = excluded.updated_at`,
+		inv.ID, inv.TaskID, inv.UserID, inv.Status, model.FormatTime(inv.CreatedAt), model.FormatTime(inv.UpdatedAt))
+	return err
+}
+
+func (r *inviteRepo) Update(ctx context.Context, inv model.Invite) error {
+	res, err := r.q.ExecContext(ctx, `UPDATE invites SET status = ?, updated_at = ? WHERE id = ?`,
+		inv.Status, model.FormatTime(inv.UpdatedAt), inv.ID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+func (r *inviteRepo) Get(ctx context.Context, id string) (model.Invite, error) {
+	row := r.q.QueryRowContext(ctx, `SELECT id, task_id, user_id, status, created_at, updated_at FROM invites WHERE id = ?`, id)
+	inv, err := scanInvite(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.Invite{}, store.ErrNotFound
+	}
+	return inv, err
+}
+
+func (r *inviteRepo) Find(ctx context.Context, taskID, userID string) (model.Invite, error) {
+	row := r.q.QueryRowContext(ctx, `
+		SELECT id, task_id, user_id, status, created_at, updated_at FROM invites WHERE task_id = ? AND user_id = ?`, taskID, userID)
+	inv, err := scanInvite(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.Invite{}, store.ErrNotFound
+	}
+	return inv, err
+}
+
+func (r *inviteRepo) ListByTask(ctx context.Context, taskID string) ([]model.Invite, error) {
+	return r.listInvites(ctx, `SELECT id, task_id, user_id, status, created_at, updated_at FROM invites WHERE task_id = ? ORDER BY created_at ASC, id ASC`, taskID)
+}
+
+func (r *inviteRepo) ListByUser(ctx context.Context, userID, status string) ([]model.Invite, error) {
+	if status == "" {
+		return r.listInvites(ctx, `SELECT id, task_id, user_id, status, created_at, updated_at FROM invites WHERE user_id = ? ORDER BY created_at DESC, id DESC`, userID)
+	}
+	return r.listInvites(ctx, `SELECT id, task_id, user_id, status, created_at, updated_at FROM invites WHERE user_id = ? AND status = ? ORDER BY created_at DESC, id DESC`, userID, status)
+}
+
+func (r *inviteRepo) listInvites(ctx context.Context, query string, args ...any) ([]model.Invite, error) {
+	rows, err := r.q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.Invite
+	for rows.Next() {
+		inv, err := scanInvite(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, inv)
+	}
+	if out == nil {
+		out = []model.Invite{}
+	}
+	return out, rows.Err()
+}
+
+func scanInvite(s scanner) (model.Invite, error) {
+	var inv model.Invite
+	var created, updated string
+	if err := s.Scan(&inv.ID, &inv.TaskID, &inv.UserID, &inv.Status, &created, &updated); err != nil {
+		return model.Invite{}, err
+	}
+	var err error
+	inv.CreatedAt, err = model.ParseTime(created)
+	if err != nil {
+		return model.Invite{}, err
+	}
+	inv.UpdatedAt, err = model.ParseTime(updated)
+	if err != nil {
+		return model.Invite{}, err
+	}
+	return inv, nil
 }
 
 type idemRepo struct{ q querier }
