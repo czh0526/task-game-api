@@ -288,7 +288,35 @@ describe("protocol calls", () => {
     assert.deepEqual(JSON.parse(calls[3]?.body ?? ""), { role_id: "design" });
     assert.equal(calls[4]?.url, "http://127.0.0.1:8891/v1/webhooks");
     assert.equal(calls[5]?.url, "http://127.0.0.1:8891/v1/chats");
+    assert.deepEqual(JSON.parse(calls[5]?.body ?? ""), { member_ids: ["usr_executor"] });
     assert.equal(calls[6]?.url, "http://127.0.0.1:8891/v1/chats/cht_1/messages");
+  });
+
+  it("posts a direct chat as type and user_id", async () => {
+    const calls: Captured[] = [];
+    const client = new TaskGameClient({
+      baseUrl: "http://127.0.0.1:8891",
+      apiKey: "dev-publisher-key",
+      fetch: (url, init) => {
+        calls.push({ url, method: init.method, headers: init.headers, body: init.body });
+        return Promise.resolve(
+          jsonResponse(201, {
+            id: "cht_direct",
+            type: "direct",
+            member_ids: ["usr_executor", "usr_publisher"],
+          }),
+        );
+      },
+    });
+    const chat = await client.createChat(
+      { type: "direct", user_id: "usr_executor" },
+      { idempotencyKey: "direct-1" },
+    );
+    assert.equal(chat.id, "cht_direct");
+    assert.equal(chat.type, "direct");
+    assert.equal(calls[0]?.url, "http://127.0.0.1:8891/v1/chats");
+    assert.equal(calls[0]?.headers["Idempotency-Key"], "direct-1");
+    assert.deepEqual(JSON.parse(calls[0]?.body ?? ""), { type: "direct", user_id: "usr_executor" });
   });
 
   it("refuses Idempotency-Key on operations that do not declare it", async () => {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createIdempotencyKey,
   type Friend,
@@ -26,6 +26,7 @@ export function Friends() {
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
+  const opening = useRef(false);
 
   const reload = useCallback(
     async (signal?: AbortSignal) => {
@@ -72,6 +73,33 @@ export function Friends() {
     }
   }
 
+  async function openConversation(friend: Friend) {
+    if (!client || opening.current || pending !== null) return;
+    opening.current = true;
+    setPending(`chat-${friend.user_id}`);
+    setError(null);
+    setNote(null);
+    try {
+      const chat = await client.createChat(
+        { type: "direct", user_id: friend.user_id },
+        { idempotencyKey: createIdempotencyKey("direct-chat") },
+      );
+      const url = new URL(window.location.href);
+      url.hash = `/chat/${encodeURIComponent(chat.id)}`;
+      const tab = window.open(url.toString(), "_blank");
+      if (tab) {
+        tab.opener = null;
+      } else {
+        setNote("浏览器拦截了新标签。请允许本站弹出窗口后再双击一次。");
+      }
+    } catch (err) {
+      setError(formatError(err));
+    } finally {
+      opening.current = false;
+      setPending(null);
+    }
+  }
+
   if (!client) {
     return (
       <Screen title="好友">
@@ -85,7 +113,7 @@ export function Friends() {
   return (
     <Screen
       title="好友"
-      lede="好友是双方的关系。对方接受之后，两边的列表都会出现彼此。分组只属于你自己，对方看不到你把他们放在哪一组。一个人最多在一个分组里，也可以先不分组。"
+      lede="好友是双方的关系。对方接受之后，两边的列表都会出现彼此。分组只属于你自己，对方看不到你把他们放在哪一组。一个人最多在一个分组里，也可以先不分组。双击一位好友，或点「发消息」，会在新的浏览器标签里打开你们的一对一会话。已经有过会话就打开原来的那条。"
     >
       <ErrorNote message={error} />
       <OkNote message={note} />
@@ -299,6 +327,7 @@ export function Friends() {
         groups={groups}
         currentGroupId=""
         pending={pending}
+        onMessage={(friend) => void openConversation(friend)}
         onMove={(friend, groupId) =>
           void run(`move-${friend.user_id}`, async () => {
             await client.setFriendGroup(
@@ -324,6 +353,7 @@ export function Friends() {
           groups={groups}
           currentGroupId={group.id}
           pending={pending}
+          onMessage={(friend) => void openConversation(friend)}
           onMove={(friend, groupId) =>
             void run(`move-${friend.user_id}`, async () => {
               await client.setFriendGroup(
@@ -352,6 +382,7 @@ function FriendSection({
   groups,
   currentGroupId,
   pending,
+  onMessage,
   onMove,
   onUnfriend,
 }: {
@@ -360,6 +391,7 @@ function FriendSection({
   groups: FriendGroup[];
   currentGroupId: string;
   pending: string | null;
+  onMessage: (friend: Friend) => void;
   onMove: (friend: Friend, groupId: string) => void;
   onUnfriend: (friend: Friend) => void;
 }) {
@@ -369,16 +401,36 @@ function FriendSection({
       {friends.length === 0 ? <p className="empty">这里还没有好友。</p> : null}
       <ul className="plain">
         {friends.map((friend) => (
-          <li key={friend.user_id} className="friend-row">
-            <div>
+          <li
+            key={friend.user_id}
+            className="friend-row"
+            title="双击打开和这位好友的会话"
+            onDoubleClick={(event) => {
+              const target = event.target;
+              if (!(target instanceof Element)) return;
+              if (target.closest("button, select, input, textarea, a, label")) return;
+              onMessage(friend);
+            }}
+          >
+            <div className="friend-identity">
               <code className="mono">{friend.user_id}</code>
               <p className="meta">
                 <span>诚信 {friend.integrity}</span>
                 <span>能力 {friend.ability}</span>
                 <span>{formatTime(friend.since)}</span>
+                <span>双击发消息</span>
               </p>
             </div>
             <div className="friend-actions">
+              <Button
+                type="button"
+                kind="primary"
+                pending={pending === `chat-${friend.user_id}`}
+                disabled={pending !== null}
+                onClick={() => onMessage(friend)}
+              >
+                发消息
+              </Button>
               <label className="inline">
                 <span className="hint">分组</span>
                 <select

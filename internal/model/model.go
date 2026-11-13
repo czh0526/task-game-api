@@ -121,6 +121,7 @@ const (
 	EventEscrowRelease         = "escrow.release"
 	EventEscrowRefund          = "escrow.refund"
 	EventEscrowUnfreeze        = "escrow.unfreeze"
+	EventChatCreated           = "chat.created"
 	EventChatMessageCreated    = "chat.message.created"
 	EventScoreUpdated          = "score.updated"
 	EventFriendRequested       = "friend.requested"
@@ -151,6 +152,7 @@ var WebhookEventTypes = map[string]struct{}{
 	EventEscrowRelease:         {},
 	EventEscrowRefund:          {},
 	EventEscrowUnfreeze:        {},
+	EventChatCreated:           {},
 	EventChatMessageCreated:    {},
 	EventScoreUpdated:          {},
 	EventFriendRequested:       {},
@@ -345,9 +347,18 @@ type Delivery struct {
 	CreatedAt time.Time
 }
 
+const (
+	ChatTask   = "task"
+	ChatDirect = "direct"
+	ChatGroup  = "group"
+)
+
 type Chat struct {
 	ID        string
 	TaskID    string
+	Type      string
+	PairLow   string
+	PairHigh  string
 	MemberIDs []string
 	CreatedAt time.Time
 }

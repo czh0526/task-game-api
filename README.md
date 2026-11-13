@@ -20,6 +20,7 @@ Credits are simulated. There is no payment provider. Locked v0.1 rules:
 - open / start / seat timeouts default to 72h on the same ticker. `open_deadline`, `start_deadline`, `winner_select_deadline`, and per-seat `refund_deadline` are on the task. An accepted task with no current submission cancels at `acceptance.deadline`
 - `assignee_policy` is enforced on accept. `specific` allows listed users or a pending invite; a declined invite blocks until re-invited. `GET /tasks?assignable=me` lists tasks the caller can accept. `GET /me/invites` is the inbox. Friendship does not change who can accept a task
 - mutual friends: `POST /friends/requests`. Already friends, or your own pending request, is 409. If the other user already asked you, that call accepts their request (200) instead of creating a second one. Groups are personal (50 per user, name 1–32 characters, a friend is in at most one). Unfriend clears both sides. Events `friend.requested`, `friend.accepted`, `friend.declined`, `friend.removed` go to the other party's webhooks
+- direct chats: `POST /chats` `{type: direct, user_id}` stores one thread per friend pair. Both people must already be friends. The first call inserts it and emits `chat.created`. A later call returns the same id (still 201). `Chat.type` is `task`, `direct`, or `group`. Unfriend does not remove members, so the thread stays readable and writable. Opening it again requires friendship and returns the original id. Task chats stay on the task.
 - mutating calls accept `Idempotency-Key`; the same key with a different body returns 409 `idempotency_conflict`
 - webhooks are queued and delivered with `X-Signature` (hex HMAC-SHA256 of the raw body) and `X-Event-Id`
 - auth is `Authorization: Bearer` (HS256 JWT) and/or `X-Api-Key`. `POST /v1/register` and `POST /v1/login` are public and issue that same JWT (`sub` is the new user id). Passwords are stored as bcrypt.
@@ -371,6 +372,8 @@ Creates (task, webhook, chat, message, friend group) return 201. A new friend re
 重复申请：已经是好友，或自己已经发出待处理申请，返回 409，不插入第二行。如果对方已经有一条指向自己的待处理申请，`POST /friends/requests` 会接受那一条并返回 200 `status=accepted`，而不是再开一条。拒绝、撤回、解除好友之后可以重新申请。删除分组不会解除好友。解除好友会清掉双方对这一对的分组成员。
 
 好友卡片只有 `user_id`、`integrity`、`ability`、`since`，不含邮箱、余额和密码。Webhook `friend.requested`（发给接收方）、`friend.accepted` 和 `friend.declined`（发给申请方）、`friend.removed`（发给被解除的一方，`data.user_id` 是操作者）走现有的用户订阅和 HMAC 投递，不按任务过滤。撤回申请不发 webhook。
+
+一对一会话：`POST /v1/chats`，body 是 `{ "type": "direct", "user_id": "usr_…" }`。双方必须已经是好友，待处理申请不行。同一对用户只存一行，两边再调都返回同一个 `id`，HTTP 仍是 201，不会再插入。第一次创建时给双方发 `chat.created`。响应里的 `type` 用来区分：`task` 是任务会话（`GET /chats?task_id=` 里全是这种），`direct` 是好友一对一，`group` 是原来的 `member_ids` 自由会话（每次调用新开一行）。解除好友不会把人移出已有会话，历史还能读，也还能发消息。解除之后再调 `POST` 会 403；重新成为好友后再调，还是原来那条。任务会话仍由注资创建，从任务详情进入。
 
 | Method | Path | operationId |
 | --- | --- | --- |

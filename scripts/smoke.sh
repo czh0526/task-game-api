@@ -9,6 +9,7 @@
 #                   confirm waits for every seat. quantity=4 template total 10000.
 #                   per_seat: each role_id confirm releases only that share.
 #   friends:        two registered users request, accept, group, unfriend, request again.
+#                   direct chat: one thread per pair, non-friend 403, history survives unfriend.
 #
 # Start the API first, from the repo root:
 #   CGO_ENABLED=0 go run . -f etc/taskgame.yaml
@@ -141,6 +142,22 @@ elif op == "chat_bound":
 elif op == "members_include":
     if args[0] not in (doc.get("member_ids") or []):
         fail("missing member %s" % args[0])
+elif op == "chat_type":
+    if doc.get("type") != args[0]:
+        fail("chat type %s" % doc.get("type"))
+    if args[0] == "task" and not doc.get("task_id"):
+        fail("task chat missing task_id")
+    if args[0] != "task" and doc.get("task_id"):
+        fail("non-task chat has task_id %s" % doc.get("task_id"))
+elif op == "list_chat_type":
+    items = doc.get("items") or []
+    if not items:
+        fail("empty chat list")
+    for item in items:
+        if item.get("type") != args[0]:
+            fail("list chat type %s" % item.get("type"))
+        if args[0] == "task" and not item.get("task_id"):
+            fail("listed task chat missing task_id")
 elif op == "message_text":
     items = doc.get("items") or []
     texts = [m.get("text") for m in items]
@@ -531,6 +548,7 @@ run_exclusive() {
   echo "funded chat=${chat_id}"
   request GET "${BASE}/v1/chats/${chat_id}" key "$PUB_KEY"
   expect_code 200 "publisher reads bound chat"
+  check "$RESP_BODY" chat_type task
   request GET "${BASE}/v1/chats/${chat_id}/messages" key "$PUB_KEY"
   expect_code 200 "empty chat history"
   request POST "${BASE}/v1/chats/${chat_id}/messages" key "$PUB_KEY" '{"type":"text","text":"funded"}' "msg-${idem}"
@@ -540,6 +558,7 @@ run_exclusive() {
   check "$RESP_BODY" message_text funded
   request GET "${BASE}/v1/chats?task_id=${id}" key "$PUB_KEY"
   expect_code 200 "list task chats"
+  check "$RESP_BODY" list_chat_type task
 
   request POST "${BASE}/v1/tasks/${id}/accept" key "$EXE_KEY" '{}'
   expect_code 200 "exclusive accept"
@@ -566,6 +585,7 @@ run_exclusive() {
   expect_code 201 "webhook"
   request POST "${BASE}/v1/chats" key "$PUB_KEY" '{"member_ids":["usr_executor"]}'
   expect_code 201 "chat"
+  check "$RESP_BODY" chat_type group
   echo "exclusive ok task=${id}"
 }
 
@@ -930,7 +950,7 @@ register_user() {
 
 run_friends() {
   # Mutual friends and personal groups. Does not touch task acceptance.
-  local id_a tok_a id_b tok_b req_id group_id group_b
+  local id_a tok_a id_b tok_b id_c tok_c req_id group_id group_b direct_id again_id
   echo "== friends mutual request / groups =="
   register_user "friend-a-${STAMP}@example.com"
   id_a="$REG_ID"
@@ -956,6 +976,9 @@ run_friends() {
   check "$RESP_BODY" eq id "$req_id"
   request POST "${BASE}/v1/friends/requests" bearer "$tok_a" "{\"user_id\":\"${id_b}\"}"
   expect_code 409 "duplicate outgoing request"
+  request POST "${BASE}/v1/chats" bearer "$tok_a" "{\"type\":\"direct\",\"user_id\":\"${id_b}\"}"
+  expect_code 403 "pending request cannot open a direct chat"
+  check "$RESP_BODY" code forbidden
 
   request GET "${BASE}/v1/friend-requests?direction=incoming" bearer "$tok_b"
   expect_code 200 "incoming requests"
@@ -974,6 +997,37 @@ run_friends() {
   request GET "${BASE}/v1/friends" bearer "$tok_b"
   expect_code 200 "B friend list"
   check "$RESP_BODY" friend_in "$id_a" ungrouped
+
+  register_user "friend-c-${STAMP}@example.com"
+  id_c="$REG_ID"
+  tok_c="$REG_TOK"
+  request POST "${BASE}/v1/chats" bearer "$tok_a" "{\"type\":\"direct\",\"user_id\":\"${id_a}\"}"
+  expect_code 400 "cannot direct-chat yourself"
+  request POST "${BASE}/v1/chats" bearer "$tok_a" "{\"type\":\"direct\",\"user_id\":\"${id_c}\"}"
+  expect_code 403 "non-friend cannot open a direct chat"
+  request POST "${BASE}/v1/chats" bearer "$tok_a" "{\"type\":\"direct\",\"user_id\":\"${id_b}\"}" "direct-${STAMP}"
+  expect_code 201 "create direct chat"
+  check "$RESP_BODY" chat_type direct
+  check "$RESP_BODY" members_include "$id_a"
+  check "$RESP_BODY" members_include "$id_b"
+  direct_id="$(json_id "$RESP_BODY")"
+  request POST "${BASE}/v1/chats" bearer "$tok_a" "{\"type\":\"direct\",\"user_id\":\"${id_b}\"}" "direct-${STAMP}"
+  expect_code 201 "direct chat idempotent replay"
+  check "$RESP_BODY" eq id "$direct_id"
+  request POST "${BASE}/v1/chats" bearer "$tok_b" "{\"type\":\"direct\",\"user_id\":\"${id_a}\"}"
+  expect_code 201 "direct chat reused from the other side"
+  again_id="$(json_id "$RESP_BODY")"
+  if [[ "$again_id" != "$direct_id" ]]; then
+    echo "direct chat duplicated: ${again_id} vs ${direct_id}" >&2
+    exit 1
+  fi
+  request POST "${BASE}/v1/chats/${direct_id}/messages" bearer "$tok_a" '{"type":"text","text":"你好"}' "dmsg-${STAMP}"
+  expect_code 201 "direct chat message"
+  request GET "${BASE}/v1/chats/${direct_id}/messages" bearer "$tok_b"
+  expect_code 200 "direct chat history"
+  check "$RESP_BODY" message_text "你好"
+  request GET "${BASE}/v1/chats/${direct_id}" bearer "$tok_c"
+  expect_code 403 "stranger cannot read the direct chat"
 
   request POST "${BASE}/v1/friend-groups" bearer "$tok_a" '{"name":" 同事 "}' "grp-${STAMP}"
   expect_code 201 "create group"
@@ -1012,6 +1066,15 @@ run_friends() {
   request GET "${BASE}/v1/friends" bearer "$tok_b"
   expect_code 200 "B after unfriend"
   check "$RESP_BODY" no_friend "$id_a"
+  request GET "${BASE}/v1/chats/${direct_id}" bearer "$tok_a"
+  expect_code 200 "direct chat still readable after unfriend"
+  request GET "${BASE}/v1/chats/${direct_id}/messages" bearer "$tok_b"
+  expect_code 200 "direct history still readable after unfriend"
+  check "$RESP_BODY" message_text "你好"
+  request POST "${BASE}/v1/chats/${direct_id}/messages" bearer "$tok_b" '{"type":"text","text":"还在"}'
+  expect_code 201 "direct chat still accepts messages after unfriend"
+  request POST "${BASE}/v1/chats" bearer "$tok_a" "{\"type\":\"direct\",\"user_id\":\"${id_b}\"}"
+  expect_code 403 "unfriended pair cannot open a new direct chat"
 
   request POST "${BASE}/v1/friends/requests" bearer "$tok_b" "{\"user_id\":\"${id_a}\"}"
   expect_code 201 "request after unfriend"
@@ -1024,6 +1087,9 @@ run_friends() {
   request GET "${BASE}/v1/friends" bearer "$tok_a"
   expect_code 200 "friends again"
   check "$RESP_BODY" friend_in "$id_b" ungrouped
+  request POST "${BASE}/v1/chats" bearer "$tok_b" "{\"type\":\"direct\",\"user_id\":\"${id_a}\"}"
+  expect_code 201 "re-friending reuses the same direct chat"
+  check "$RESP_BODY" eq id "$direct_id"
 
   request DELETE "${BASE}/v1/friends/${id_a}" bearer "$tok_b"
   expect_code 200 "unfriend before decline path"

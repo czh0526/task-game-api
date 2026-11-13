@@ -65,6 +65,7 @@ export type WebhookEventType =
   | "escrow.release"
   | "escrow.refund"
   | "escrow.unfreeze"
+  | "chat.created"
   | "chat.message.created"
   | "score.updated"
   | "friend.requested"
@@ -338,13 +339,33 @@ export interface WebhookEnvelope<T = Record<string, unknown>> {
   data: T;
 }
 
-export interface ChatCreate {
+export type ChatType = "task" | "direct" | "group";
+
+/** Free-form chat. Each call inserts a new row. Optional task_id reuses the task thread. */
+export interface GroupChatCreate {
+  type?: "group";
   member_ids: string[];
   task_id?: string;
+  user_id?: never;
 }
+
+/**
+ * One 1:1 thread per friend pair. The first call creates it. A later call returns the same chat.
+ * Both users must already be friends.
+ */
+export interface DirectChatCreate {
+  type: "direct";
+  user_id: string;
+  member_ids?: never;
+  task_id?: never;
+}
+
+export type ChatCreate = GroupChatCreate | DirectChatCreate;
 
 export interface Chat {
   id: string;
+  /** task is bound to a task. direct is the friend pair. group is a free-form thread. */
+  type: ChatType;
   task_id?: string | null;
   member_ids: string[];
 }

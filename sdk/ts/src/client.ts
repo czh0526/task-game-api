@@ -386,7 +386,12 @@ export class TaskGameClient {
     );
   }
 
-  /** `POST /v1/chats` → 201 */
+  /**
+   * `POST /v1/chats` → 201.
+   * `{ member_ids }` creates a group chat (a new row each call).
+   * `{ type: "direct", user_id }` returns the pair's one friend chat, creating it the first time.
+   * A repeated direct call is still 201 and the same id.
+   */
   createChat(body: ChatCreate, options?: CallOptions): Promise<Chat> {
     return this.send("POST", `${this.apiBase}/chats`, options, body, true, "header");
   }

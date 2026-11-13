@@ -106,12 +106,6 @@ export function parseIntStrict(value: string): number | null {
   return number;
 }
 
-export function counterparty(userId: string): string {
-  if (userId === "usr_publisher") return "usr_executor";
-  if (userId === "usr_executor") return "usr_publisher";
-  return "usr_publisher";
-}
-
 const USER_ID = /^[A-Za-z0-9_.:@-]{1,128}$/;
 
 export function validUserId(value: string): boolean {

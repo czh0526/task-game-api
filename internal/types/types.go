@@ -25,6 +25,7 @@ type AssigneePolicy struct {
 
 type Chat struct {
 	Id        string   `json:"id"`
+	Type      string   `json:"type"`
 	TaskId    *string  `json:"task_id,optional"`
 	MemberIds []string `json:"member_ids"`
 }
@@ -66,7 +67,9 @@ type StartTaskReq struct {
 
 type CreateChatReq struct {
 	IdempotencyKey string   `header:"Idempotency-Key,optional" json:"-"`
-	MemberIds      []string `json:"member_ids"`
+	Type           string   `json:"type,optional"`
+	UserId         string   `json:"user_id,optional"`
+	MemberIds      []string `json:"member_ids,optional"`
 	TaskId         string   `json:"task_id,optional"`
 }
 
