@@ -95,6 +95,17 @@ type ChatRepo interface {
 	ListByTask(ctx context.Context, taskID string) ([]model.Chat, error)
 	InsertMessage(ctx context.Context, m model.Message) error
 	ListMessages(ctx context.Context, chatID string, limit, offset int) ([]model.Message, error)
+	// ListDirectUnreads is every direct chat this user is in. UnreadCount is
+	// messages from the peer after the user's cursor. Task and group chats are omitted.
+	ListDirectUnreads(ctx context.Context, userID string) ([]model.DirectUnread, error)
+	// MessageRowID is the insertion-order rowid of one message in the chat.
+	MessageRowID(ctx context.Context, chatID, messageID string) (int64, error)
+	// LatestMessageRow is the newest inserted message. ok is false when the chat is empty.
+	LatestMessageRow(ctx context.Context, chatID string) (rowid int64, messageID string, ok bool, err error)
+	// CountUnread is messages from other senders inserted after the user's cursor.
+	CountUnread(ctx context.Context, userID, chatID string) (int64, error)
+	// AdvanceRead moves the cursor forward to rowid. It does not move backward.
+	AdvanceRead(ctx context.Context, userID, chatID string, rowid int64, now time.Time) error
 }
 
 type InviteRepo interface {

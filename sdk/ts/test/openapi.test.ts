@@ -38,6 +38,7 @@ describe("OpenAPI parity", () => {
       "/chats",
       "/chats/{chatId}",
       "/chats/{chatId}/messages",
+      "/chats/{chatId}/read",
       "/friend-groups",
       "/friend-groups/{groupId}",
       "/friend-requests",

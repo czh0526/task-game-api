@@ -284,7 +284,72 @@ func (e *Engine) ListChats(ctx context.Context, userID, taskID string) (*types.C
 	return &types.ChatList{Items: items}, nil
 }
 
+// MarkChatRead advances the caller's cursor in one chat.
+//
+// With message_id, the cursor moves to that message and no further. Without it,
+// the cursor moves to the newest message currently stored. The cursor never
+// moves backward. Listing messages does not call this. Own messages are not
+// unread. No webhook is emitted: the cursor is private to the caller.
+// A repeated Idempotency-Key replays the first body and does not cover messages
+// that arrived after that first call.
+func (e *Engine) MarkChatRead(ctx context.Context, userID string, req *types.MarkChatReadReq) (*types.ChatRead, error) {
+	return call(e, ctx, userID, http.MethodPost, "/v1/chats/"+req.ChatId+"/read", req.IdempotencyKey, req, func(ctx context.Context, r store.Repos) (*types.ChatRead, error) {
+		if !id.ValidChatID(req.ChatId) {
+			return nil, biz.Invalid("chatId must match ^cht_")
+		}
+		chat, err := r.Chats().GetChat(ctx, req.ChatId)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, biz.NotFound("chat not found")
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !contains(chat.MemberIDs, userID) {
+			return nil, biz.Forbidden("only members can mark this chat read")
+		}
+		var rowid int64
+		var messageID string
+		target := trim(req.MessageId)
+		if target != "" {
+			rowid, err = r.Chats().MessageRowID(ctx, chat.ID, target)
+			if errors.Is(err, store.ErrNotFound) {
+				return nil, biz.Invalid("message_id is not in this chat")
+			}
+			if err != nil {
+				return nil, err
+			}
+			messageID = target
+		} else {
+			var ok bool
+			rowid, messageID, ok, err = r.Chats().LatestMessageRow(ctx, chat.ID)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				rowid = 0
+				messageID = ""
+			}
+		}
+		if rowid > 0 {
+			if err := r.Chats().AdvanceRead(ctx, userID, chat.ID, rowid, e.now()); err != nil {
+				return nil, err
+			}
+		}
+		unread, err := r.Chats().CountUnread(ctx, userID, chat.ID)
+		if err != nil {
+			return nil, err
+		}
+		out := &types.ChatRead{ChatId: chat.ID, UnreadCount: unread}
+		if messageID != "" {
+			through := messageID
+			out.ReadThroughMessageId = &through
+		}
+		return out, nil
+	})
+}
+
 // ListMessages returns one page of history, oldest first. Only members can read.
+// Reading history does not move the caller's read cursor.
 func (e *Engine) ListMessages(ctx context.Context, userID string, req *types.ListMessagesReq) (*types.MessageList, error) {
 	if !id.ValidChatID(req.ChatId) {
 		return nil, biz.Invalid("chatId must match ^cht_")

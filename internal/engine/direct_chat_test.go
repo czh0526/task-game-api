@@ -224,3 +224,222 @@ func TestDirectChatWebhookBody(t *testing.T) {
 		t.Fatalf("payload %+v", env)
 	}
 }
+
+func TestDirectUnread(t *testing.T) {
+	ctx := context.Background()
+	eng, st, clk := newEngine(t, 1_000_000)
+	ensureUsers(t, st, clk, "usr_a", "usr_b", "usr_c")
+	becomeFriends(t, eng, "usr_a", "usr_b")
+
+	card := friendCard(t, mustFriends(t, eng, "usr_b"), "usr_a")
+	if card.UnreadCount != 0 || card.DirectChatId != nil {
+		t.Fatalf("before a direct chat %+v", card)
+	}
+
+	chat, err := eng.CreateChat(ctx, "usr_a", &types.CreateChatReq{Type: model.ChatDirect, UserId: "usr_b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	card = friendCard(t, mustFriends(t, eng, "usr_b"), "usr_a")
+	if card.UnreadCount != 0 || card.DirectChatId == nil || *card.DirectChatId != chat.Id {
+		t.Fatalf("empty direct chat %+v", card)
+	}
+
+	first, err := eng.PostMessage(ctx, "usr_a", &types.PostMessageReq{ChatId: chat.Id, Type: "text", Text: "one"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := eng.PostMessage(ctx, "usr_a", &types.PostMessageReq{ChatId: chat.Id, Type: "text", Text: "two"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.ListMessages(ctx, "usr_b", &types.ListMessagesReq{ChatId: chat.Id}); err != nil {
+		t.Fatal(err)
+	}
+	card = friendCard(t, mustFriends(t, eng, "usr_b"), "usr_a")
+	if card.UnreadCount != 2 {
+		t.Fatalf("listing messages must not mark read, unread %d", card.UnreadCount)
+	}
+	sender := friendCard(t, mustFriends(t, eng, "usr_a"), "usr_b")
+	if sender.UnreadCount != 0 {
+		t.Fatalf("own messages are not unread: %d", sender.UnreadCount)
+	}
+
+	partial, err := eng.MarkChatRead(ctx, "usr_b", &types.MarkChatReadReq{ChatId: chat.Id, MessageId: first.Id})
+	if err != nil || partial.UnreadCount != 1 || partial.ReadThroughMessageId == nil || *partial.ReadThroughMessageId != first.Id {
+		t.Fatalf("partial read %+v %v", partial, err)
+	}
+	if _, err := eng.MarkChatRead(ctx, "usr_b", &types.MarkChatReadReq{ChatId: chat.Id, MessageId: "msg_other"}); codeOf(err) != "invalid_argument" {
+		t.Fatalf("foreign message id: %v", err)
+	}
+	card = friendCard(t, mustFriends(t, eng, "usr_b"), "usr_a")
+	if card.UnreadCount != 1 {
+		t.Fatalf("foreign message id moved the cursor: %d", card.UnreadCount)
+	}
+
+	group, err := eng.CreateChat(ctx, "usr_a", &types.CreateChatReq{MemberIds: []string{"usr_b"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.PostMessage(ctx, "usr_a", &types.PostMessageReq{ChatId: group.Id, Type: "text", Text: "group"}); err != nil {
+		t.Fatal(err)
+	}
+	task, err := eng.CreateTask(ctx, "usr_a", exclusiveReq(clk))
+	if err != nil {
+		t.Fatal(err)
+	}
+	funded, err := eng.FundTask(ctx, "usr_a", &types.FundTaskReq{TaskId: task.Id})
+	if err != nil || funded.ChatId == nil {
+		t.Fatalf("fund %+v %v", funded, err)
+	}
+	if _, err := eng.AcceptTask(ctx, "usr_b", &types.AcceptTaskReq{TaskId: task.Id}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.PostMessage(ctx, "usr_a", &types.PostMessageReq{ChatId: *funded.ChatId, Type: "text", Text: "task"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.MarkChatRead(ctx, "usr_b", &types.MarkChatReadReq{ChatId: *funded.ChatId}); err != nil {
+		t.Fatal(err)
+	}
+	card = friendCard(t, mustFriends(t, eng, "usr_b"), "usr_a")
+	if card.UnreadCount != 1 || card.DirectChatId == nil || *card.DirectChatId != chat.Id {
+		t.Fatalf("task and group chats changed the direct badge %+v", card)
+	}
+
+	if _, err := eng.MarkChatRead(ctx, "usr_c", &types.MarkChatReadReq{ChatId: chat.Id}); codeOf(err) != "forbidden" {
+		t.Fatalf("stranger mark: %v", err)
+	}
+	if _, err := eng.MarkChatRead(ctx, "usr_b", &types.MarkChatReadReq{ChatId: "nope"}); codeOf(err) != "invalid_argument" {
+		t.Fatalf("bad chat id: %v", err)
+	}
+	if _, err := eng.MarkChatRead(ctx, "usr_b", &types.MarkChatReadReq{ChatId: "cht_missing"}); codeOf(err) != "not_found" {
+		t.Fatalf("missing chat: %v", err)
+	}
+
+	before := pendingDeliveryCount(t, st)
+	cleared, err := eng.MarkChatRead(ctx, "usr_b", &types.MarkChatReadReq{ChatId: chat.Id, IdempotencyKey: "read-1"})
+	if err != nil || cleared.UnreadCount != 0 || cleared.ChatId != chat.Id || cleared.ReadThroughMessageId == nil || *cleared.ReadThroughMessageId != second.Id {
+		t.Fatalf("clear %+v %v", cleared, err)
+	}
+	if n := pendingDeliveryCount(t, st); n != before {
+		t.Fatalf("mark read emitted a webhook: %d -> %d", before, n)
+	}
+	reply, err := eng.PostMessage(ctx, "usr_a", &types.PostMessageReq{ChatId: chat.Id, Type: "text", Text: "three"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay, err := eng.MarkChatRead(ctx, "usr_b", &types.MarkChatReadReq{ChatId: chat.Id, IdempotencyKey: "read-1"})
+	if err != nil || replay.UnreadCount != 0 || replay.ReadThroughMessageId == nil || *replay.ReadThroughMessageId != second.Id {
+		t.Fatalf("replay %+v %v", replay, err)
+	}
+	card = friendCard(t, mustFriends(t, eng, "usr_b"), "usr_a")
+	if card.UnreadCount != 1 {
+		t.Fatalf("replay advanced the cursor: %d", card.UnreadCount)
+	}
+	again, err := eng.MarkChatRead(ctx, "usr_b", &types.MarkChatReadReq{ChatId: chat.Id, MessageId: reply.Id})
+	if err != nil || again.UnreadCount != 0 {
+		t.Fatalf("fresh mark %+v %v", again, err)
+	}
+	card = friendCard(t, mustFriends(t, eng, "usr_b"), "usr_a")
+	if card.UnreadCount != 0 {
+		t.Fatalf("after read %+v", card)
+	}
+
+	folder, err := eng.CreateFriendGroup(ctx, "usr_b", &types.CreateFriendGroupReq{Name: "同事"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.SetFriendGroup(ctx, "usr_b", &types.SetFriendGroupReq{UserId: "usr_a", GroupId: &folder.Id}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.PostMessage(ctx, "usr_a", &types.PostMessageReq{ChatId: chat.Id, Type: "text", Text: "four"}); err != nil {
+		t.Fatal(err)
+	}
+	grouped := mustFriends(t, eng, "usr_b")
+	if len(grouped.Ungrouped) != 0 || len(grouped.Groups) != 1 || len(grouped.Groups[0].Friends) != 1 {
+		t.Fatalf("group placement %+v", grouped)
+	}
+	if grouped.Groups[0].Friends[0].UnreadCount != 1 {
+		t.Fatalf("grouped unread %+v", grouped.Groups[0].Friends[0])
+	}
+
+	fromB, err := eng.PostMessage(ctx, "usr_b", &types.PostMessageReq{ChatId: chat.Id, Type: "text", Text: "reply"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	aCard := friendCard(t, mustFriends(t, eng, "usr_a"), "usr_b")
+	if aCard.UnreadCount != 1 {
+		t.Fatalf("A unread %d", aCard.UnreadCount)
+	}
+	bCard := friendCard(t, mustFriends(t, eng, "usr_b"), "usr_a")
+	if bCard.UnreadCount != 1 {
+		t.Fatalf("B still owes the previous incoming message: %d", bCard.UnreadCount)
+	}
+	if _, err := eng.MarkChatRead(ctx, "usr_a", &types.MarkChatReadReq{ChatId: chat.Id, MessageId: fromB.Id}); err != nil {
+		t.Fatal(err)
+	}
+	aCard = friendCard(t, mustFriends(t, eng, "usr_a"), "usr_b")
+	if aCard.UnreadCount != 0 {
+		t.Fatalf("A after read %+v", aCard)
+	}
+
+	if _, err := eng.Unfriend(ctx, "usr_a", &types.UnfriendReq{UserId: "usr_b"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := friendCardOK(mustFriends(t, eng, "usr_a"), "usr_b"); err == nil {
+		t.Fatal("unfriended user stayed on the list")
+	}
+	still, err := eng.MarkChatRead(ctx, "usr_b", &types.MarkChatReadReq{ChatId: chat.Id})
+	if err != nil || still.UnreadCount != 0 {
+		t.Fatalf("member can still mark read after unfriend %+v %v", still, err)
+	}
+}
+
+func mustFriends(t *testing.T, eng *Engine, userID string) *types.FriendList {
+	t.Helper()
+	list, err := eng.ListFriends(context.Background(), userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return list
+}
+
+func friendCard(t *testing.T, list *types.FriendList, userID string) types.Friend {
+	t.Helper()
+	card, err := friendCardOK(list, userID)
+	if err != nil {
+		t.Fatalf("friend %s missing", userID)
+	}
+	return card
+}
+
+func friendCardOK(list *types.FriendList, userID string) (types.Friend, error) {
+	for _, card := range list.Ungrouped {
+		if card.UserId == userID {
+			return card, nil
+		}
+	}
+	for _, group := range list.Groups {
+		for _, card := range group.Friends {
+			if card.UserId == userID {
+				return card, nil
+			}
+		}
+	}
+	return types.Friend{}, errNotFriend
+}
+
+var errNotFriend = errString("friend not on list")
+
+type errString string
+
+func (e errString) Error() string { return string(e) }
+
+func pendingDeliveryCount(t *testing.T, st store.Store) int {
+	t.Helper()
+	rows, err := st.Deliveries().ListPending(context.Background(), 5, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(rows)
+}

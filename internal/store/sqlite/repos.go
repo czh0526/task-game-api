@@ -832,6 +832,96 @@ func (r *chatRepo) InsertMessage(ctx context.Context, m model.Message) error {
 	return err
 }
 
+func (r *chatRepo) ListDirectUnreads(ctx context.Context, userID string) ([]model.DirectUnread, error) {
+	rows, err := r.q.QueryContext(ctx, `
+		SELECT c.id,
+		       CASE WHEN c.pair_low = ? THEN c.pair_high ELSE c.pair_low END,
+		       (
+		         SELECT COUNT(*) FROM messages m
+		         WHERE m.chat_id = c.id
+		           AND m.sender_id != ?
+		           AND m.rowid > COALESCE(
+		             (SELECT cr.last_read_rowid FROM chat_reads cr
+		              WHERE cr.user_id = ? AND cr.chat_id = c.id),
+		             0
+		           )
+		       )
+		FROM chats c
+		WHERE c.type = ? AND (c.pair_low = ? OR c.pair_high = ?)`,
+		userID, userID, userID, model.ChatDirect, userID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.DirectUnread
+	for rows.Next() {
+		var row model.DirectUnread
+		if err := rows.Scan(&row.ChatID, &row.PeerID, &row.UnreadCount); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	if out == nil {
+		out = []model.DirectUnread{}
+	}
+	return out, rows.Err()
+}
+
+func (r *chatRepo) MessageRowID(ctx context.Context, chatID, messageID string) (int64, error) {
+	var rowid int64
+	err := r.q.QueryRowContext(ctx, `
+		SELECT rowid FROM messages WHERE chat_id = ? AND id = ?`, chatID, messageID).Scan(&rowid)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, store.ErrNotFound
+	}
+	return rowid, err
+}
+
+func (r *chatRepo) LatestMessageRow(ctx context.Context, chatID string) (int64, string, bool, error) {
+	var rowid int64
+	var messageID string
+	err := r.q.QueryRowContext(ctx, `
+		SELECT rowid, id FROM messages WHERE chat_id = ? ORDER BY rowid DESC LIMIT 1`, chatID).Scan(&rowid, &messageID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, "", false, nil
+	}
+	if err != nil {
+		return 0, "", false, err
+	}
+	return rowid, messageID, true, nil
+}
+
+func (r *chatRepo) CountUnread(ctx context.Context, userID, chatID string) (int64, error) {
+	var n int64
+	err := r.q.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM messages m
+		WHERE m.chat_id = ?
+		  AND m.sender_id != ?
+		  AND m.rowid > COALESCE(
+		    (SELECT cr.last_read_rowid FROM chat_reads cr
+		     WHERE cr.user_id = ? AND cr.chat_id = ?),
+		    0
+		  )`, chatID, userID, userID, chatID).Scan(&n)
+	return n, err
+}
+
+func (r *chatRepo) AdvanceRead(ctx context.Context, userID, chatID string, rowid int64, now time.Time) error {
+	if rowid <= 0 {
+		return nil
+	}
+	_, err := r.q.ExecContext(ctx, `
+		INSERT INTO chat_reads (user_id, chat_id, last_read_rowid, updated_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(user_id, chat_id) DO UPDATE SET
+			last_read_rowid = MAX(chat_reads.last_read_rowid, excluded.last_read_rowid),
+			updated_at = CASE
+				WHEN excluded.last_read_rowid > chat_reads.last_read_rowid THEN excluded.updated_at
+				ELSE chat_reads.updated_at
+			END`,
+		userID, chatID, rowid, model.FormatTime(now))
+	return err
+}
+
 func (r *chatRepo) ListMessages(ctx context.Context, chatID string, limit, offset int) ([]model.Message, error) {
 	if limit <= 0 {
 		limit = 50

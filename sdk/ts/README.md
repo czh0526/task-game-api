@@ -87,7 +87,7 @@ try {
 
 Runnable exclusive path (matches `scripts/smoke.sh`): `npm run example:exclusive`.
 
-`listFriends`, `createFriendRequest`, `acceptFriendRequest`, `declineFriendRequest`, `cancelFriendRequest`, `unfriend`, and the `friend-groups` methods follow the friend routes in OpenAPI. A new request is HTTP 201. If the other user already has a pending request toward the caller, `createFriendRequest` returns 200 with `status: "accepted"`. `setFriendGroup(userId, { group_id: null })` moves that friend to the ungrouped bucket. Friend objects do not include email.
+`listFriends`, `createFriendRequest`, `acceptFriendRequest`, `declineFriendRequest`, `cancelFriendRequest`, `unfriend`, and the `friend-groups` methods follow the friend routes in OpenAPI. A new request is HTTP 201. If the other user already has a pending request toward the caller, `createFriendRequest` returns 200 with `status: "accepted"`. `setFriendGroup(userId, { group_id: null })` moves that friend to the ungrouped bucket. Friend objects do not include email. Each friend includes `unread_count` and `direct_chat_id` for that pair's direct chat only. `markChatRead(chatId)` moves the caller's cursor to the newest message. `markChatRead(chatId, { message_id })` stops at that message. Listing messages does not mark them read.
 
 `createChat({ type: "direct", user_id })` returns the one direct chat for that friend pair (201, same id on a later call). `createChat({ member_ids })` still creates a group chat. Chat responses include `type`: `task`, `direct`, or `group`.
 

@@ -8,6 +8,7 @@ import {
 } from "taskgame-client";
 import { useApp } from "../context";
 import { formatError, formatTime, isAbort, validUserId } from "../format";
+import { subscribeDirectRead } from "../readSync";
 import { Button, ErrorNote, Field, OkNote, Screen } from "../ui";
 
 interface GroupDraft {
@@ -15,8 +16,10 @@ interface GroupDraft {
   sort: string;
 }
 
+const FRIEND_POLL_MS = 5000;
+
 export function Friends() {
-  const { client, clientError } = useApp();
+  const { client, clientError, settings } = useApp();
   const [list, setList] = useState<FriendList | null>(null);
   const [incoming, setIncoming] = useState<FriendRequest[]>([]);
   const [outgoing, setOutgoing] = useState<FriendRequest[]>([]);
@@ -27,6 +30,7 @@ export function Friends() {
   const [note, setNote] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const opening = useRef(false);
+  const openedAt = useRef(0);
 
   const reload = useCallback(
     async (signal?: AbortSignal) => {
@@ -50,12 +54,31 @@ export function Friends() {
   useEffect(() => {
     if (!client) return;
     const ac = new AbortController();
-    reload(ac.signal).catch((err: unknown) => {
-      if (isAbort(err)) return;
-      setError(formatError(err));
-    });
-    return () => ac.abort();
-  }, [client, reload]);
+    const run = () => {
+      reload(ac.signal).catch((err: unknown) => {
+        if (isAbort(err)) return;
+        setError(formatError(err));
+      });
+    };
+    run();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      run();
+    }, FRIEND_POLL_MS);
+    const onShow = () => {
+      if (document.visibilityState === "visible") run();
+    };
+    document.addEventListener("visibilitychange", onShow);
+    window.addEventListener("focus", onShow);
+    const stop = subscribeDirectRead(settings.userId, run);
+    return () => {
+      ac.abort();
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onShow);
+      window.removeEventListener("focus", onShow);
+      stop();
+    };
+  }, [client, reload, settings.userId]);
 
   async function run(key: string, action: () => Promise<string | void>) {
     if (!client) return;
@@ -75,10 +98,14 @@ export function Friends() {
 
   async function openConversation(friend: Friend) {
     if (!client || opening.current || pending !== null) return;
+    if (Date.now() - openedAt.current < 600) return;
+    openedAt.current = Date.now();
     opening.current = true;
     setPending(`chat-${friend.user_id}`);
     setError(null);
     setNote(null);
+    const tab = window.open("", "_blank");
+    if (tab) tab.opener = null;
     try {
       const chat = await client.createChat(
         { type: "direct", user_id: friend.user_id },
@@ -86,13 +113,13 @@ export function Friends() {
       );
       const url = new URL(window.location.href);
       url.hash = `/chat/${encodeURIComponent(chat.id)}`;
-      const tab = window.open(url.toString(), "_blank");
-      if (tab) {
-        tab.opener = null;
+      if (tab && !tab.closed) {
+        tab.location.replace(url.toString());
       } else {
-        setNote("浏览器拦截了新标签。请允许本站弹出窗口后再双击一次。");
+        setNote("浏览器拦截了新标签。请允许本站弹出窗口后再点一次。");
       }
     } catch (err) {
+      if (tab && !tab.closed) tab.close();
       setError(formatError(err));
     } finally {
       opening.current = false;
@@ -113,7 +140,7 @@ export function Friends() {
   return (
     <Screen
       title="好友"
-      lede="好友是双方的关系。对方接受之后，两边的列表都会出现彼此。分组只属于你自己，对方看不到你把他们放在哪一组。一个人最多在一个分组里，也可以先不分组。双击一位好友，或点「发消息」，会在新的浏览器标签里打开你们的一对一会话。已经有过会话就打开原来的那条。"
+      lede="好友是双方的关系。对方接受之后，两边的列表都会出现彼此。分组只属于你自己，对方看不到你把他们放在哪一组。一个人最多在一个分组里，也可以先不分组。单击一位好友、未读数字，或「发消息」，会在新的浏览器标签里打开你们的一对一会话。已经有过会话就打开原来的那条。红色数字只统计对方在这一对会话里发来、你还没看过的消息，不含任务会话。看过之后数字会消失。"
     >
       <ErrorNote message={error} />
       <OkNote message={note} />
@@ -376,6 +403,23 @@ export function Friends() {
   );
 }
 
+function openLabel(friend: Friend): string {
+  if (friend.unread_count > 0) {
+    return `打开与 ${friend.user_id} 的会话，${friend.unread_count} 条未读`;
+  }
+  return `打开与 ${friend.user_id} 的会话`;
+}
+
+function UnreadBadge({ count }: { count: number }) {
+  if (!Number.isFinite(count) || count <= 0) return null;
+  const label = count > 99 ? "99+" : String(count);
+  return (
+    <span className="unread-badge" title={`${count} 条未读消息`}>
+      {label}
+    </span>
+  );
+}
+
 function FriendSection({
   title,
   friends,
@@ -404,7 +448,6 @@ function FriendSection({
           <li
             key={friend.user_id}
             className="friend-row"
-            title="双击打开和这位好友的会话"
             onDoubleClick={(event) => {
               const target = event.target;
               if (!(target instanceof Element)) return;
@@ -412,15 +455,24 @@ function FriendSection({
               onMessage(friend);
             }}
           >
-            <div className="friend-identity">
-              <code className="mono">{friend.user_id}</code>
+            <button
+              type="button"
+              className="friend-open"
+              disabled={pending !== null}
+              aria-label={openLabel(friend)}
+              onClick={() => onMessage(friend)}
+            >
+              <span className="friend-name">
+                <code className="mono">{friend.user_id}</code>
+                <UnreadBadge count={friend.unread_count} />
+              </span>
               <p className="meta">
                 <span>诚信 {friend.integrity}</span>
                 <span>能力 {friend.ability}</span>
                 <span>{formatTime(friend.since)}</span>
-                <span>双击发消息</span>
+                <span>单击进入会话</span>
               </p>
-            </div>
+            </button>
             <div className="friend-actions">
               <Button
                 type="button"

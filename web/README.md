@@ -58,7 +58,7 @@ make token USER_ID=usr_extra
 | `VITE_TASKGAME_BASE_URL` | 还没有保存过设置时，作为 Base URL 的初始值 |
 | `taskgame.web.settings` | JSON：`baseUrl`、`role`、`authMode`（`apiKey` 或 `bearer`）、`apiKey`、`bearerToken`、`userId`、`email`。没有密钥也没有 JWT 时停在登录页 |
 
-任务详情会读取绑定会话的历史（`GET /chats/{id}/messages`，页内从旧到新）。侧栏没有「会话」。侧栏「邀请」列出 `GET /me/invites?status=pending`。侧栏「好友」可以按用户 id 发申请、处理收到和发出的申请、建分组、改名、排序、删除分组，以及把好友移进分组或未分组。分组只在自己的列表里。双击一位好友，或点「发消息」，会先 `POST /chats` `{type: direct, user_id}`，再在新的浏览器标签打开 `#/chat/{chatId}`。已经有过一对一会话就打开原来的那条。单击不离开好友页。创建任务的指定人，和任务详情里的再邀请，都可以从好友列表点选用户 id。任务列表的「可接任务」使用 `assignable=me`。创建页可以选择开放、能力门槛或指定人。任务会话仍在任务详情里。
+任务详情会读取绑定会话的历史（`GET /chats/{id}/messages`，页内从旧到新）。侧栏没有「会话」。侧栏「邀请」列出 `GET /me/invites?status=pending`。侧栏「好友」可以按用户 id 发申请、处理收到和发出的申请、建分组、改名、排序、删除分组，以及把好友移进分组或未分组。分组只属于自己。单击一位好友、未读数字，或点「发消息」，会先 `POST /chats` `{type: direct, user_id}`，再在新的浏览器标签打开 `#/chat/{chatId}`。已经有过一对一会话就打开原来的那条。分组和解除好友仍是旁边的下拉和按钮。有未读时名字旁显示红色数字，只来自 `GET /friends` 的 `unread_count`（这一对的一对一会话）。打开会话并看到消息后会 `POST /chats/{chatId}/read`，好友页随即刷新，数字消失。好友列表大约每 5 秒刷新一次。创建任务的指定人，和任务详情里的再邀请，都可以从好友列表点选用户 id。任务列表的「可接任务」使用 `assignable=me`。创建页可以选择开放、能力门槛或指定人。任务会话仍在任务详情里。
 
 ## 三条任务
 

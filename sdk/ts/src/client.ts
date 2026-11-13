@@ -6,6 +6,8 @@ import type {
   Chat,
   ChatCreate,
   ChatList,
+  ChatRead,
+  MarkChatReadBody,
   ConfirmTaskBody,
   DisputeTaskBody,
   AuthSession,
@@ -394,6 +396,22 @@ export class TaskGameClient {
    */
   createChat(body: ChatCreate, options?: CallOptions): Promise<Chat> {
     return this.send("POST", `${this.apiBase}/chats`, options, body, true, "header");
+  }
+
+  /**
+   * `POST /v1/chats/{chatId}/read`.
+   * Moves the caller's cursor forward. Omit `message_id` to cover the newest message.
+   * Does not emit a webhook. A repeated idempotency key replays the first response.
+   */
+  markChatRead(chatId: string, body?: MarkChatReadBody, options?: CallOptions): Promise<ChatRead> {
+    return this.send(
+      "POST",
+      `${this.apiBase}/chats/${segment(chatId, "chatId")}/read`,
+      options,
+      body ?? {},
+      true,
+      "header",
+    );
   }
 
   /** `POST /v1/chats/{chatId}/messages` → 201 */

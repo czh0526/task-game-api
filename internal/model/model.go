@@ -363,6 +363,14 @@ type Chat struct {
 	CreatedAt time.Time
 }
 
+// DirectUnread is one direct thread the user belongs to, with how many
+// messages from the other member sit after this user's read cursor.
+type DirectUnread struct {
+	ChatID      string
+	PeerID      string
+	UnreadCount int64
+}
+
 type Invite struct {
 	ID        string
 	TaskID    string
