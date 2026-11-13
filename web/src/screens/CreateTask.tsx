@@ -11,6 +11,17 @@ import {
 import { useApp } from "../context";
 import { KIND_LABEL, SETTLEMENT_MODE_LABEL, formatError, parseIntStrict, validUserId } from "../format";
 import { FriendPicker, appendUserId } from "../friends";
+import {
+  EXAMPLE_MILESTONES,
+  MAX_MILESTONES,
+  buildPayment,
+  defaultMilestones,
+  evenMilestoneAmounts,
+  milestoneSumLabel,
+  nextMilestoneId,
+  remainderAmount,
+} from "../paymentForm";
+import type { MilestoneDraft, PaymentModeName } from "../paymentForm";
 import { href } from "../route";
 import { type ExpandedSeat, type RoleTemplate, SHARE_BPS_TOTAL, expandRoleTemplates, templatesFromSeats } from "../roles";
 import { PRESETS } from "../settings";
@@ -32,6 +43,8 @@ interface FormState {
   templates: RoleTemplate[];
   adjustShares: boolean;
   shareDrafts: string[];
+  paymentMode: PaymentModeName;
+  milestones: MilestoneDraft[];
 }
 
 const DEFAULT_TEMPLATES: RoleTemplate[] = [{ name: "设计", slug: "design", count: "4" }];
@@ -59,6 +72,8 @@ export function CreateTask() {
     templates: DEFAULT_TEMPLATES.map((template) => ({ ...template })),
     adjustShares: false,
     shareDrafts: [],
+    paymentMode: "one_shot",
+    milestones: [],
   }));
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<"create" | "fund" | null>(null);
@@ -80,6 +95,9 @@ export function CreateTask() {
       deadline: defaultDeadlineLocal(),
       quality: "达到书面验收标准",
       reviewHours: "72",
+      ...(kind !== "collaborative" && form.paymentMode === "milestone"
+        ? { milestones: EXAMPLE_MILESTONES.map((row) => ({ ...row })) }
+        : {}),
     };
     if (kind === "exclusive") {
       patch({
@@ -100,6 +118,7 @@ export function CreateTask() {
     }
     patch({
       ...common,
+      paymentMode: "one_shot",
       title: "撰写发布页",
       description: "4 名设计、2 名文案。默认统一结算：坐满后由发布者开始，全部提交后再一次确认。退出后席位重新开放，退出者佣金和能力分都是 0。",
       settlementMode: "unified",
@@ -112,6 +131,48 @@ export function CreateTask() {
   function updateTemplate(index: number, partial: Partial<RoleTemplate>) {
     setCreated(null);
     setForm((prev) => withTemplates(prev, prev.templates.map((template, i) => (i === index ? { ...template, ...partial } : template))));
+  }
+
+  function updateMilestone(index: number, partial: Partial<MilestoneDraft>) {
+    setCreated(null);
+    setForm((prev) => ({
+      ...prev,
+      milestones: prev.milestones.map((row, i) => (i === index ? { ...row, ...partial } : row)),
+    }));
+  }
+
+  function removeMilestone(index: number) {
+    setCreated(null);
+    setForm((prev) => ({ ...prev, milestones: prev.milestones.filter((_, i) => i !== index) }));
+  }
+
+  function addMilestone() {
+    setCreated(null);
+    setForm((prev) => {
+      if (prev.milestones.length >= MAX_MILESTONES) return prev;
+      return {
+        ...prev,
+        milestones: [
+          ...prev.milestones,
+          { id: nextMilestoneId(prev.milestones), amount: remainderAmount(prev.amount, prev.milestones), condition: "" },
+        ],
+      };
+    });
+  }
+
+  function splitMilestones() {
+    const amount = parseIntStrict(form.amount);
+    if (amount === null || amount < 0 || form.milestones.length === 0) {
+      setError("金额需要是非负整数，才能均分到各阶段");
+      return;
+    }
+    const parts = evenMilestoneAmounts(amount, form.milestones.length);
+    setError(null);
+    setCreated(null);
+    setForm((prev) => ({
+      ...prev,
+      milestones: prev.milestones.map((row, index) => ({ ...row, amount: String(parts[index] ?? 0) })),
+    }));
   }
 
   function editShare(index: number, value: string) {
@@ -160,9 +221,11 @@ export function CreateTask() {
   }
 
   const actingAsPublisher = settings.userId === PRESETS.publisher.userId && settings.authMode === "apiKey" && settings.apiKey === PRESETS.publisher.apiKey;
+  const milestoneMode = form.kind !== "collaborative" && form.paymentMode === "milestone";
+  const sumLine = milestoneSumLabel(form.amount, form.milestones);
 
   return (
-    <Screen title="创建任务" lede="创建后状态是 draft。注资把 payment.amount 放进托管，状态变为 open。">
+    <Screen title="创建任务" lede="创建后状态是 draft。注资把 payment.amount 放进托管，状态变为 open。分阶段任务同样一次注资全部金额。">
       <ErrorNote message={client ? error : clientError} />
       {!actingAsPublisher ? (
         <p className="banner warn">
@@ -173,7 +236,12 @@ export function CreateTask() {
 
       <div className="tabs">
         {(["exclusive", "competitive", "collaborative"] as const).map((kind) => (
-          <button key={kind} type="button" className={form.kind === kind ? "tab on" : "tab"} onClick={() => patch({ kind })}>
+          <button
+            key={kind}
+            type="button"
+            className={form.kind === kind ? "tab on" : "tab"}
+            onClick={() => patch(kind === "collaborative" ? { kind, paymentMode: "one_shot" } : { kind })}
+          >
             {KIND_LABEL[kind]} {kind}
           </button>
         ))}
@@ -196,7 +264,10 @@ export function CreateTask() {
           <textarea value={form.description} rows={4} maxLength={20000} onChange={(event) => patch({ description: event.target.value })} required />
         </Field>
         <div className="form-grid">
-          <Field label="金额 payment.amount" hint="模拟积分，one_shot">
+          <Field
+            label="金额 payment.amount"
+            hint={milestoneMode ? "模拟积分。这是托管总额，各阶段 amount 相加必须等于它" : "模拟积分，一次性拨付"}
+          >
             <input value={form.amount} inputMode="numeric" onChange={(event) => patch({ amount: event.target.value })} required />
           </Field>
           <Field label="验收截止 acceptance.deadline">
@@ -250,7 +321,90 @@ export function CreateTask() {
             <input value={form.minAbility} inputMode="numeric" onChange={(event) => patch({ minAbility: event.target.value })} />
           </Field>
         ) : null}
-        <p className="hint">payment.mode = <code className="mono">one_shot</code></p>
+        {form.kind === "collaborative" ? (
+          <p className="hint">
+            协作任务固定 <code className="mono">payment.mode = one_shot</code>。分阶段只用于独占和竞争。
+          </p>
+        ) : (
+          <fieldset>
+            <legend>报酬方式 payment.mode</legend>
+            {(
+              [
+                ["one_shot", "一次性"],
+                ["milestone", "分阶段"],
+              ] as const
+            ).map(([value, label]) => (
+              <label className="choice" key={value}>
+                <input
+                  type="radio"
+                  name="payment_mode"
+                  value={value}
+                  checked={form.paymentMode === value}
+                  onChange={() => {
+                    if (value === "milestone" && form.milestones.length === 0) {
+                      patch({ paymentMode: value, milestones: defaultMilestones(form.amount) });
+                      return;
+                    }
+                    patch({ paymentMode: value });
+                  }}
+                />
+                <span>
+                  {label} <span className="en">{value}</span>
+                </span>
+              </label>
+            ))}
+          </fieldset>
+        )}
+
+        {milestoneMode ? (
+          <div className="card">
+            <h2>分阶段 milestones</h2>
+            <p className="hint">
+              先填报酬总额，再把金额拆到 1–20 个阶段。每个阶段需要 id（<code className="mono">[A-Za-z0-9_-]</code>，任务内唯一）、amount（非负整数）和 condition（必填，最多 500 字节）。请求不带 status，服务端记为 pending。阶段合计必须等于 payment.amount。增加阶段时，还没分完的差额会填进新行。确认时只拨付该阶段，注资仍是总额这一笔。
+              {form.kind === "competitive" ? " 竞争任务里，某一阶段的第一份提交进入待确认，其他人要等这一阶段确认或退回后才能再交。" : ""}
+            </p>
+            <p className={sumLine.matched ? "hint" : "banner warn"}>{sumLine.text}</p>
+            {form.milestones.map((row, index) => (
+              <div className="milestone-row" key={index}>
+                <Field label="阶段 id">
+                  <input
+                    value={row.id}
+                    maxLength={64}
+                    spellCheck={false}
+                    placeholder="m1"
+                    onChange={(event) => updateMilestone(index, { id: event.target.value })}
+                  />
+                </Field>
+                <Field label="金额 amount">
+                  <input
+                    value={row.amount}
+                    inputMode="numeric"
+                    onChange={(event) => updateMilestone(index, { amount: event.target.value })}
+                  />
+                </Field>
+                <Field label="条件 condition">
+                  <input
+                    value={row.condition}
+                    maxLength={500}
+                    placeholder="这一阶段怎样算完成"
+                    onChange={(event) => updateMilestone(index, { condition: event.target.value })}
+                  />
+                </Field>
+                <Button type="button" kind="ghost" disabled={form.milestones.length <= 1} onClick={() => removeMilestone(index)}>
+                  移除
+                </Button>
+              </div>
+            ))}
+            <div className="toolbar">
+              <Button type="button" kind="secondary" disabled={form.milestones.length >= MAX_MILESTONES} onClick={addMilestone}>
+                增加阶段
+              </Button>
+              <Button type="button" kind="ghost" onClick={splitMilestones}>
+                按报酬均分
+              </Button>
+            </div>
+          </div>
+        ) : null}
 
         {form.kind === "competitive" ? (
           <div className="card">
@@ -258,7 +412,9 @@ export function CreateTask() {
             <Field label="名额 slots" hint="2–100。结算规则固定 winner_take_all">
               <input value={form.slots} inputMode="numeric" onChange={(event) => patch({ slots: event.target.value })} />
             </Field>
-            <p className="hint">settlement_rule = winner_take_all。多名执行者都提交后，确认必须带 submission_id。</p>
+            <p className="hint">
+              settlement_rule = winner_take_all。一次性支付时，多名执行者都提交后，确认必须带 submission_id。分阶段时，每一阶段以第一份提交进入待确认，确认带 milestone_id。
+            </p>
           </div>
         ) : null}
 
@@ -479,8 +635,13 @@ function buildTask(form: FormState): TaskCreate | string {
   if (!title) return "请填写标题";
   if (!description) return "请填写说明";
   if (!quality) return "请填写验收标准";
-  const amount = parseIntStrict(form.amount);
-  if (amount === null || amount < 0) return "金额需要是非负整数";
+  const payment = buildPayment({
+    kind: form.kind,
+    mode: form.paymentMode,
+    amountText: form.amount,
+    milestones: form.milestones,
+  });
+  if (typeof payment === "string") return payment;
   const reviewHours = parseIntStrict(form.reviewHours);
   if (reviewHours === null || reviewHours < 1 || reviewHours > 2160) return "review_hours 需要是 1 到 2160 的整数";
   let deadline: string;
@@ -490,7 +651,6 @@ function buildTask(form: FormState): TaskCreate | string {
     return error instanceof Error ? error.message : "截止时间无效";
   }
   const acceptance = { deadline, quality, review_hours: reviewHours };
-  const payment = { mode: "one_shot" as const, amount };
   let assignee_policy: AssigneePolicy;
   if (form.policy === "specific") {
     const userIds = form.policyUsers

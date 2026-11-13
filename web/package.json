@@ -7,7 +7,8 @@
     "sdk:build": "node scripts/build-sdk.mjs",
     "dev": "npm run sdk:build && vite",
     "build": "npm run sdk:build && tsc -p tsconfig.json --noEmit && vite build",
-    "preview": "vite preview --host 127.0.0.1 --port 4173"
+    "preview": "vite preview --host 127.0.0.1 --port 4173",
+    "test": "node --experimental-strip-types --test test/*.test.mjs"
   },
   "dependencies": {
     "react": "^19.1.1",

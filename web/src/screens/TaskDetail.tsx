@@ -3,6 +3,7 @@ import { createIdempotencyKey, type Message, type ResolutionOutcome, type Task }
 import { useApp } from "../context";
 import {
   ENTRY_LABEL,
+  MILESTONE_STATUS_LABEL,
   PAYMENT_MODE_LABEL,
   ROLE_STATUS_LABEL,
   SETTLEMENT_MODE_LABEL,
@@ -14,6 +15,15 @@ import {
 } from "../format";
 import { FriendPicker, appendUserId } from "../friends";
 import { href } from "../route";
+import {
+  confirmTaskBody,
+  currentSubmissionsForMilestone,
+  inReviewMilestoneSubmissionId,
+  milestoneConfirmBlock,
+  milestoneNextStep,
+  milestoneSubmitBlock,
+  submitMilestoneField,
+} from "../stageLoop";
 import { ActionRow, Button, ErrorNote, Field, IdText, KindPill, Screen, StatusPill } from "../ui";
 
 export function TaskDetail({ id }: { id: string }) {
@@ -27,7 +37,8 @@ export function TaskDetail({ id }: { id: string }) {
   const [roleId, setRoleId] = useState("");
   const [payloadText, setPayloadText] = useState('{\n  "body": ""\n}');
   const [note, setNote] = useState("");
-  const [milestoneId, setMilestoneId] = useState("");
+  const [submitMilestoneId, setSubmitMilestoneId] = useState("");
+  const [confirmMilestoneId, setConfirmMilestoneId] = useState("");
   const [reason, setReason] = useState("");
   const [reviseReason, setReviseReason] = useState("");
   const [outcome, setOutcome] = useState<ResolutionOutcome>("pay_executor");
@@ -61,7 +72,11 @@ export function TaskDetail({ id }: { id: string }) {
     if (!task) return;
     const open = (task.collaborative?.roles ?? []).filter((role) => (role.status ?? "open") === "open");
     setRoleId((prev) => (open.some((role) => role.id === prev) ? prev : (open[0]?.id ?? "")));
-    const current = (task.submissions ?? []).filter((item) => item.status === "current");
+    const stageId =
+      task.payment.mode === "milestone"
+        ? (task.payment.milestones ?? []).find((milestone) => milestone.status === "submitted")?.id
+        : undefined;
+    const current = currentSubmissionsForMilestone(task, stageId);
     setChosen((prev) => (current.some((item) => item.id === prev) ? prev : (current[0]?.id ?? "")));
   }, [task]);
 
@@ -154,6 +169,16 @@ export function TaskDetail({ id }: { id: string }) {
 
   const me = settings.userId;
   const mode = settlementMode(task);
+  const pendingMilestones = (task.payment.milestones ?? []).filter((milestone) => (milestone.status ?? "pending") === "pending");
+  const submittedMilestones = (task.payment.milestones ?? []).filter((milestone) => milestone.status === "submitted");
+  const submitStageId = pendingMilestones.some((milestone) => milestone.id === submitMilestoneId)
+    ? submitMilestoneId
+    : (pendingMilestones[0]?.id ?? "");
+  const confirmStageId = submittedMilestones.some((milestone) => milestone.id === confirmMilestoneId)
+    ? confirmMilestoneId
+    : (submittedMilestones[0]?.id ?? "");
+  const reviewMilestoneId = task.payment.mode === "milestone" ? confirmStageId || undefined : undefined;
+  const reviewSubmissions = currentSubmissionsForMilestone(task, reviewMilestoneId);
   const openRoles = (task.collaborative?.roles ?? []).filter((role) => (role.status ?? "open") === "open");
   const mySeat = (task.collaborative?.roles ?? []).find(
     (role) => role.assignee_user_id === me && (role.status === "filled" || role.status === "submitted"),
@@ -213,6 +238,12 @@ export function TaskDetail({ id }: { id: string }) {
                 <>
                   {" "}
                   · 席位 <IdText value={submission.role_id} />
+                </>
+              ) : null}
+              {submission.milestone_id ? (
+                <>
+                  {" "}
+                  · 阶段 <IdText value={submission.milestone_id} />
                 </>
               ) : null}{" "}
               · {submission.status === "current" ? "当前" : "已作废"} · {formatTime(submission.created_at)}
@@ -351,16 +382,41 @@ export function TaskDetail({ id }: { id: string }) {
         </section>
       ) : null}
 
-      {(task.payment.milestones ?? []).length > 0 ? (
+      {task.payment.mode === "milestone" ? (
         <section className="card">
-          <h2>里程碑</h2>
-          <ul className="plain">
-            {(task.payment.milestones ?? []).map((milestone) => (
-              <li key={milestone.id}>
-                <IdText value={milestone.id} /> {formatCredits(milestone.amount)} · {milestone.condition} · {milestone.status ?? "pending"}
-              </li>
-            ))}
-          </ul>
+          <h2>阶段 milestones</h2>
+          <p className="hint">
+            确认只拨付该阶段的金额，任务回到 active，直到每个阶段都是 released。同一时间只能有一个阶段处于 submitted。
+            {task.kind === "competitive" ? " 竞争任务以该阶段的第一份提交为准，任务回到 active 之前不能再交。" : ""}
+          </p>
+          {(task.payment.milestones ?? []).length === 0 ? <p className="hint">没有阶段。</p> : null}
+          <table>
+            <thead>
+              <tr>
+                <th>id</th>
+                <th>金额</th>
+                <th>条件 condition</th>
+                <th>状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(task.payment.milestones ?? []).map((milestone) => {
+                const status = milestone.status ?? "pending";
+                return (
+                  <tr key={milestone.id} className={status === "submitted" ? "stage-submitted" : undefined}>
+                    <td>
+                      <IdText value={milestone.id} />
+                    </td>
+                    <td>{formatCredits(milestone.amount)}</td>
+                    <td>{milestone.condition}</td>
+                    <td>
+                      {MILESTONE_STATUS_LABEL[status] ?? status} <span className="en">{status}</span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </section>
       ) : null}
 
@@ -399,40 +455,49 @@ export function TaskDetail({ id }: { id: string }) {
           {mode === "per_seat" ? (
             <p className="hint">分别结算不在这里确认。已提交的席位点该行的「确认拨付」，空席或已退出的席位点「退回该席」。</p>
           ) : (
-            <ActionRow title="确认 confirm" reason={confirmReason(task, me)}>
-              <Button
-                type="button"
-                kind="primary"
-                pending={pending === "confirm"}
-                disabled={confirmReason(task, me) !== null || pending !== null}
-                onClick={() =>
-                  void run("confirm", () => {
-                    if (submissionIds && submissionIds.length > 0 && !chosen) {
-                      throw new Error("请选择一份 submission_id");
-                    }
-                    const body: { submission_id?: string; milestone_id?: string } = {};
-                    if (task.kind === "competitive" && chosen) body.submission_id = chosen;
-                    else if (chosen && submissionIds) body.submission_id = chosen;
-                    if (task.payment.mode === "milestone" && milestoneId.trim()) body.milestone_id = milestoneId.trim();
-                    return client.confirmTask(task.id, body, { idempotencyKey: createIdempotencyKey("confirm") });
-                  })
-                }
-              >
-                {submissionIds ? "按所选提交确认" : "确认结算"}
-              </Button>
-            </ActionRow>
+            <>
+              {task.payment.mode === "milestone" && task.status === "in_review" ? (
+                <Field label="确认阶段 milestone_id" hint="只拨付这一阶段的金额。还有未拨付阶段时，任务回到 active，托管留下剩余金额。">
+                  <select value={confirmStageId} onChange={(event) => setConfirmMilestoneId(event.target.value)}>
+                    {submittedMilestones.length === 0 ? <option value="">没有待确认的阶段</option> : null}
+                    {submittedMilestones.map((milestone) => (
+                      <option key={milestone.id} value={milestone.id}>
+                        {milestone.id} · {formatCredits(milestone.amount)} · {milestone.condition}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              ) : null}
+              <ActionRow title="确认 confirm" reason={confirmReason(task, me)}>
+                <Button
+                  type="button"
+                  kind="primary"
+                  pending={pending === "confirm"}
+                  disabled={confirmReason(task, me) !== null || pending !== null}
+                  onClick={() =>
+                    void run("confirm", () => {
+                      const body = confirmTaskBody(task, chosen, confirmStageId, submissionIds);
+                      if (typeof body === "string") throw new Error(body);
+                      return client.confirmTask(task.id, body, { idempotencyKey: createIdempotencyKey("confirm") });
+                    })
+                  }
+                >
+                  {task.payment.mode === "milestone" ? "确认本阶段" : submissionIds ? "按所选提交确认" : "确认结算"}
+                </Button>
+              </ActionRow>
+            </>
           )}
           {task.kind === "competitive" && task.status === "in_review" ? (
             <div className="picker">
               <p className="hint">
-                从任务上的 submissions 里选一份当前提交作为赢家。多份时必须带 submission_id，页面不再从 400 的 message 里猜。
+                {task.payment.mode === "milestone"
+                  ? "分阶段的竞争任务只评审这一阶段的当前提交。第一份提交进入待确认后，其他人要等确认或退回修改、任务回到 active 才能再交。确认会带上 milestone_id；这一阶段只有一份提交时也会带上它的 submission_id。"
+                  : "从任务上的 submissions 里选一份当前提交作为赢家。多份时必须带 submission_id，页面不再从 400 的 message 里猜。"}
                 {task.winner_select_deadline ? ` 选赢家截止 ${formatTime(task.winner_select_deadline)}，到点未选定会把托管退回发布者。` : ""}
               </p>
               <fieldset>
                 <legend>submission_id</legend>
-                {(task.submissions ?? [])
-                  .filter((submission) => submission.status === "current")
-                  .map((submission) => (
+                {reviewSubmissions.map((submission) => (
                     <label key={submission.id} className="choice">
                       <input
                         type="radio"
@@ -460,15 +525,23 @@ export function TaskDetail({ id }: { id: string }) {
                   setError("请填写修改原因");
                   return;
                 }
+                const stageSubmission = inReviewMilestoneSubmissionId(task, chosen);
+                if (stageSubmission === null) {
+                  setError("没有可退回的阶段提交");
+                  return;
+                }
                 const current = (task.submissions ?? []).filter((submission) => submission.status === "current");
                 const submittedSeats = (task.collaborative?.roles ?? []).filter((role) => role.status === "submitted");
+                const submissionId =
+                  stageSubmission ??
+                  (task.kind === "competitive" && current.length === 1 ? current[0]?.id : chosen || undefined);
                 void run("revise", () =>
                   client.reviseTask(
                     task.id,
                     {
                       reason: text,
                       role_id: task.kind === "collaborative" && submittedSeats.length === 1 ? submittedSeats[0]?.id : undefined,
-                      submission_id: task.kind === "competitive" && current.length === 1 ? current[0]?.id : chosen || undefined,
+                      submission_id: submissionId,
                     },
                     { idempotencyKey: createIdempotencyKey("revise") },
                   ),
@@ -481,6 +554,9 @@ export function TaskDetail({ id }: { id: string }) {
           <Field label="修改原因">
             <input value={reviseReason} maxLength={2000} onChange={(event) => setReviseReason(event.target.value)} />
           </Field>
+          {task.payment.mode === "milestone" ? (
+            <p className="hint">请对方修改会把这一阶段的当前提交标成 superseded，阶段回到 pending。已经拨付的阶段不会被退回。</p>
+          ) : null}
 
           <ActionRow title="取消 cancel" reason={cancelReason(task, me)}>
             <Button
@@ -555,6 +631,23 @@ export function TaskDetail({ id }: { id: string }) {
             </Field>
           ) : null}
 
+          {task.payment.mode === "milestone" ? (
+            <Field label="提交阶段 milestone_id" hint="只能选择 pending 的阶段。已有阶段待确认时不能再提交。">
+              <select value={submitStageId} onChange={(event) => setSubmitMilestoneId(event.target.value)}>
+                {pendingMilestones.length === 0 ? <option value="">没有待提交的阶段</option> : null}
+                {pendingMilestones.map((milestone) => (
+                  <option key={milestone.id} value={milestone.id}>
+                    {milestone.id} · {formatCredits(milestone.amount)} · {milestone.condition}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          ) : null}
+          {task.kind === "competitive" && task.payment.mode === "milestone" ? (
+            <p className="hint">
+              竞争任务里，某一阶段的第一份提交会让任务进入 in_review。在发布者确认或请对方修改、任务回到 active 之前，不能再交这一阶段或下一阶段。
+            </p>
+          ) : null}
           <ActionRow title="提交 submit" reason={submitReason(task, me)}>
             <Button
               type="button"
@@ -573,13 +666,18 @@ export function TaskDetail({ id }: { id: string }) {
                   setError(err instanceof SyntaxError ? "payload 不是合法 JSON" : formatError(err));
                   return;
                 }
+                const milestoneField = submitMilestoneField(task, submitStageId);
+                if (typeof milestoneField === "string") {
+                  setError(milestoneField);
+                  return;
+                }
                 void run("submit", () =>
                   client.submitTask(
                     task.id,
                     {
                       payload,
                       note: note.trim() || undefined,
-                      milestone_id: task.payment.mode === "milestone" && milestoneId.trim() ? milestoneId.trim() : undefined,
+                      ...milestoneField,
                     },
                     { idempotencyKey: createIdempotencyKey("submit") },
                   ),
@@ -595,11 +693,6 @@ export function TaskDetail({ id }: { id: string }) {
           <Field label="备注 note">
             <input value={note} maxLength={2000} onChange={(event) => setNote(event.target.value)} />
           </Field>
-          {task.payment.mode === "milestone" ? (
-            <Field label="milestone_id" hint="里程碑支付时提交和确认需要">
-              <input value={milestoneId} spellCheck={false} onChange={(event) => setMilestoneId(event.target.value)} />
-            </Field>
-          ) : null}
 
           <ActionRow title="退出 dropout" reason={dropoutReason(task, me)}>
             <Button
@@ -828,7 +921,7 @@ function confirmReason(task: Task, me: string): string | null {
     if (task.status === "active") return "还有席位未提交或未坐满，确认会失败";
   }
   if (task.status !== "in_review") return "只有 in_review 可以确认";
-  return null;
+  return milestoneConfirmBlock(task);
 }
 
 function disputeReason(task: Task, me: string): string | null {
@@ -875,6 +968,7 @@ function submitReason(task: Task, me: string): string | null {
     return null;
   }
   if (!(task.executor_ids ?? []).includes(me)) return "只有执行者可以提交";
+  if (task.payment.mode === "milestone") return milestoneSubmitBlock(task);
   if (task.kind === "competitive") {
     if (task.status !== "active" && task.status !== "in_review") return "竞争任务在 active 或 in_review 时提交";
     return null;
@@ -900,6 +994,8 @@ function nextStep(task: Task): string {
   if (task.status === "settled") return "任务已结算。";
   if (task.status === "disputed" || task.dispute_role_id) return "争议中，可协商或等待裁定。";
   if (task.status === "draft") return "等待发布者注资。";
+  const stageStep = milestoneNextStep(task);
+  if (stageStep) return stageStep;
   const mode = settlementMode(task);
   if (mode === "unified" && task.status === "open" && task.start_deadline) return "席位已坐满，等待发布者开始。";
   if (task.status === "open") return "等待执行者接受。";

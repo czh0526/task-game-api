@@ -200,6 +200,8 @@ code.mono, .mono { font-family: var(--mono); font-size: 0.86em; }
 .form, .form-grid { display: grid; gap: 12px; }
 .form-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .role-row { display: grid; grid-template-columns: 1.3fr 1fr 0.7fr auto; gap: 8px; align-items: end; }
+.milestone-row { display: grid; grid-template-columns: 0.8fr 0.7fr minmax(0, 1.8fr) auto; gap: 8px; align-items: end; }
+.stage-submitted { background: var(--warn-bg); }
 .card h3 { margin: 16px 0 8px; font-size: 0.98rem; }
 .seat-table input {
   width: 6.5rem;
@@ -299,7 +301,7 @@ th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line
   .side { border-right: 0; border-bottom: 1px solid var(--line); }
   .nav { flex-direction: row; }
   .main { padding: 20px 16px 48px; }
-  .form-grid, .role-row, .facts, .chat-layout, .score-grid, .composer {
+  .form-grid, .role-row, .milestone-row, .facts, .chat-layout, .score-grid, .composer {
     grid-template-columns: 1fr;
   }
 }

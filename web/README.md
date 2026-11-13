@@ -63,13 +63,19 @@ make token USER_ID=usr_extra
 
 ## 三条任务
 
-金额是模拟积分。创建页的报酬模式是 `one_shot`。承接策略可选开放、能力门槛或指定人。任务详情会显示提交、下一步、截止时间、请对方修改、取消、协商和（裁定者登录时）裁定。分别结算的席位仍用「退回该席」和「确认拨付」。
+金额是模拟积分。创建页的报酬模式默认是一次性 `one_shot`，独占和竞争也可以选分阶段 `milestone`。分阶段时先填 `payment.amount` 作为托管总额，再把 1–20 个阶段的 `amount` 拆到与总额相等。每个阶段要有合法 `id` 和验收条件 `condition`，请求不带 `status`。协作任务仍只发送 `one_shot`。注资不变，一次托管全部 `payment.amount`。
+
+任务详情列出各阶段的 id、金额、条件和状态（`pending` / `submitted` / `released` / `disputed`）。执行者从待提交阶段里选择 `milestone_id` 再提交；同一时间只能有一个阶段处于待确认。发布者确认时带上该阶段的 `milestone_id`，只拨付这一阶段，任务回到进行中，直到最后一阶段结算。请对方修改会退回这一阶段的当前提交，阶段回到 `pending`。竞争任务里，某一阶段的第一份提交进入待确认，在确认或退回之前不能再交。
+
+承接策略可选开放、能力门槛或指定人。任务详情会显示提交、下一步、截止时间、请对方修改、取消、协商和（裁定者登录时）裁定。分别结算的席位仍用「退回该席」和「确认拨付」。
 
 1. **exclusive**：发布者创建并注资，执行者接受、提交，发布者确认。确认体是 `{}`，结束后状态为 `settled`。
 2. **competitive**：`settlement_rule` 固定 `winner_take_all`。两个执行者都接受并提交后，发布者先不带 `submission_id` 确认。400 的 `message` 交给 SDK 的 `submissionIdsFromConfirmError`，页面按 `created_at` 顺序列出 id，选定后再确认。
-3. **collaborative**：`on_dropout` 固定 `replace`。各席 `share_bps` 合计 10000。执行者接受时选择展开后的 `role_id`。退出后该席回到 `open`，佣金和能力分为 0。再用同一个 `role_id` 接受，就是补位。
+3. **collaborative**：`on_dropout` 固定 `replace`。各席 `share_bps` 合计 10000。执行者接受时选择展开后的 `role_id`。退出后该席回到 `open`，佣金和能力分为 0。再用同一个 `role_id` 接受，就是补位。协作任务不能分阶段。
 
    创建页按「角色 × 人数」填写，同一种角色不用逐行加席。每一行是一种角色：显示名称、可选基础 id、人数。未勾选「手动调整各席 share_bps」时，请求发送角色模板：`quantity` 是人数，`share_bps` 是这一角色的合计（各角色相加为 10000，人数不乘进去）。服务端按人数展开；除不尽时，多出来的基点加在该角色最后几席。人数为 1 时席位 id 就是基础 id，大于 1 时是 `design_1`…`design_4`。例如 4×设计（基础 id `design`）和 2×文案（`copy`）展开成 `design_1`…`design_4` 与 `copy_1`、`copy_2`。10000 先在全部席位间均分，再按角色合计交给服务端，预览和结算一致。基础 id 留空时，名称若已是合法 slug 就用名称，否则按顺序用 `role`、`role2`、`role3`。勾选手动调整后，请求改为逐席的扁平 `roles[]`（省略 `quantity`），合计仍须是 10000。
+
+分阶段（独占或竞争）：创建时选 `milestone`，注资仍是全额。接受后按阶段提交、确认。确认体带 `milestone_id`。还有未拨付阶段时状态回到 `active`。最后一阶段确认后才是 `settled`。请对方修改只退回当前待确认的阶段。
 
 积分页读 `GET /v1/users/{userId}/scores` 的 `integrity` 和 `ability`。
 
@@ -81,3 +87,5 @@ cd web && npm install && npm run dev
 ```
 
 Open `http://localhost:5173`. Register or log in with email and password; the JWT and user id are stored in `localStorage` and sent as Bearer. The collapsed「开发快捷身份」panel still switches `dev-publisher-key` (`usr_publisher`) and `dev-executor-key` (`usr_executor`). Settings live in `taskgame.web.settings`. Optional `VITE_TASKGAME_BASE_URL` applies only before that key exists. Chat transcripts are local (`taskgame.web.chats`) because v0.1 has create and post, not list.
+
+Exclusive and competitive tasks can use `payment.mode = milestone`. The create form keeps `payment.amount` as the escrow total and checks that stage amounts sum to it. Collaborative creates stay `one_shot`. After funding, the task page submits, confirms, and revises one `milestone_id` at a time.
