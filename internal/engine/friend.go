@@ -25,6 +25,9 @@ const (
 
 // ListFriends returns the caller's friends in personal groups. Another user's
 // grouping of the same people is not included. Emails and secrets are not.
+// Each card's unread_count is incoming messages in that pair's direct chat
+// after the caller's read cursor. Task chats and group chats are not included.
+// direct_chat_id is empty until the pair has opened that thread.
 func (e *Engine) ListFriends(ctx context.Context, userID string) (*types.FriendList, error) {
 	groups, err := e.store.Friends().ListGroups(ctx, userID)
 	if err != nil {
@@ -34,6 +37,14 @@ func (e *Engine) ListFriends(ctx context.Context, userID string) (*types.FriendL
 	if err != nil {
 		return nil, err
 	}
+	unreads, err := e.store.Chats().ListDirectUnreads(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	byPeer := make(map[string]model.DirectUnread, len(unreads))
+	for _, row := range unreads {
+		byPeer[row.PeerID] = row
+	}
 	known := make(map[string]struct{}, len(groups))
 	for _, g := range groups {
 		known[g.ID] = struct{}{}
@@ -41,7 +52,7 @@ func (e *Engine) ListFriends(ctx context.Context, userID string) (*types.FriendL
 	byGroup := make(map[string][]types.Friend, len(groups))
 	ungrouped := make([]types.Friend, 0)
 	for _, edge := range edges {
-		card := toFriend(edge)
+		card := toFriend(edge, byPeer[edge.UserID])
 		if edge.GroupID != "" {
 			if _, ok := known[edge.GroupID]; ok {
 				byGroup[edge.GroupID] = append(byGroup[edge.GroupID], card)
@@ -474,13 +485,19 @@ func toFriendRequest(row model.FriendRequest) types.FriendRequest {
 	}
 }
 
-func toFriend(edge model.FriendEdge) types.Friend {
-	return types.Friend{
-		UserId:    edge.UserID,
-		Integrity: edge.Integrity,
-		Ability:   edge.Ability,
-		Since:     model.FormatTime(edge.Since),
+func toFriend(edge model.FriendEdge, unread model.DirectUnread) types.Friend {
+	card := types.Friend{
+		UserId:      edge.UserID,
+		Integrity:   edge.Integrity,
+		Ability:     edge.Ability,
+		Since:       model.FormatTime(edge.Since),
+		UnreadCount: unread.UnreadCount,
 	}
+	if unread.ChatID != "" {
+		chatID := unread.ChatID
+		card.DirectChatId = &chatID
+	}
+	return card
 }
 
 func toFriendGroup(row model.FriendGroup) types.FriendGroup {

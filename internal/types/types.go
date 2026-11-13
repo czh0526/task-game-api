@@ -372,6 +372,18 @@ type ListMessagesReq struct {
 	Cursor string `form:"cursor,optional"`
 }
 
+type MarkChatReadReq struct {
+	ChatId         string `path:"chatId" json:"-"`
+	IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
+	MessageId      string `json:"message_id,optional"`
+}
+
+type ChatRead struct {
+	ChatId               string  `json:"chat_id"`
+	UnreadCount          int64   `json:"unread_count"`
+	ReadThroughMessageId *string `json:"read_through_message_id"`
+}
+
 type MessageList struct {
 	Items      []Message `json:"items"`
 	NextCursor *string   `json:"next_cursor,optional"`
@@ -384,10 +396,12 @@ type AuthSession struct {
 }
 
 type Friend struct {
-	UserId    string `json:"user_id"`
-	Integrity int64  `json:"integrity"`
-	Ability   int64  `json:"ability"`
-	Since     string `json:"since"`
+	UserId       string  `json:"user_id"`
+	Integrity    int64   `json:"integrity"`
+	Ability      int64   `json:"ability"`
+	Since        string  `json:"since"`
+	UnreadCount  int64   `json:"unread_count"`
+	DirectChatId *string `json:"direct_chat_id"`
 }
 
 type FriendGroup struct {

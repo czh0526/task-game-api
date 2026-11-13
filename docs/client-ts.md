@@ -284,7 +284,7 @@ await client.acceptTask(taskId, { role_id: "writer_1" });
 
 ### 好友
 
-好友是双向的。`listFriends()` 只返回调用者自己的分组和未分组好友，字段是 `user_id`、`integrity`、`ability`、`since`，没有邮箱。分组是个人文件夹：一个人最多在一个分组里。每人最多 50 个分组、500 个好友、100 条待处理的发出申请。分组名去掉首尾空白后 1–32 个字符，同一用户不能重复。
+好友是双向的。`listFriends()` 只返回调用者自己的分组和未分组好友，字段是 `user_id`、`integrity`、`ability`、`since`、`unread_count`、`direct_chat_id`，没有邮箱。`unread_count` 只算这一对的一对一会话里、对方发来且还没 `markChatRead` 的消息。自己发的不算。任务会话和 `member_ids` 会话不加到这个数字上。没有一对一会话时是 0，`direct_chat_id` 为 null。分组是个人文件夹：一个人最多在一个分组里。每人最多 50 个分组、500 个好友、100 条待处理的发出申请。分组名去掉首尾空白后 1–32 个字符，同一用户不能重复。
 
 已经是好友，或自己已经发出待处理申请，是 409。如果对方已经有一条指向你的待处理申请，`createFriendRequest` 会接受那一条（HTTP 200，`status` 为 `accepted`），不会再插入一行。新申请是 201。解除好友之后可以重新申请。删除分组不会解除好友。
 
@@ -303,6 +303,8 @@ await client.setFriendGroup("usr_executor", { group_id: folder.id });
 const mine = await client.listFriends();
 const chat = await client.createChat({ type: "direct", user_id: "usr_executor" });
 await client.postMessage(chat.id, { type: "text", text: "你好" });
+// 接收方好友卡片的 unread_count 变为 1。发送方自己的未读数不变。
+// 接收方打开会话后 markChatRead(chat.id)，再 listFriends() 就是 0。
 await client.setFriendGroup("usr_executor", { group_id: null });
 await client.unfriend("usr_executor");
 ```
@@ -609,7 +611,7 @@ await client.acceptTask(taskId, { role_id: "writer_1" });
 
 ### Friends
 
-Friendship is mutual. `listFriends()` returns only the caller's groups and ungrouped friends, with `user_id`, `integrity`, `ability`, and `since`. There is no email. A friend sits in at most one of the owner's groups. Caps are 50 groups, 500 friends, and 100 pending outgoing requests per user. A group name is 1–32 characters after trim and unique for that owner.
+Friendship is mutual. `listFriends()` returns only the caller's groups and ungrouped friends, with `user_id`, `integrity`, `ability`, `since`, `unread_count`, and `direct_chat_id`. There is no email. `unread_count` counts messages the other person sent in that pair's direct chat and that this caller has not passed to `markChatRead`. The caller's own messages are not counted. Task chats and `member_ids` chats do not add to it. It is 0, and `direct_chat_id` is null, until a direct chat exists. A friend sits in at most one of the owner's groups. Caps are 50 groups, 500 friends, and 100 pending outgoing requests per user. A group name is 1–32 characters after trim and unique for that owner.
 
 Already friends, or a pending request you already sent, is 409. If the other user already has a pending request toward you, `createFriendRequest` accepts that request (HTTP 200, `status` `accepted`) and does not insert another row. A new request is 201. Unfriend allows a later request. Deleting a group does not unfriend anyone.
 
@@ -628,6 +630,8 @@ await client.setFriendGroup("usr_executor", { group_id: folder.id });
 const mine = await client.listFriends();
 const chat = await client.createChat({ type: "direct", user_id: "usr_executor" });
 await client.postMessage(chat.id, { type: "text", text: "hello" });
+// The recipient's friend card unread_count becomes 1. The sender's own count stays 0.
+// The recipient calls markChatRead(chat.id), then listFriends() shows 0.
 await client.setFriendGroup("usr_executor", { group_id: null });
 await client.unfriend("usr_executor");
 ```

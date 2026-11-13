@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createIdempotencyKey, type Chat, type Message } from "taskgame-client";
 import { useApp } from "../context";
 import { formatError, formatTime, isAbort } from "../format";
+import { notifyDirectRead } from "../readSync";
 import { href } from "../route";
 import { Button, ErrorNote, IdText, Screen } from "../ui";
 
@@ -17,6 +18,7 @@ export function Conversation({ id }: { id: string }) {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [loading, setLoading] = useState(true);
+  const seenCursor = useRef<string | null>(null);
 
   const load = useCallback(
     async (signal?: AbortSignal) => {
@@ -39,8 +41,15 @@ export function Conversation({ id }: { id: string }) {
       setChat(meta);
       setMessages(items);
       setTruncated(more);
+      if (document.visibilityState !== "visible") return;
+      const seen = items.length === 0 ? "" : items[items.length - 1].id;
+      if (seenCursor.current === seen) return;
+      await client.markChatRead(id, seen ? { message_id: seen } : {}, { signal });
+      if (signal?.aborted) return;
+      seenCursor.current = seen;
+      if (meta.type === "direct") notifyDirectRead(settings.userId, id);
     },
-    [client, id],
+    [client, id, settings.userId],
   );
 
   useEffect(() => {
@@ -61,14 +70,19 @@ export function Conversation({ id }: { id: string }) {
 
   useEffect(() => {
     if (!client || error) return;
-    const timer = window.setInterval(() => {
+    const refresh = () => {
       if (document.visibilityState !== "visible") return;
       load().catch((err: unknown) => {
         if (isAbort(err)) return;
         setError(formatError(err));
       });
-    }, 5000);
-    return () => window.clearInterval(timer);
+    };
+    const timer = window.setInterval(refresh, 5000);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+    };
   }, [client, error, load]);
 
   async function onPost() {

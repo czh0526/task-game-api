@@ -387,6 +387,20 @@ export interface ChatList {
   items: Chat[];
 }
 
+/** Body of `POST /v1/chats/{chatId}/read`. Omit `message_id` to cover the newest message. */
+export interface MarkChatReadBody {
+  message_id?: string;
+}
+
+/** The caller's read cursor after `POST /v1/chats/{chatId}/read`. */
+export interface ChatRead {
+  chat_id: string;
+  /** Messages from other members still after the cursor. Own messages are not counted. */
+  unread_count: number;
+  /** Newest message the cursor covers. Null when the chat has no messages. */
+  read_through_message_id?: string | null;
+}
+
 export interface MessageList {
   items: Message[];
   next_cursor?: string | null;
@@ -444,13 +458,24 @@ export type FriendRequestStatus = "pending" | "accepted" | "declined" | "cancell
 
 export type FriendRequestDirection = "incoming" | "outgoing";
 
-/** Public friend card. Same scores as `GET /users/{userId}/scores`. No email. */
+/**
+ * Public friend card. Same scores as `GET /users/{userId}/scores`. No email.
+ * `unread_count` is only the pair's direct chat.
+ */
 export interface Friend {
   user_id: string;
   integrity: number;
   ability: number;
   /** When the friendship was accepted. */
   since: string;
+  /**
+   * Incoming messages in the 1:1 direct chat that this caller has not marked read.
+   * Own messages are not counted. 0 when there is no direct chat, or when every
+   * incoming message is covered. Task chats and group chats are not included.
+   */
+  unread_count: number;
+  /** The pair's direct chat. Null until the first direct `createChat`. */
+  direct_chat_id?: string | null;
 }
 
 export interface FriendGroup {

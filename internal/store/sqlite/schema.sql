@@ -153,6 +153,22 @@ CREATE TABLE IF NOT EXISTS messages (
     created_at TEXT NOT NULL
 );
 
+-- Queries filter by chat_id and then compare the implicit rowid. rowid cannot be named in an index.
+CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages (chat_id);
+
+-- One read cursor per member per chat. last_read_rowid is messages.rowid.
+-- A message is unread when its sender is someone else and its rowid is greater.
+-- GET /friends counts this only for type=direct. Task and group chats may store
+-- a cursor, and those messages never add to a friend card.
+CREATE TABLE IF NOT EXISTS chat_reads (
+    user_id TEXT NOT NULL,
+    chat_id TEXT NOT NULL,
+    last_read_rowid INTEGER NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, chat_id),
+    CHECK (last_read_rowid >= 0)
+);
+
 CREATE TABLE IF NOT EXISTS score_events (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,

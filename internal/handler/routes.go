@@ -48,6 +48,11 @@ func RegisterHandlers(server *rest.Server, serverCtx *svc.ServiceContext) {
 					Path:    "/chats/:chatId/messages",
 					Handler: chat.PostMessageHandler(serverCtx),
 				},
+				{
+					Method:  http.MethodPost,
+					Path:    "/chats/:chatId/read",
+					Handler: chat.MarkChatReadHandler(serverCtx),
+				},
 			}...,
 		),
 		rest.WithPrefix("/v1"),

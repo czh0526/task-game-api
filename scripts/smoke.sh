@@ -10,6 +10,8 @@
 #                   per_seat: each role_id confirm releases only that share.
 #   friends:        two registered users request, accept, group, unfriend, request again.
 #                   direct chat: one thread per pair, non-friend 403, history survives unfriend.
+#                   unread: a direct message shows on the recipient's friend card, mark-read
+#                   clears it, and task chats / group chats / non-friends do not change it.
 #
 # Start the API first, from the repo root:
 #   CGO_ENABLED=0 go run . -f etc/taskgame.yaml
@@ -413,6 +415,30 @@ elif op == "no_private":
     for word in ("email", "password", "balance"):
         if word in blob:
             fail("private field %s" % word)
+elif op == "friend_unread":
+    uid, want = args[0], int(args[1])
+    card = None
+    buckets = list(doc.get("ungrouped") or [])
+    for group in doc.get("groups") or []:
+        buckets.extend(group.get("friends") or [])
+    for item in buckets:
+        if item.get("user_id") != uid:
+            continue
+        if card is not None:
+            fail("%s listed twice" % uid)
+        card = item
+    if card is None:
+        fail("friend %s missing" % uid)
+    if card.get("unread_count") != want:
+        fail("unread for %s is %s want %s" % (uid, card.get("unread_count"), want))
+    if len(args) >= 3:
+        expect = args[2]
+        got = card.get("direct_chat_id")
+        if expect == "none":
+            if got not in (None, ""):
+                fail("direct_chat_id %s" % got)
+        elif got != expect:
+            fail("direct_chat_id %s want %s" % (got, expect))
 elif op == "has_request":
     ids = [item.get("id") for item in (doc.get("items") or [])]
     if args[0] not in ids:
@@ -997,6 +1023,10 @@ run_friends() {
   request GET "${BASE}/v1/friends" bearer "$tok_b"
   expect_code 200 "B friend list"
   check "$RESP_BODY" friend_in "$id_a" ungrouped
+  check "$RESP_BODY" friend_unread "$id_a" 0 none
+  request GET "${BASE}/v1/friends" bearer "$tok_a"
+  expect_code 200 "A unread before a direct chat"
+  check "$RESP_BODY" friend_unread "$id_b" 0 none
 
   register_user "friend-c-${STAMP}@example.com"
   id_c="$REG_ID"
@@ -1028,6 +1058,66 @@ run_friends() {
   check "$RESP_BODY" message_text "你好"
   request GET "${BASE}/v1/chats/${direct_id}" bearer "$tok_c"
   expect_code 403 "stranger cannot read the direct chat"
+  request POST "${BASE}/v1/chats/${direct_id}/read" bearer "$tok_c" '{}'
+  expect_code 403 "non-friend cannot mark the direct chat read"
+  check "$RESP_BODY" code forbidden
+
+  request GET "${BASE}/v1/friends" bearer "$tok_b"
+  expect_code 200 "B sees the direct message"
+  check "$RESP_BODY" friend_unread "$id_a" 1 "$direct_id"
+  request GET "${BASE}/v1/friends" bearer "$tok_a"
+  expect_code 200 "sender has no unread for their own message"
+  check "$RESP_BODY" friend_unread "$id_b" 0 "$direct_id"
+  request GET "${BASE}/v1/friends" bearer "$tok_c"
+  expect_code 200 "stranger friend list"
+  check "$RESP_BODY" no_friend "$id_a"
+  check "$RESP_BODY" no_friend "$id_b"
+
+  request POST "${BASE}/v1/chats" bearer "$tok_a" "{\"type\":\"group\",\"member_ids\":[\"${id_b}\"]}"
+  expect_code 201 "group chat does not replace the direct chat"
+  group_chat="$(json_id "$RESP_BODY")"
+  if [[ "$group_chat" == "$direct_id" ]]; then
+    echo "group chat reused the direct chat" >&2
+    exit 1
+  fi
+  request POST "${BASE}/v1/chats/${group_chat}/messages" bearer "$tok_a" '{"type":"text","text":"群里一句"}'
+  expect_code 201 "group chat message"
+
+  body="$(task_body exclusive "$DEADLINE" 40 "Unread stays on the direct chat" "A task chat must not change the friend badge.")"
+  request POST "${BASE}/v1/tasks" bearer "$tok_a" "$body" "unread-task-${STAMP}"
+  expect_code 201 "unread isolation task"
+  task_id="$(json_id "$RESP_BODY")"
+  request POST "${BASE}/v1/tasks/${task_id}/fund" bearer "$tok_a" "" "unread-fund-${STAMP}"
+  expect_code 200 "unread isolation fund"
+  task_chat="$(check "$RESP_BODY" chat_bound)"
+  request POST "${BASE}/v1/tasks/${task_id}/accept" bearer "$tok_b" '{}'
+  expect_code 200 "unread isolation accept"
+  request POST "${BASE}/v1/chats/${task_chat}/messages" bearer "$tok_a" '{"type":"text","text":"任务里一句"}'
+  expect_code 201 "task chat message"
+  request POST "${BASE}/v1/chats/${task_chat}/read" bearer "$tok_b" '{}'
+  expect_code 200 "marking the task chat read"
+  check "$RESP_BODY" eq unread_count 0
+  request GET "${BASE}/v1/friends" bearer "$tok_b"
+  expect_code 200 "task and group chats leave the direct unread"
+  check "$RESP_BODY" friend_unread "$id_a" 1 "$direct_id"
+
+  request POST "${BASE}/v1/chats/${direct_id}/read" bearer "$tok_b" '{}'
+  expect_code 200 "opening the direct chat marks it read"
+  check "$RESP_BODY" eq chat_id "$direct_id"
+  check "$RESP_BODY" eq unread_count 0
+  request GET "${BASE}/v1/friends" bearer "$tok_b"
+  expect_code 200 "badge clears after read"
+  check "$RESP_BODY" friend_unread "$id_a" 0 "$direct_id"
+  request POST "${BASE}/v1/chats/${direct_id}/messages" bearer "$tok_a" '{"type":"text","text":"又一条"}'
+  expect_code 201 "later direct message"
+  request GET "${BASE}/v1/friends" bearer "$tok_b"
+  expect_code 200 "a later message is unread again"
+  check "$RESP_BODY" friend_unread "$id_a" 1 "$direct_id"
+  request POST "${BASE}/v1/chats/${direct_id}/read" bearer "$tok_b" '{}'
+  expect_code 200 "mark the later message read"
+  request GET "${BASE}/v1/friends" bearer "$tok_b"
+  expect_code 200 "badge stays clear"
+  check "$RESP_BODY" friend_unread "$id_a" 0 "$direct_id"
 
   request POST "${BASE}/v1/friend-groups" bearer "$tok_a" '{"name":" 同事 "}' "grp-${STAMP}"
   expect_code 201 "create group"

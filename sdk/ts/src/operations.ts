@@ -30,6 +30,7 @@ export const protocolOperations = [
   "getChat",
   "listMessages",
   "postMessage",
+  "markChatRead",
   "getUserScores",
   "listFriends",
   "createFriendRequest",

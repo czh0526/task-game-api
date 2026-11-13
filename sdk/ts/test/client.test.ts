@@ -436,6 +436,31 @@ describe("typed errors", () => {
     assert.deepEqual(JSON.parse(calls[0]?.body ?? ""), { group_id: null });
   });
 
+  it("marks a chat read through a message id", async () => {
+    const calls: Captured[] = [];
+    const client = new TaskGameClient({
+      baseUrl: "http://127.0.0.1:8891",
+      apiKey: "k",
+      fetch: captureFetch(
+        200,
+        { chat_id: "cht_1", unread_count: 0, read_through_message_id: "msg_1" },
+        calls,
+      ),
+    });
+    const read = await client.markChatRead("cht_1", { message_id: "msg_1" }, { idempotencyKey: "read-1" });
+    assert.equal(read.unread_count, 0);
+    assert.equal(read.read_through_message_id, "msg_1");
+    assert.equal(calls[0]?.method, "POST");
+    assert.equal(calls[0]?.url, "http://127.0.0.1:8891/v1/chats/cht_1/read");
+    assert.equal(calls[0]?.headers["Idempotency-Key"], "read-1");
+    assert.deepEqual(JSON.parse(calls[0]?.body ?? ""), { message_id: "msg_1" });
+
+    calls.length = 0;
+    await client.markChatRead("cht_1");
+    assert.equal(calls[0]?.body, "{}");
+    assert.equal(calls[0]?.headers["Idempotency-Key"], undefined);
+  });
+
   it("reads competitive submission ids from the confirm 400", () => {
     const error = new InvalidArgumentError(
       400,

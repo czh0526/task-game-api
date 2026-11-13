@@ -262,6 +262,16 @@ type (
 		SenderId      string `json:"sender_id"`
 		CreatedAt     string `json:"created_at"`
 	}
+	MarkChatReadReq {
+		ChatId         string `path:"chatId" json:"-"`
+		IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
+		MessageId      string `json:"message_id,optional"`
+	}
+	ChatRead {
+		ChatId               string  `json:"chat_id"`
+		UnreadCount          int64   `json:"unread_count"`
+		ReadThroughMessageId *string `json:"read_through_message_id"`
+	}
 	GetUserScoresReq {
 		UserId string `path:"userId" json:"-"`
 	}
@@ -297,10 +307,12 @@ type (
 		User        UserSummary `json:"user"`
 	}
 	Friend {
-		UserId    string `json:"user_id"`
-		Integrity int64  `json:"integrity"`
-		Ability   int64  `json:"ability"`
-		Since     string `json:"since"`
+		UserId       string  `json:"user_id"`
+		Integrity    int64   `json:"integrity"`
+		Ability      int64   `json:"ability"`
+		Since        string  `json:"since"`
+		UnreadCount  int64   `json:"unread_count"`
+		DirectChatId *string `json:"direct_chat_id"`
 	}
 	FriendGroup {
 		Id        string `json:"id"`
@@ -479,6 +491,9 @@ service taskgame {
 
 	@handler postMessage
 	post /chats/:chatId/messages (PostMessageReq) returns (Message)
+
+	@handler markChatRead
+	post /chats/:chatId/read (MarkChatReadReq) returns (ChatRead)
 }
 
 @server (
