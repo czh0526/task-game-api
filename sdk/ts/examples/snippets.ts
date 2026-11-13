@@ -21,6 +21,10 @@ export async function registerAndLogin(email: string, password: string): Promise
   if (me.id !== session.user.id) {
     throw new Error("token subject did not match the registered user");
   }
+  const named = await authed.updateMe({ nickname: "阿宁" });
+  if (named.nickname !== "阿宁" || named.id !== me.id) {
+    throw new Error("profile update did not keep the same user");
+  }
   return authed;
 }
 

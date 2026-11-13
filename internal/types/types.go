@@ -231,6 +231,7 @@ type TaskList struct {
 
 type UserScores struct {
 	UserId    string        `json:"user_id"`
+	Nickname  string        `json:"nickname"`
 	Integrity int64         `json:"integrity"`
 	Ability   int64         `json:"ability"`
 	Recent    []ScoreChange `json:"recent"`
@@ -245,8 +246,9 @@ type Webhook struct {
 }
 
 type RegisterReq struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	Email    string  `json:"email"`
+	Password string  `json:"password"`
+	Nickname *string `json:"nickname,optional"`
 }
 
 type LoginReq struct {
@@ -257,7 +259,12 @@ type LoginReq struct {
 type UserSummary struct {
 	Id        string `json:"id"`
 	Email     string `json:"email"`
+	Nickname  string `json:"nickname"`
 	IsArbiter bool   `json:"is_arbiter"`
+}
+
+type PatchMeReq struct {
+	Nickname string `json:"nickname,optional"`
 }
 
 type Submission struct {
@@ -397,6 +404,7 @@ type AuthSession struct {
 
 type Friend struct {
 	UserId       string  `json:"user_id"`
+	Nickname     string  `json:"nickname"`
 	Integrity    int64   `json:"integrity"`
 	Ability      int64   `json:"ability"`
 	Since        string  `json:"since"`
@@ -423,12 +431,14 @@ type FriendList struct {
 }
 
 type FriendRequest struct {
-	Id         string `json:"id"`
-	FromUserId string `json:"from_user_id"`
-	ToUserId   string `json:"to_user_id"`
-	Status     string `json:"status"`
-	CreatedAt  string `json:"created_at"`
-	UpdatedAt  string `json:"updated_at"`
+	Id           string `json:"id"`
+	FromUserId   string `json:"from_user_id"`
+	ToUserId     string `json:"to_user_id"`
+	FromNickname string `json:"from_nickname"`
+	ToNickname   string `json:"to_nickname"`
+	Status       string `json:"status"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
 }
 
 type FriendRequestList struct {

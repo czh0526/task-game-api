@@ -9,6 +9,7 @@ import { CreateTask } from "./screens/CreateTask";
 import { Friends } from "./screens/Friends";
 import { Invites } from "./screens/Invites";
 import { Scores } from "./screens/Scores";
+import { Settings } from "./screens/Settings";
 import { TaskDetail } from "./screens/TaskDetail";
 import { TaskList } from "./screens/TaskList";
 import { cx } from "./ui";
@@ -21,6 +22,7 @@ const TITLES: Record<string, string> = {
   conversation: "会话",
   invites: "邀请",
   friends: "好友",
+  settings: "用户信息",
 };
 
 export function App() {
@@ -70,6 +72,9 @@ export function App() {
           <a href={href.scores} aria-current={route.name === "scores" ? "page" : undefined}>
             积分
           </a>
+          <a href={href.settings} aria-current={route.name === "settings" ? "page" : undefined}>
+            设置
+          </a>
         </nav>
         </aside>
       ) : null}
@@ -83,6 +88,7 @@ export function App() {
             {route.name === "scores" ? <Scores /> : null}
             {route.name === "invites" ? <Invites /> : null}
             {route.name === "friends" ? <Friends /> : null}
+            {route.name === "settings" ? <Settings /> : null}
             {route.name === "conversation" ? <Conversation key={route.id} id={route.id} /> : null}
           </>
         ) : (

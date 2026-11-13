@@ -6,6 +6,7 @@ export const protocolOperations = [
   "register",
   "login",
   "me",
+  "updateMe",
   "listTasks",
   "createTask",
   "getTask",

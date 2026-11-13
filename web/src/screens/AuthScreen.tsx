@@ -4,6 +4,7 @@ import { clientErrorText, createClient } from "../client";
 import { useApp } from "../context";
 import { formatError } from "../format";
 import { DevIdentity } from "../identity";
+import { nicknameError, nicknameServerError } from "../person";
 import type { Settings } from "../settings";
 import { Button, ErrorNote, Field, Screen } from "../ui";
 
@@ -14,6 +15,7 @@ export function AuthScreen() {
   const [mode, setMode] = useState<Mode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [nickname, setNickname] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
@@ -27,9 +29,20 @@ export function AuthScreen() {
       setError(clientErrorText(err));
       return;
     }
+    if (mode === "register" && nickname.trim()) {
+      const local = nicknameError(nickname);
+      if (local) {
+        setError(local);
+        return;
+      }
+    }
     setPending(true);
     try {
-      const body = { email: email.trim(), password };
+      const trimmedNick = nickname.trim();
+      const body =
+        mode === "register"
+          ? { email: email.trim(), password, ...(trimmedNick ? { nickname: trimmedNick } : {}) }
+          : { email: email.trim(), password };
       const session = mode === "register" ? await anon.register(body) : await anon.login(body);
       const me = await anon.withAuth(bearer(session.access_token)).me();
       if (me.id !== session.user.id) {
@@ -94,6 +107,16 @@ export function AuthScreen() {
             onChange={(event) => setPassword(event.target.value)}
           />
         </Field>
+        {mode === "register" ? (
+          <Field label="昵称（可选）" hint="显示名，1 到 32 个字符。可以以后在「设置」里再填。不要求唯一。">
+            <input
+              value={nickname}
+              autoComplete="nickname"
+              placeholder="可以先留空"
+              onChange={(event) => setNickname(event.target.value)}
+            />
+          </Field>
+        ) : null}
         <ErrorNote message={error || clientError} />
         <Button type="submit" kind="primary" pending={pending}>
           {mode === "register" ? "注册并登录" : "登录"}
@@ -113,6 +136,8 @@ function authErrorText(error: unknown): string {
     if (error.code === "conflict") return "这个邮箱已经注册。";
     if (error.code === "unauthorized") return "邮箱或密码不正确。";
     if (error.code === "invalid_argument") {
+      const nick = nicknameServerError(error.message);
+      if (nick) return nick;
       if (error.message.includes("email")) return "请填写有效的邮箱地址。";
       if (error.message.includes("at least")) return "密码至少 8 个字符。";
       if (error.message.includes("72")) return "密码不能超过 72 字节。";

@@ -1,17 +1,53 @@
+import { useEffect, useState } from "react";
 import { useApp } from "./context";
+import { PROFILE_EVENT, rememberNickname } from "./names";
+import { personLabel } from "./person";
+import { href } from "./route";
 import { PRESETS, activePreset, loggedOut, settingsForRole, type Role } from "./settings";
 import { Button, ErrorNote, Field } from "./ui";
 
 export function SessionCard() {
-  const { settings, setSettings } = useApp();
+  const { settings, setSettings, client } = useApp();
+  const [nickname, setNickname] = useState("");
+
+  useEffect(() => {
+    if (!client) return;
+    const ac = new AbortController();
+    client
+      .me({ signal: ac.signal })
+      .then((me) => {
+        if (ac.signal.aborted) return;
+        setNickname(me.nickname ?? "");
+        rememberNickname(me.id, me.nickname);
+      })
+      .catch(() => {});
+    const onProfile = (event: Event) => {
+      const detail = (event as CustomEvent<{ userId?: string; nickname?: string }>).detail;
+      if (!detail || detail.userId !== settings.userId) return;
+      setNickname(detail.nickname ?? "");
+    };
+    window.addEventListener(PROFILE_EVENT, onProfile);
+    return () => {
+      ac.abort();
+      window.removeEventListener(PROFILE_EVENT, onProfile);
+    };
+  }, [client, settings.userId]);
+
+  const label = personLabel(nickname, settings.userId);
   return (
     <div className="who">
       <span className="fact-label">当前账号</span>
-      <strong>{settings.email || "开发密钥"}</strong>
-      <code className="mono">{settings.userId}</code>
-      <Button kind="secondary" onClick={() => setSettings(loggedOut(settings))}>
-        退出登录
-      </Button>
+      <strong title={settings.userId}>{label}</strong>
+      {settings.email ? <span className="who-email">{settings.email}</span> : <span className="who-email">开发密钥</span>}
+      {label !== settings.userId ? <code className="mono">{settings.userId}</code> : null}
+      <div className="who-actions">
+        <a className="btn secondary" href={href.settings}>
+          用户信息
+        </a>
+        <Button kind="secondary" onClick={() => setSettings(loggedOut(settings))}>
+          退出登录
+        </Button>
+      </div>
     </div>
   );
 }

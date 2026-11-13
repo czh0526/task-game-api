@@ -77,6 +77,8 @@ export type {
   Payment,
   PaymentCondition,
   PasswordCredentials,
+  ProfileUpdate,
+  RegisterBody,
   PaymentMode,
   ResolutionBody,
   ResolutionOutcome,

@@ -10,8 +10,9 @@ func toAuthSession(s account.Session) *types.AuthSession {
 		AccessToken: s.AccessToken,
 		ExpiresIn:   s.ExpiresIn,
 		User: types.UserSummary{
-			Id:    s.UserID,
-			Email: s.Email,
+			Id:       s.UserID,
+			Email:    s.Email,
+			Nickname: s.Nickname,
 		},
 	}
 }

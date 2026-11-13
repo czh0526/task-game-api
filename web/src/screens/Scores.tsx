@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { UserScores } from "taskgame-client";
 import { useApp } from "../context";
 import { formatError, formatTime, validUserId } from "../format";
+import { PersonName, rememberNickname } from "../names";
 import { PRESETS } from "../settings";
 import { Button, ErrorNote, Field, IdText, Screen } from "../ui";
 
@@ -23,7 +24,9 @@ export function Scores() {
     setPending(true);
     setError(null);
     try {
-      setScores(await client.getUserScores(trimmed));
+      const page = await client.getUserScores(trimmed);
+      rememberNickname(page.user_id, page.nickname);
+      setScores(page);
     } catch (err) {
       setScores(null);
       setError(formatError(err));
@@ -40,7 +43,7 @@ export function Scores() {
   }, [client, settings.userId]);
 
   return (
-    <Screen title="积分" lede="GET /v1/users/{userId}/scores。字段是 integrity（诚信）和 ability（能力）。未知用户返回 0，不是 404。">
+    <Screen title="积分" lede="GET /v1/users/{userId}/scores。公开资料有昵称、integrity（诚信）和 ability（能力），没有邮箱。未知用户返回 0，不是 404。">
       <ErrorNote message={client ? error : clientError} />
       <form
         className="toolbar"
@@ -79,7 +82,7 @@ export function Scores() {
       {scores ? (
         <div className="card">
           <p>
-            用户 <IdText value={scores.user_id} />
+            用户 <PersonName nickname={scores.nickname} userId={scores.user_id} />
           </p>
           <div className="score-grid">
             <div>

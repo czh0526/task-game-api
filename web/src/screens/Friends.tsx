@@ -8,6 +8,8 @@ import {
 } from "taskgame-client";
 import { useApp } from "../context";
 import { formatError, formatTime, isAbort, validUserId } from "../format";
+import { PersonName, rememberNickname } from "../names";
+import { personLabel } from "../person";
 import { subscribeDirectRead } from "../readSync";
 import { Button, ErrorNote, Field, OkNote, Screen } from "../ui";
 
@@ -79,6 +81,16 @@ export function Friends() {
       stop();
     };
   }, [client, reload, settings.userId]);
+
+  useEffect(() => {
+    const friends = [...(list?.ungrouped ?? [])];
+    for (const group of list?.groups ?? []) friends.push(...group.friends);
+    for (const friend of friends) rememberNickname(friend.user_id, friend.nickname);
+    for (const request of [...incoming, ...outgoing]) {
+      rememberNickname(request.from_user_id, request.from_nickname);
+      rememberNickname(request.to_user_id, request.to_nickname);
+    }
+  }, [list, incoming, outgoing]);
 
   async function run(key: string, action: () => Promise<string | void>) {
     if (!client) return;
@@ -181,7 +193,7 @@ export function Friends() {
           {incoming.map((request) => (
             <li key={request.id} className="friend-row">
               <div>
-                <code className="mono">{request.from_user_id}</code>
+                <PersonName nickname={request.from_nickname} userId={request.from_user_id} />
                 <p className="meta">
                   <span>{formatTime(request.created_at)}</span>
                   <code className="mono">{request.id}</code>
@@ -229,7 +241,7 @@ export function Friends() {
           {outgoing.map((request) => (
             <li key={request.id} className="friend-row">
               <div>
-                <code className="mono">{request.to_user_id}</code>
+                <PersonName nickname={request.to_nickname} userId={request.to_user_id} />
                 <p className="meta">
                   <span>{formatTime(request.created_at)}</span>
                   <span className="en">{request.status}</span>
@@ -404,10 +416,11 @@ export function Friends() {
 }
 
 function openLabel(friend: Friend): string {
+  const name = personLabel(friend.nickname, friend.user_id);
   if (friend.unread_count > 0) {
-    return `打开与 ${friend.user_id} 的会话，${friend.unread_count} 条未读`;
+    return `打开与 ${name} 的会话，${friend.unread_count} 条未读`;
   }
-  return `打开与 ${friend.user_id} 的会话`;
+  return `打开与 ${name} 的会话`;
 }
 
 function UnreadBadge({ count }: { count: number }) {
@@ -463,7 +476,7 @@ function FriendSection({
               onClick={() => onMessage(friend)}
             >
               <span className="friend-name">
-                <code className="mono">{friend.user_id}</code>
+                <PersonName nickname={friend.nickname} userId={friend.user_id} />
                 <UnreadBadge count={friend.unread_count} />
               </span>
               <p className="meta">

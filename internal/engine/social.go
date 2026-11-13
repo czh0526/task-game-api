@@ -450,7 +450,7 @@ func (e *Engine) GetUserScores(ctx context.Context, userID string) (*types.UserS
 	}
 	u, err := e.store.Users().Get(ctx, userID)
 	if errors.Is(err, store.ErrNotFound) {
-		return &types.UserScores{UserId: userID, Recent: []types.ScoreChange{}}, nil
+		return &types.UserScores{UserId: userID, Nickname: "", Recent: []types.ScoreChange{}}, nil
 	}
 	if err != nil {
 		return nil, err
@@ -470,7 +470,7 @@ func (e *Engine) GetUserScores(ctx context.Context, userID string) (*types.UserS
 		})
 	}
 	return &types.UserScores{
-		UserId: u.ID, Integrity: u.Integrity, Ability: u.Ability, Recent: recent,
+		UserId: u.ID, Nickname: u.Nickname, Integrity: u.Integrity, Ability: u.Ability, Recent: recent,
 	}, nil
 }
 

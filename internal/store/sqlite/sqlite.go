@@ -140,6 +140,11 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			return fmt.Errorf("migrate users.password_hash: %w", err)
 		}
 	}
+	if _, ok := cols["nickname"]; !ok {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE users ADD COLUMN nickname TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("migrate users.nickname: %w", err)
+		}
+	}
 	_, err = db.ExecContext(ctx, `
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email
 		ON users (email) WHERE email IS NOT NULL AND email != ''`)

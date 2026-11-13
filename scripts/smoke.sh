@@ -12,6 +12,8 @@
 #                   direct chat: one thread per pair, non-friend 403, history survives unfriend.
 #                   unread: a direct message shows on the recipient's friend card, mark-read
 #                   clears it, and task chats / group chats / non-friends do not change it.
+#   profile:        optional nickname on register, PATCH /me, GET /me, public friend and
+#                   score views, duplicate display names, and rejected values.
 #
 # Start the API first, from the repo root:
 #   CGO_ENABLED=0 go run . -f etc/taskgame.yaml
@@ -443,6 +445,31 @@ elif op == "has_request":
     ids = [item.get("id") for item in (doc.get("items") or [])]
     if args[0] not in ids:
         fail("request list missing %s" % args[0])
+elif op == "user_field":
+    got = (doc.get("user") or {}).get(args[0])
+    if str(got) != args[1]:
+        fail("user.%s %s want %s" % (args[0], got, args[1]))
+elif op == "absent":
+    if args[0] in doc:
+        fail("field %s should be absent" % args[0])
+elif op == "friend_nickname":
+    uid, want = args[0], args[1]
+    card = None
+    buckets = list(doc.get("ungrouped") or [])
+    for group in doc.get("groups") or []:
+        buckets.extend(group.get("friends") or [])
+    for item in buckets:
+        if item.get("user_id") == uid:
+            card = item
+            break
+    if card is None:
+        fail("friend %s missing" % uid)
+    if "nickname" not in card:
+        fail("friend %s has no nickname field" % uid)
+    if card.get("nickname") != want:
+        fail("nickname for %s is %s want %s" % (uid, card.get("nickname"), want))
+    if "email" in card or "password" in card or "balance" in card:
+        fail("friend card leaked a private field")
 else:
     fail("unknown check %s" % op)
 PY
@@ -974,6 +1001,142 @@ register_user() {
   REG_TOK="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])' <<<"$RESP_BODY")"
 }
 
+run_profile() {
+  local id_a tok_a id_b tok_b id_c tok_c id_d tok_d email_a email_bad long nick_body
+  echo "== profile nickname =="
+  email_a="profile-a-${STAMP}@example.com"
+  register_user "$email_a"
+  id_a="$REG_ID"
+  tok_a="$REG_TOK"
+  check "$RESP_BODY" user_field nickname ""
+  check "$RESP_BODY" user_field email "$email_a"
+
+  request GET "${BASE}/v1/me" bearer "$tok_a"
+  expect_code 200 "me before nickname"
+  check "$RESP_BODY" eq id "$id_a"
+  check "$RESP_BODY" eq email "$email_a"
+  check "$RESP_BODY" eq nickname ""
+  check "$RESP_BODY" absent password
+
+  request PATCH "${BASE}/v1/me" bearer "$tok_a" '{}'
+  expect_code 400 "missing nickname"
+  check "$RESP_BODY" error_has invalid_argument "nickname"
+  request PATCH "${BASE}/v1/me" bearer "$tok_a" '{"nickname":"   "}'
+  expect_code 400 "blank nickname"
+  check "$RESP_BODY" error_has invalid_argument "nickname"
+  request PATCH "${BASE}/v1/me" bearer "$tok_a" '{"nickname":""}'
+  expect_code 400 "empty nickname"
+  long="$(python3 -c 'print("a"*33)')"
+  request PATCH "${BASE}/v1/me" bearer "$tok_a" "{\"nickname\":\"${long}\"}"
+  expect_code 400 "nickname too long"
+  check "$RESP_BODY" error_has invalid_argument "nickname"
+  nick_body="$(python3 -c 'import json; print(json.dumps({"nickname":"a\u0001b"}))')"
+  request PATCH "${BASE}/v1/me" bearer "$tok_a" "$nick_body"
+  expect_code 400 "nickname control character"
+
+  request GET "${BASE}/v1/me" bearer "$tok_a"
+  expect_code 200 "nickname unchanged after rejects"
+  check "$RESP_BODY" eq nickname ""
+
+  nick_body="$(python3 -c 'import json; print(json.dumps({"nickname":"  阿宁  "}))')"
+  request PATCH "${BASE}/v1/me" bearer "$tok_a" "$nick_body"
+  expect_code 200 "set nickname"
+  check "$RESP_BODY" eq nickname "阿宁"
+  check "$RESP_BODY" eq email "$email_a"
+  request GET "${BASE}/v1/me" bearer "$tok_a"
+  expect_code 200 "me after set"
+  check "$RESP_BODY" eq nickname "阿宁"
+
+  nick_body="$(python3 -c 'import json; print(json.dumps({"nickname":"阿宁同学"}))')"
+  request PATCH "${BASE}/v1/me" bearer "$tok_a" "$nick_body"
+  expect_code 200 "update nickname"
+  check "$RESP_BODY" eq nickname "阿宁同学"
+  request GET "${BASE}/v1/me" bearer "$tok_a"
+  expect_code 200 "me after update"
+  check "$RESP_BODY" eq nickname "阿宁同学"
+  check "$RESP_BODY" eq email "$email_a"
+
+  request POST "${BASE}/v1/login" none "" "{\"email\":\"${email_a}\",\"password\":\"password123\"}"
+  expect_code 200 "login keeps nickname"
+  check "$RESP_BODY" user_field nickname "阿宁同学"
+  check "$RESP_BODY" user_field id "$id_a"
+
+  request GET "${BASE}/v1/users/${id_a}/scores" bearer "$tok_a"
+  expect_code 200 "public scores include nickname"
+  check "$RESP_BODY" eq nickname "阿宁同学"
+  check "$RESP_BODY" eq user_id "$id_a"
+  check "$RESP_BODY" absent email
+  check "$RESP_BODY" absent password
+  check "$RESP_BODY" absent balance
+
+  email_bad="profile-bad-${STAMP}@example.com"
+  request POST "${BASE}/v1/register" none "" "{\"email\":\"${email_bad}\",\"password\":\"password123\",\"nickname\":\"   \"}"
+  expect_code 400 "register blank nickname does not create the user"
+  check "$RESP_BODY" error_has invalid_argument "nickname"
+  request POST "${BASE}/v1/register" none "" "{\"email\":\"${email_bad}\",\"password\":\"password123\"}"
+  expect_code 201 "register after rejected nickname"
+  check "$RESP_BODY" user_field nickname ""
+
+  nick_body="$(python3 -c 'import json,sys; print(json.dumps({"email":sys.argv[1],"password":"password123","nickname":"同名"}))' "profile-b-${STAMP}@example.com")"
+  request POST "${BASE}/v1/register" none "" "$nick_body"
+  expect_code 201 "register with nickname"
+  check "$RESP_BODY" user_field nickname "同名"
+  id_b="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["user"]["id"])' <<<"$RESP_BODY")"
+  tok_b="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])' <<<"$RESP_BODY")"
+  request GET "${BASE}/v1/me" bearer "$tok_b"
+  expect_code 200 "me for registered nickname"
+  check "$RESP_BODY" eq nickname "同名"
+
+  nick_body="$(python3 -c 'import json,sys; print(json.dumps({"email":sys.argv[1],"password":"password123","nickname":"同名"}))' "profile-c-${STAMP}@example.com")"
+  request POST "${BASE}/v1/register" none "" "$nick_body"
+  expect_code 201 "same nickname is allowed"
+  id_c="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["user"]["id"])' <<<"$RESP_BODY")"
+  tok_c="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])' <<<"$RESP_BODY")"
+  if [[ "$id_c" == "$id_b" ]]; then
+    echo "duplicate nickname collapsed two users" >&2
+    exit 1
+  fi
+  request GET "${BASE}/v1/me" bearer "$tok_c"
+  expect_code 200 "second shared nickname"
+  check "$RESP_BODY" eq nickname "同名"
+
+  request POST "${BASE}/v1/friends/requests" bearer "$tok_b" "{\"user_id\":\"${id_a}\"}"
+  expect_code 201 "friend request carries nicknames"
+  check "$RESP_BODY" eq from_nickname "同名"
+  check "$RESP_BODY" eq to_nickname "阿宁同学"
+  check "$RESP_BODY" absent email
+  req_id="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])' <<<"$RESP_BODY")"
+  request POST "${BASE}/v1/friend-requests/${req_id}/accept" bearer "$tok_a" '{}'
+  expect_code 200 "accept nickname request"
+  request GET "${BASE}/v1/friends" bearer "$tok_a"
+  expect_code 200 "friend card nickname"
+  check "$RESP_BODY" friend_nickname "$id_b" "同名"
+  check "$RESP_BODY" no_private
+  request GET "${BASE}/v1/friends" bearer "$tok_b"
+  expect_code 200 "other friend card nickname"
+  check "$RESP_BODY" friend_nickname "$id_a" "阿宁同学"
+  check "$RESP_BODY" no_private
+
+  register_user "profile-d-${STAMP}@example.com"
+  id_d="$REG_ID"
+  tok_d="$REG_TOK"
+  request GET "${BASE}/v1/me" bearer "$tok_d"
+  expect_code 200 "missing nickname still logs in"
+  check "$RESP_BODY" eq nickname ""
+  request POST "${BASE}/v1/friends/requests" bearer "$tok_a" "{\"user_id\":\"${id_d}\"}"
+  expect_code 201 "request to a user with no nickname"
+  check "$RESP_BODY" eq from_nickname "阿宁同学"
+  check "$RESP_BODY" eq to_nickname ""
+  req_id="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])' <<<"$RESP_BODY")"
+  request POST "${BASE}/v1/friend-requests/${req_id}/accept" bearer "$tok_d" '{}'
+  expect_code 200 "accept user with no nickname"
+  request GET "${BASE}/v1/friends" bearer "$tok_a"
+  expect_code 200 "empty nickname on the card"
+  check "$RESP_BODY" friend_nickname "$id_d" ""
+  check "$RESP_BODY" friend_nickname "$id_b" "同名"
+  echo "profile ok"
+}
+
 run_friends() {
   # Mutual friends and personal groups. Does not touch task acceptance.
   local id_a tok_a id_b tok_b id_c tok_c req_id group_id group_b direct_id again_id
@@ -1404,4 +1567,5 @@ run_collaborative_per_seat
 run_workflow
 run_milestone
 run_friends
-echo "smoke ok exclusive + competitive winner_take_all + collaborative unified + quantity + per_seat + workflow + milestone + friends"
+run_profile
+echo "smoke ok exclusive + competitive winner_take_all + collaborative unified + quantity + per_seat + workflow + milestone + friends + profile"

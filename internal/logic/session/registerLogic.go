@@ -24,7 +24,7 @@ func NewRegisterLogic(ctx context.Context, svcCtx *svc.ServiceContext) *Register
 }
 
 func (l *RegisterLogic) Register(req *types.RegisterReq) (*types.AuthSession, error) {
-	session, err := l.svcCtx.Accounts.Register(l.ctx, req.Email, req.Password)
+	session, err := l.svcCtx.Accounts.Register(l.ctx, req.Email, req.Password, req.Nickname)
 	if err != nil {
 		return nil, err
 	}

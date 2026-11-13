@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { createIdempotencyKey, type Message, type ResolutionOutcome, type Task } from "taskgame-client";
 import { useApp } from "../context";
 import {
@@ -14,6 +14,7 @@ import {
   isAbort,
 } from "../format";
 import { FriendPicker, appendUserId } from "../friends";
+import { UserRef } from "../names";
 import { href } from "../route";
 import {
   confirmTaskBody,
@@ -197,8 +198,21 @@ export function TaskDetail({ id }: { id: string }) {
       <ErrorNote message={error} />
 
       <div className="facts">
-        <Fact label="发布者 publisher_id" value={task.publisher_id} />
-        <Fact label="执行者 executor_ids" value={(task.executor_ids ?? []).join(", ") || "—"} />
+        <Fact label="发布者 publisher_id" value={<UserRef userId={task.publisher_id} />} />
+        <Fact
+          label="执行者 executor_ids"
+          value={
+            (task.executor_ids ?? []).length === 0 ? (
+              "—"
+            ) : (
+              <span className="person-list">
+                {(task.executor_ids ?? []).map((userId) => (
+                  <UserRef key={userId} userId={userId} />
+                ))}
+              </span>
+            )
+          }
+        />
         <Fact label="报酬" value={`${formatCredits(task.payment.amount)} · ${PAYMENT_MODE_LABEL[task.payment.mode] ?? task.payment.mode}`} />
         <Fact label="验收截止" value={formatTime(task.acceptance.deadline)} raw={task.acceptance.deadline} />
         <Fact label="验收标准" value={task.acceptance.quality} />
@@ -233,7 +247,7 @@ export function TaskDetail({ id }: { id: string }) {
         <ul className="plain">
           {(task.submissions ?? []).map((submission) => (
             <li key={submission.id}>
-              <IdText value={submission.id} /> · <IdText value={submission.executor_id} />
+              <IdText value={submission.id} /> · <UserRef userId={submission.executor_id} />
               {submission.role_id ? (
                 <>
                   {" "}
@@ -278,7 +292,7 @@ export function TaskDetail({ id }: { id: string }) {
                       {ENTRY_LABEL[entry.type] ?? entry.type} <span className="en">{entry.type}</span>
                     </td>
                     <td>{formatCredits(entry.amount)}</td>
-                    <td>{entry.to_user_id ? <IdText value={entry.to_user_id} /> : "—"}</td>
+                    <td>{entry.to_user_id ? <UserRef userId={entry.to_user_id} /> : "—"}</td>
                     <td title={entry.created_at}>{formatTime(entry.created_at)}</td>
                   </tr>
                 ))}
@@ -327,7 +341,7 @@ export function TaskDetail({ id }: { id: string }) {
                     <td>{role.template_id ? <IdText value={role.template_id} /> : "—"}</td>
                     <td>{ROLE_STATUS_LABEL[role.status ?? "open"] ?? role.status} <span className="en">{role.status ?? "open"}</span></td>
                     <td title={role.refund_deadline ?? undefined}>{formatTime(role.refund_deadline)}</td>
-                    <td>{role.assignee_user_id ? <IdText value={role.assignee_user_id} /> : "—"}</td>
+                    <td>{role.assignee_user_id ? <UserRef userId={role.assignee_user_id} /> : "—"}</td>
                     {mode === "per_seat" ? (
                       <td className="seat-action">
                         {action === "pay" ? (
@@ -506,7 +520,7 @@ export function TaskDetail({ id }: { id: string }) {
                         checked={chosen === submission.id}
                         onChange={() => setChosen(submission.id)}
                       />
-                      <IdText value={submission.executor_id} />
+                      <UserRef userId={submission.executor_id} />
                       <code className="mono">{submission.id}</code>
                     </label>
                   ))}
@@ -826,7 +840,7 @@ export function TaskDetail({ id }: { id: string }) {
             <ul className="plain">
               {messages.map((message) => (
                 <li key={message.id}>
-                  <IdText value={message.sender_id} /> · {formatTime(message.created_at)}
+                  <UserRef userId={message.sender_id} /> · {formatTime(message.created_at)}
                   <div>{message.text || message.attachment_ref}</div>
                 </li>
               ))}
@@ -876,7 +890,7 @@ export function TaskDetail({ id }: { id: string }) {
   );
 }
 
-function Fact({ label, value, raw }: { label: string; value: string; raw?: string }) {
+function Fact({ label, value, raw }: { label: string; value: ReactNode; raw?: string }) {
   return (
     <div>
       <span className="fact-label">{label}</span>

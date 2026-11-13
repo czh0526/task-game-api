@@ -64,7 +64,7 @@ const asJwt = new TaskGameClient({
 
 `register` 和 `login` 是公开接口，不会带上客户端里已经配置的 `apiKey` 或 `bearer`。密码至少 8 个字符、最长 72 字节。服务只存 bcrypt，响应里没有密码。成功时 `access_token` 是 HS256 JWT，`sub` 就是 `user.id`，和 `make token` 的 claims 一样（`sub`、`iat`、`exp`）。`expires_in` 是秒。重复邮箱是 **409** `conflict`。邮箱或密码不合法是 **400** `invalid_argument`。登录时邮箱不存在和密码错误都是 **401** `unauthorized`，文案相同。
 
-`me()` 要鉴权，返回 `{id, email}`。开发密钥用户的 `email` 是空字符串。对这三个方法传入 `idempotencyKey` 会抛出 `TypeError`。
+`me()` 要鉴权，返回 `{id, email, nickname}`。开发密钥用户的 `email` 是空字符串。`nickname` 是显示名，不是登录名，也不要求唯一；还没设置时是空字符串。`updateMe({ nickname })` 对应 `PATCH /v1/me`，只改昵称，不改邮箱和密码，也不刷新 token。空昵称、纯空白、控制字符、以及超过 32 个字符是 **400**。`register` 可以带上可选的 `nickname`，不带就以后再设。对 `register`、`login`、`me`、`updateMe` 传入 `idempotencyKey` 会抛出 `TypeError`。
 
 ```ts
 import { TaskGameClient, bearer } from "taskgame-client";
@@ -77,6 +77,8 @@ const session = await anon.register({
 const publisher = anon.withAuth(bearer(session.access_token));
 const me = await publisher.me();
 // me.id === session.user.id
+const named = await publisher.updateMe({ nickname: "阿宁" });
+// named.nickname === "阿宁"
 ```
 
 已有账号用 `anon.login({ email, password })`，返回同一形状。开发密钥 `apiKey()` 仍然可用，`usr_publisher` / `usr_executor` 不用注册。
@@ -85,7 +87,7 @@ const me = await publisher.me();
 
 OpenAPI 在写操作上声明了请求头 `Idempotency-Key`，`GET /v1/tasks` 的参数表里也有这个头。传入 `idempotencyKey` 就会带上。创建、注资、接受、提交、确认、争议、退出、webhook、会话和消息会保存这把 key：同一用户、同一把 key、同一请求会重放已保存的响应；同一把 key 配了不同的请求则返回 **409** `idempotency_conflict`，客户端抛出 `IdempotencyConflictError`。`GET /v1/tasks` 会收下这个头，当前服务不用它做重放。
 
-`getTask`、`getUserScores`、`me`、`register`、`login`、`health` 的 OpenAPI（或探活）没有这个头。对它们传入 `idempotencyKey` 会抛出 `TypeError`。
+`getTask`、`getUserScores`、`me`、`updateMe`、`register`、`login`、`health` 的 OpenAPI（或探活）没有这个头。对它们传入 `idempotencyKey` 会抛出 `TypeError`。
 
 错误体一律是 JSON：`{"code":"...","message":"..."}`。常见 `code` 有对应的错误类（都继承 `TaskGameError`）：
 
@@ -284,7 +286,7 @@ await client.acceptTask(taskId, { role_id: "writer_1" });
 
 ### 好友
 
-好友是双向的。`listFriends()` 只返回调用者自己的分组和未分组好友，字段是 `user_id`、`integrity`、`ability`、`since`、`unread_count`、`direct_chat_id`，没有邮箱。`unread_count` 只算这一对的一对一会话里、对方发来且还没 `markChatRead` 的消息。自己发的不算。任务会话和 `member_ids` 会话不加到这个数字上。没有一对一会话时是 0，`direct_chat_id` 为 null。分组是个人文件夹：一个人最多在一个分组里。每人最多 50 个分组、500 个好友、100 条待处理的发出申请。分组名去掉首尾空白后 1–32 个字符，同一用户不能重复。
+好友是双向的。`listFriends()` 只返回调用者自己的分组和未分组好友，字段是 `user_id`、`nickname`、`integrity`、`ability`、`since`、`unread_count`、`direct_chat_id`，没有邮箱。`nickname` 是显示名，可以重复，没设置时为空字符串。`unread_count` 只算这一对的一对一会话里、对方发来且还没 `markChatRead` 的消息。自己发的不算。任务会话和 `member_ids` 会话不加到这个数字上。没有一对一会话时是 0，`direct_chat_id` 为 null。分组是个人文件夹：一个人最多在一个分组里。每人最多 50 个分组、500 个好友、100 条待处理的发出申请。分组名去掉首尾空白后 1–32 个字符，同一用户不能重复。
 
 已经是好友，或自己已经发出待处理申请，是 409。如果对方已经有一条指向你的待处理申请，`createFriendRequest` 会接受那一条（HTTP 200，`status` 为 `accepted`），不会再插入一行。新申请是 201。解除好友之后可以重新申请。删除分组不会解除好友。
 
@@ -390,7 +392,7 @@ const asJwt = new TaskGameClient({
 
 `register` and `login` are public. They do not send an `apiKey` or `bearer` already configured on the client. The password is 8 to 72 bytes. The server stores bcrypt and does not return the password. `access_token` is an HS256 JWT whose `sub` is `user.id`, the same claims as `make token` (`sub`, `iat`, `exp`). `expires_in` is seconds. A duplicate email is **409** `conflict`. An invalid email or password is **400** `invalid_argument`. Login uses one **401** `unauthorized` message for an unknown email and a wrong password.
 
-`me()` requires auth and returns `{id, email}`. Development API-key users have an empty `email`. Passing `idempotencyKey` to these three methods throws `TypeError`.
+`me()` requires auth and returns `{id, email, nickname}`. Development API-key users have an empty `email`. `nickname` is a display name, not a login handle, and it does not have to be unique. It is an empty string until set. `updateMe({ nickname })` is `PATCH /v1/me`. It changes only the nickname: not the email, not the password, and not the access token. An empty nickname, whitespace, a control character, or more than 32 characters is **400**. `register` may include an optional `nickname`; omit it and set one later. Passing `idempotencyKey` to `register`, `login`, `me`, or `updateMe` throws `TypeError`.
 
 ```ts
 import { TaskGameClient, bearer } from "taskgame-client";
@@ -403,6 +405,8 @@ const session = await anon.register({
 const publisher = anon.withAuth(bearer(session.access_token));
 const me = await publisher.me();
 // me.id === session.user.id
+const named = await publisher.updateMe({ nickname: "阿宁" });
+// named.nickname === "阿宁"
 ```
 
 `anon.login({ email, password })` returns the same shape for an existing account. `apiKey()` still works. `usr_publisher` and `usr_executor` do not need to register.
@@ -411,7 +415,7 @@ const me = await publisher.me();
 
 OpenAPI declares `Idempotency-Key` on the mutating operations, and the parameter list for `GET /v1/tasks` includes it too. Pass `idempotencyKey` and the client sets that header. Create, fund, accept, submit, confirm, dispute, dropout, webhook, chat, and message store the key: the same user, key, and request replays the stored response; the same key with a different request returns **409** `idempotency_conflict`, and the client throws `IdempotencyConflictError`. `GET /v1/tasks` accepts the header. The current server does not use it for replay.
 
-`getTask`, `getUserScores`, `me`, `register`, `login`, and `health` do not define the header. Passing `idempotencyKey` to them throws `TypeError`.
+`getTask`, `getUserScores`, `me`, `updateMe`, `register`, `login`, and `health` do not define the header. Passing `idempotencyKey` to them throws `TypeError`.
 
 Error bodies are JSON: `{"code":"...","message":"..."}`. Common codes have classes (each extends `TaskGameError`):
 
@@ -611,7 +615,7 @@ await client.acceptTask(taskId, { role_id: "writer_1" });
 
 ### Friends
 
-Friendship is mutual. `listFriends()` returns only the caller's groups and ungrouped friends, with `user_id`, `integrity`, `ability`, `since`, `unread_count`, and `direct_chat_id`. There is no email. `unread_count` counts messages the other person sent in that pair's direct chat and that this caller has not passed to `markChatRead`. The caller's own messages are not counted. Task chats and `member_ids` chats do not add to it. It is 0, and `direct_chat_id` is null, until a direct chat exists. A friend sits in at most one of the owner's groups. Caps are 50 groups, 500 friends, and 100 pending outgoing requests per user. A group name is 1–32 characters after trim and unique for that owner.
+Friendship is mutual. `listFriends()` returns only the caller's groups and ungrouped friends, with `user_id`, `nickname`, `integrity`, `ability`, `since`, `unread_count`, and `direct_chat_id`. There is no email. `nickname` is a display name, it may be shared, and it is an empty string when unset. `unread_count` counts messages the other person sent in that pair's direct chat and that this caller has not passed to `markChatRead`. The caller's own messages are not counted. Task chats and `member_ids` chats do not add to it. It is 0, and `direct_chat_id` is null, until a direct chat exists. A friend sits in at most one of the owner's groups. Caps are 50 groups, 500 friends, and 100 pending outgoing requests per user. A group name is 1–32 characters after trim and unique for that owner.
 
 Already friends, or a pending request you already sent, is 409. If the other user already has a pending request toward you, `createFriendRequest` accepts that request (HTTP 200, `status` `accepted`) and does not insert another row. A new request is 201. Unfriend allows a later request. Deleting a group does not unfriend anyone.
 

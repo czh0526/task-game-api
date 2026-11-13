@@ -490,4 +490,69 @@ func assertEvent(t *testing.T, st store.Store, webhookID, eventType, requestID s
 	return ""
 }
 
+func TestPublicNicknameIsSharedAndNotAnEmail(t *testing.T) {
+	ctx := context.Background()
+	eng, st, clk := newEngine(t, 1_000)
+	ensureUsers(t, st, clk, "usr_a", "usr_b", "usr_c")
+	if err := st.Users().SetNickname(ctx, "usr_a", "同名"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Users().SetNickname(ctx, "usr_b", "同名"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Users().InsertRegistered(ctx, "usr_mail", "secret-nick@example.com", "hash", clk.t); err != nil {
+		t.Fatal(err)
+	}
+
+	pending, err := eng.CreateFriendRequest(ctx, "usr_a", &types.CreateFriendRequestReq{UserId: "usr_b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending.FromNickname != "同名" || pending.ToNickname != "同名" {
+		t.Fatalf("request nicknames %+v", pending)
+	}
+	if _, err := eng.AcceptFriendRequest(ctx, "usr_b", &types.FriendRequestActionReq{RequestId: pending.Id}); err != nil {
+		t.Fatal(err)
+	}
+	blank, err := eng.CreateFriendRequest(ctx, "usr_a", &types.CreateFriendRequestReq{UserId: "usr_c"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blank.FromNickname != "同名" || blank.ToNickname != "" {
+		t.Fatalf("missing nickname %+v", blank)
+	}
+	if _, err := eng.AcceptFriendRequest(ctx, "usr_c", &types.FriendRequestActionReq{RequestId: blank.Id}); err != nil {
+		t.Fatal(err)
+	}
+
+	list, err := eng.ListFriends(ctx, "usr_a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]string{}
+	for _, friend := range list.Ungrouped {
+		seen[friend.UserId] = friend.Nickname
+	}
+	if seen["usr_b"] != "同名" || seen["usr_c"] != "" {
+		t.Fatalf("cards %v", seen)
+	}
+	raw, _ := json.Marshal(list)
+	if strings.Contains(string(raw), "email") || strings.Contains(string(raw), "secret-nick") || strings.Contains(string(raw), "password") {
+		t.Fatalf("friend list leaked private fields: %s", raw)
+	}
+
+	scores, err := eng.GetUserScores(ctx, "usr_b")
+	if err != nil || scores.Nickname != "同名" || scores.UserId != "usr_b" {
+		t.Fatalf("scores %+v %v", scores, err)
+	}
+	scoreRaw, _ := json.Marshal(scores)
+	if strings.Contains(string(scoreRaw), "email") || strings.Contains(string(scoreRaw), "password") || strings.Contains(string(scoreRaw), "balance") {
+		t.Fatalf("scores leaked private fields: %s", scoreRaw)
+	}
+	missing, err := eng.GetUserScores(ctx, "usr_c")
+	if err != nil || missing.Nickname != "" {
+		t.Fatalf("unset nickname %+v %v", missing, err)
+	}
+}
+
 func int64Ptr(n int64) *int64 { return &n }

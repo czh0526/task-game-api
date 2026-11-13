@@ -176,6 +176,7 @@ func (r *friendRepo) ListFriendEdges(ctx context.Context, userID string) ([]mode
 			CASE WHEN f.user_low = ? THEN f.user_high ELSE f.user_low END,
 			COALESCE(u.integrity, 0),
 			COALESCE(u.ability, 0),
+			COALESCE(u.nickname, ''),
 			f.created_at,
 			COALESCE(m.group_id, '')
 		FROM friendships f
@@ -193,7 +194,7 @@ func (r *friendRepo) ListFriendEdges(ctx context.Context, userID string) ([]mode
 	for rows.Next() {
 		var edge model.FriendEdge
 		var since string
-		if err := rows.Scan(&edge.UserID, &edge.Integrity, &edge.Ability, &since, &edge.GroupID); err != nil {
+		if err := rows.Scan(&edge.UserID, &edge.Integrity, &edge.Ability, &edge.Nickname, &since, &edge.GroupID); err != nil {
 			return nil, err
 		}
 		edge.Since, err = model.ParseTime(since)
