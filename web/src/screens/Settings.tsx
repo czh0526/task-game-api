@@ -76,11 +76,11 @@ export function Settings() {
   return (
     <Screen
       title="用户信息"
-      lede="昵称会显示在好友列表和会话里。它可以和别人相同，账号仍以用户 id 区分。邮箱是登录账号，这里不能修改，密码也不在这一页更改。"
+      lede="好友和会话里显示为一行「昵称(用户 id 后 6 位)」。它可以和别人相同。邮箱是登录账号，这里不能修改，密码也不在这一页更改。"
     >
       {loading ? <p className="hint">正在读取资料…</p> : null}
       <form className="form card" onSubmit={onSubmit}>
-        <Field label="昵称" hint="去掉首尾空白后 1 到 32 个字符。还没设置时，别人会看到用户 id 的短写。">
+        <Field label="昵称" hint="去掉首尾空白后 1 到 32 个字符。还没设置时，别人只看到用户 id 的后 6 位。">
           <input
             value={nickname}
             maxLength={64}

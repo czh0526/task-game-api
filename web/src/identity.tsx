@@ -39,7 +39,6 @@ export function SessionCard() {
       <span className="fact-label">当前账号</span>
       <strong title={settings.userId}>{label}</strong>
       {settings.email ? <span className="who-email">{settings.email}</span> : <span className="who-email">开发密钥</span>}
-      {label !== settings.userId ? <code className="mono">{settings.userId}</code> : null}
       <div className="who-actions">
         <a className="btn secondary" href={href.settings}>
           用户信息

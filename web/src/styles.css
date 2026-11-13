@@ -327,9 +327,7 @@ th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line
 .who strong, .who .mono, .who-email { overflow-wrap: anywhere; }
 .who-email { color: var(--ink-soft); font-size: 0.88rem; }
 .who-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
-.person { display: inline-grid; justify-items: start; gap: 1px; min-width: 0; vertical-align: middle; }
-.person-name { font-weight: 650; overflow-wrap: anywhere; }
-.person-id { font-size: 0.78rem; color: var(--ink-soft); }
+.person { display: inline; font-weight: 650; overflow-wrap: anywhere; }
 .person-list { display: inline-flex; flex-wrap: wrap; gap: 8px 12px; align-items: start; }
 .dev-id {
   margin-top: 14px;
