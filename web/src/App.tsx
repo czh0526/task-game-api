@@ -1,6 +1,7 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { isSignedIn } from "./client";
 import { useApp } from "./context";
+import { CHAT_ERROR_EVENT } from "./openChat";
 import { DevIdentity, SessionCard } from "./identity";
 import { href, useRoute } from "./route";
 import { AuthScreen } from "./screens/AuthScreen";
@@ -12,7 +13,7 @@ import { Scores } from "./screens/Scores";
 import { Settings } from "./screens/Settings";
 import { TaskDetail } from "./screens/TaskDetail";
 import { TaskList } from "./screens/TaskList";
-import { cx } from "./ui";
+import { cx, ErrorNote } from "./ui";
 
 const TITLES: Record<string, string> = {
   tasks: "任务列表",
@@ -29,6 +30,20 @@ export function App() {
   const route = useRoute();
   const { settings, health } = useApp();
   const signedIn = isSignedIn(settings);
+  const [chatError, setChatError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const onError = (event: Event) => {
+      const detail = (event as CustomEvent<string>).detail;
+      if (typeof detail === "string" && detail) setChatError(detail);
+    };
+    window.addEventListener(CHAT_ERROR_EVENT, onError);
+    return () => window.removeEventListener(CHAT_ERROR_EVENT, onError);
+  }, []);
+
+  useEffect(() => {
+    setChatError(null);
+  }, [route]);
 
   useEffect(() => {
     const page = signedIn ? (TITLES[route.name] ?? "任务游戏") : "登录";
@@ -82,6 +97,7 @@ export function App() {
       <main className={cx("main", !signedIn && "auth-main")}>
         {signedIn ? (
           <>
+            <ErrorNote message={chatError} />
             {route.name === "tasks" ? <TaskList /> : null}
             {route.name === "new" ? <CreateTask /> : null}
             {route.name === "task" ? <TaskDetail key={route.id} id={route.id} /> : null}

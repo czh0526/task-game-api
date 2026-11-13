@@ -5,15 +5,15 @@ export function idSuffix(userId: string): string {
 }
 
 /**
- * One line: `昵称(后6位)`, for example `阿宁同学(a1b2c3)`.
- * A missing nickname is just those 6 characters, never a blank and never a second line.
+ * One line: `昵称(...后6位)`, for example `阿宁同学(...a1b2c3)`.
+ * A missing nickname is `...后6位`, never a blank and never a second line.
  */
 export function personLabel(nickname: string | null | undefined, userId: string): string {
   const name = nickname?.trim();
   const suffix = idSuffix(userId);
-  if (name && suffix) return `${name}(${suffix})`;
+  if (name && suffix) return `${name}(...${suffix})`;
   if (name) return name;
-  if (suffix) return suffix;
+  if (suffix) return `...${suffix}`;
   return "未命名";
 }
 

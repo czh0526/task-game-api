@@ -35,9 +35,6 @@ func TestDirectChat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := eng.CreateChat(ctx, "usr_a", &types.CreateChatReq{Type: model.ChatDirect, UserId: "usr_b"}); codeOf(err) != "forbidden" {
-		t.Fatalf("pending request is not a friend: %v", err)
-	}
 	if _, err := eng.AcceptFriendRequest(ctx, "usr_b", &types.FriendRequestActionReq{RequestId: pending.Id}); err != nil {
 		t.Fatal(err)
 	}
@@ -45,8 +42,8 @@ func TestDirectChat(t *testing.T) {
 	if _, err := eng.CreateChat(ctx, "usr_a", &types.CreateChatReq{Type: model.ChatDirect, UserId: "usr_a"}); codeOf(err) != "invalid_argument" {
 		t.Fatalf("self: %v", err)
 	}
-	if _, err := eng.CreateChat(ctx, "usr_a", &types.CreateChatReq{Type: model.ChatDirect, UserId: "usr_c"}); codeOf(err) != "forbidden" {
-		t.Fatalf("non-friend: %v", err)
+	if _, err := eng.CreateChat(ctx, "usr_a", &types.CreateChatReq{Type: model.ChatDirect, UserId: "usr_missing"}); codeOf(err) != "not_found" {
+		t.Fatalf("unknown user: %v", err)
 	}
 	if _, err := eng.CreateChat(ctx, "usr_a", &types.CreateChatReq{Type: model.ChatDirect, UserId: "bad id"}); codeOf(err) != "invalid_argument" {
 		t.Fatalf("bad id: %v", err)
@@ -141,8 +138,12 @@ func TestDirectChat(t *testing.T) {
 	if _, err := eng.Unfriend(ctx, "usr_a", &types.UnfriendReq{UserId: "usr_b"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := eng.CreateChat(ctx, "usr_a", &types.CreateChatReq{Type: model.ChatDirect, UserId: "usr_b"}); codeOf(err) != "forbidden" {
-		t.Fatalf("unfriended create: %v", err)
+	reopened, err := eng.CreateChat(ctx, "usr_a", &types.CreateChatReq{Type: model.ChatDirect, UserId: "usr_b"})
+	if err != nil || reopened.Id != first.Id {
+		t.Fatalf("unfriended reopen %+v %v", reopened, err)
+	}
+	if n := countEvent(t, st, hook.Id, model.EventChatCreated); n != 1 {
+		t.Fatalf("unfriend reopen emitted another chat.created: %d", n)
 	}
 	still, err := eng.GetChat(ctx, "usr_b", first.Id)
 	if err != nil || still.Id != first.Id {
@@ -163,6 +164,35 @@ func TestDirectChat(t *testing.T) {
 	}
 	if n := countEvent(t, st, hook.Id, model.EventChatCreated); n != 1 {
 		t.Fatalf("resume emitted another chat.created: %d", n)
+	}
+}
+
+func TestDirectChatDoesNotRequireFriendship(t *testing.T) {
+	ctx := context.Background()
+	eng, st, clk := newEngine(t, 1_000)
+	ensureUsers(t, st, clk, "usr_a", "usr_b")
+
+	if _, err := eng.CreateChat(ctx, "usr_a", &types.CreateChatReq{Type: model.ChatDirect, UserId: "usr_a"}); codeOf(err) != "invalid_argument" {
+		t.Fatalf("self: %v", err)
+	}
+	first, err := eng.CreateChat(ctx, "usr_a", &types.CreateChatReq{Type: model.ChatDirect, UserId: "usr_b"})
+	if err != nil || first.Type != model.ChatDirect {
+		t.Fatalf("stranger chat %+v %v", first, err)
+	}
+	again, err := eng.CreateChat(ctx, "usr_b", &types.CreateChatReq{Type: model.ChatDirect, UserId: "usr_a"})
+	if err != nil || again.Id != first.Id {
+		t.Fatalf("reuse %+v %v", again, err)
+	}
+	list, err := eng.ListFriends(ctx, "usr_a")
+	if err != nil || len(list.Ungrouped) != 0 {
+		t.Fatalf("chat created a friendship %+v %v", list, err)
+	}
+	if _, err := eng.PostMessage(ctx, "usr_a", &types.PostMessageReq{ChatId: first.Id, Type: "text", Text: "你好"}); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := st.Chats().FindDirect(ctx, "usr_a", "usr_b")
+	if err != nil || stored.ID != first.Id {
+		t.Fatalf("stored %+v %v", stored, err)
 	}
 }
 

@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { TaskGameClient } from "taskgame-client";
 import { useApp } from "./context";
+import { openDirectChat, reportChatError } from "./openChat";
 import { personLabel } from "./person";
 
 const nicknames = new Map<string, string>();
@@ -26,11 +27,45 @@ export function notifyProfile(userId: string, nickname: string): void {
   window.dispatchEvent(new CustomEvent(PROFILE_EVENT, { detail: { userId, nickname } }));
 }
 
-export function PersonName({ nickname, userId }: { nickname?: string | null; userId: string }) {
+export function PersonName({
+  nickname,
+  userId,
+  chat = true,
+}: {
+  nickname?: string | null;
+  userId: string;
+  /** When false, the name is plain text. Use that inside a control that already opens or selects the user. */
+  chat?: boolean;
+}) {
+  const { client, settings } = useApp();
+  const [pending, setPending] = useState(false);
+  const label = personLabel(nickname, userId);
+  const self = Boolean(userId) && userId === settings.userId;
+  if (!chat || !client || !userId || self) {
+    return (
+      <span className="person" title={userId || undefined}>
+        {label}
+      </span>
+    );
+  }
   return (
-    <span className="person" title={userId || undefined}>
-      {personLabel(nickname, userId)}
-    </span>
+    <button
+      type="button"
+      className="person person-chat"
+      title={userId}
+      aria-label={`与 ${label} 发消息`}
+      disabled={pending}
+      onClick={(event) => {
+        event.stopPropagation();
+        event.preventDefault();
+        setPending(true);
+        void openDirectChat(client, userId)
+          .catch((err: unknown) => reportChatError(err))
+          .finally(() => setPending(false));
+      }}
+    >
+      {label}
+    </button>
   );
 }
 

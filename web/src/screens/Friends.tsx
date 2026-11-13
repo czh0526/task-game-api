@@ -9,6 +9,7 @@ import {
 import { useApp } from "../context";
 import { formatError, formatTime, isAbort, validUserId } from "../format";
 import { PersonName, rememberNickname } from "../names";
+import { openDirectChat } from "../openChat";
 import { personLabel } from "../person";
 import { subscribeDirectRead } from "../readSync";
 import { Button, ErrorNote, Field, OkNote, Screen } from "../ui";
@@ -116,22 +117,9 @@ export function Friends() {
     setPending(`chat-${friend.user_id}`);
     setError(null);
     setNote(null);
-    const tab = window.open("", "_blank");
-    if (tab) tab.opener = null;
     try {
-      const chat = await client.createChat(
-        { type: "direct", user_id: friend.user_id },
-        { idempotencyKey: createIdempotencyKey("direct-chat") },
-      );
-      const url = new URL(window.location.href);
-      url.hash = `/chat/${encodeURIComponent(chat.id)}`;
-      if (tab && !tab.closed) {
-        tab.location.replace(url.toString());
-      } else {
-        setNote("浏览器拦截了新标签。请允许本站弹出窗口后再点一次。");
-      }
+      await openDirectChat(client, friend.user_id);
     } catch (err) {
-      if (tab && !tab.closed) tab.close();
       setError(formatError(err));
     } finally {
       opening.current = false;
@@ -476,7 +464,7 @@ function FriendSection({
               onClick={() => onMessage(friend)}
             >
               <span className="friend-name">
-                <PersonName nickname={friend.nickname} userId={friend.user_id} />
+                <PersonName nickname={friend.nickname} userId={friend.user_id} chat={false} />
                 <UnreadBadge count={friend.unread_count} />
               </span>
               <p className="meta">
