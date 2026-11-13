@@ -89,6 +89,8 @@ Runnable exclusive path (matches `scripts/smoke.sh`): `npm run example:exclusive
 
 `listFriends`, `createFriendRequest`, `acceptFriendRequest`, `declineFriendRequest`, `cancelFriendRequest`, `unfriend`, and the `friend-groups` methods follow the friend routes in OpenAPI. A new request is HTTP 201. If the other user already has a pending request toward the caller, `createFriendRequest` returns 200 with `status: "accepted"`. `setFriendGroup(userId, { group_id: null })` moves that friend to the ungrouped bucket. Friend objects do not include email.
 
+`createChat({ type: "direct", user_id })` returns the one direct chat for that friend pair (201, same id on a later call). `createChat({ member_ids })` still creates a group chat. Chat responses include `type`: `task`, `direct`, or `group`.
+
 Competitive confirm with more than one submission needs `submission_id`. Collaborative `on_dropout` is `replace` (the exitee gets 0 commission and 0 ability, and the seat returns to `open`). `settlement_mode` is `per_seat` or `unified` (default). Unified tasks stay `open` until the publisher calls `startTask` with every seat filled, then one `confirmTask` after every seat has submitted. Per-seat confirm passes `role_id` and releases only that seat. A collaborative role may set `quantity`; `share_bps` is that role's total and still sums to 10000 across roles. The server expands the seats. Webhook `X-Signature` is hex HMAC-SHA256 of the raw body: `verifyWebhookSignature`. `task.started` is emitted when a unified task starts. Details and Chinese text are in [`docs/client-ts.md`](../../docs/client-ts.md).
 
 ## 安装

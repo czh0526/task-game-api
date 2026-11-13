@@ -290,6 +290,8 @@ await client.acceptTask(taskId, { role_id: "writer_1" });
 
 `friend.requested` 发给接收方，`friend.accepted` 和 `friend.declined` 发给申请方，`friend.removed` 发给另一方。投递仍是用户自己的 webhook 订阅和原来的 HMAC。撤回申请不发事件。
 
+好友之间的一对一会话用 `createChat({ type: "direct", user_id })`。必须已经是好友。同一对用户只有一条，再次调用仍是 201，`id` 不变。响应的 `type` 是 `direct`。任务会话的 `type` 是 `task`，`GET /chats?task_id=` 列出来的都是它。`member_ids` 那种自由会话是 `group`，每次调用新开一行。解除好友之后，已有会话还能 `getChat`、`listMessages` 和 `postMessage`。这时再 `createChat` 会 403。重新成为好友后打开的还是原来那条。第一次创建会给双方发 `chat.created`。
+
 ```ts
 const pending = await client.createFriendRequest(
   { user_id: "usr_executor" },
@@ -299,6 +301,8 @@ await client.acceptFriendRequest(pending.id);
 const folder = await client.createFriendGroup({ name: "同事" });
 await client.setFriendGroup("usr_executor", { group_id: folder.id });
 const mine = await client.listFriends();
+const chat = await client.createChat({ type: "direct", user_id: "usr_executor" });
+await client.postMessage(chat.id, { type: "text", text: "你好" });
 await client.setFriendGroup("usr_executor", { group_id: null });
 await client.unfriend("usr_executor");
 ```
@@ -611,6 +615,8 @@ Already friends, or a pending request you already sent, is 409. If the other use
 
 `friend.requested` is delivered to the recipient. `friend.accepted` and `friend.declined` go to the requester. `friend.removed` goes to the other person. Delivery uses that user's existing webhook subscription and the same HMAC. Cancelling a request does not emit an event.
 
+A 1:1 friend thread is `createChat({ type: "direct", user_id })`. The two users must already be friends. The pair has one chat. A later call is still 201 and the same `id`. The response `type` is `direct`. A task chat is `type: "task"` and is what `listChats(taskId)` returns. A `member_ids` chat is `type: "group"` and each call inserts a new row. After unfriend, `getChat`, `listMessages`, and `postMessage` still work for that thread. `createChat` then returns 403 until they are friends again, and the next call returns the original id. The first insert emits `chat.created` to both members.
+
 ```ts
 const pending = await client.createFriendRequest(
   { user_id: "usr_executor" },
@@ -620,6 +626,8 @@ await client.acceptFriendRequest(pending.id);
 const folder = await client.createFriendGroup({ name: "同事" });
 await client.setFriendGroup("usr_executor", { group_id: folder.id });
 const mine = await client.listFriends();
+const chat = await client.createChat({ type: "direct", user_id: "usr_executor" });
+await client.postMessage(chat.id, { type: "text", text: "hello" });
 await client.setFriendGroup("usr_executor", { group_id: null });
 await client.unfriend("usr_executor");
 ```

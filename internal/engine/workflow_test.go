@@ -65,8 +65,12 @@ func TestCancelOpenRefundsAndDraft(t *testing.T) {
 		t.Fatalf("fund chat/deadline %+v err %v", funded, err)
 	}
 	chat, err := eng.GetChat(ctx, "usr_publisher", *funded.ChatId)
-	if err != nil || chat.TaskId == nil || *chat.TaskId != created.Id {
+	if err != nil || chat.TaskId == nil || *chat.TaskId != created.Id || chat.Type != model.ChatTask {
 		t.Fatalf("bound chat %+v err %v", chat, err)
+	}
+	listed, err := eng.ListChats(ctx, "usr_publisher", created.Id)
+	if err != nil || len(listed.Items) != 1 || listed.Items[0].Type != model.ChatTask || listed.Items[0].Id != chat.Id {
+		t.Fatalf("task chat list %+v err %v", listed, err)
 	}
 	if _, err := eng.GetChat(ctx, "usr_executor", *funded.ChatId); codeOf(err) != "forbidden" {
 		t.Fatalf("stranger chat %v", err)

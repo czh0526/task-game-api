@@ -91,6 +91,7 @@ type ChatRepo interface {
 	InsertChat(ctx context.Context, c model.Chat) error
 	UpdateChat(ctx context.Context, c model.Chat) error
 	GetChat(ctx context.Context, id string) (model.Chat, error)
+	FindDirect(ctx context.Context, a, b string) (model.Chat, error)
 	ListByTask(ctx context.Context, taskID string) ([]model.Chat, error)
 	InsertMessage(ctx context.Context, m model.Message) error
 	ListMessages(ctx context.Context, chatID string, limit, offset int) ([]model.Message, error)

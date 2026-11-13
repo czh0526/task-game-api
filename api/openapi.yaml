@@ -17,7 +17,8 @@ info:
     - API / Webhook first; no UI required for third parties
     - Additive in v0.1: POST /register and POST /login are public. They store a bcrypt password hash (never plaintext) and return an HS256 access token with the same claims as `make token` (`sub` is the user id, plus `iat` and `exp`). X-Api-Key dev users such as usr_publisher and usr_executor stay valid. GET /me returns the caller id, email, and is_arbiter.
     - Additive in v0.1, workflow closure: POST /tasks/{taskId}/cancel, /revise, /resolve, and /arbitrate. Cancel refunds held funds when work has not been submitted. A per_seat task with submissions cancels only unfinished seats (open or filled, not submitted). Revise marks a submission superseded and returns the seat or task to active, up to acceptance.max_revisions (default 3). Dispute still freezes. Mutual resolve needs both sides to post the same outcome. Arbitrate applies immediately and only for Escrow.ArbiterUserIds. A full refund closes the task as cancelled. A payout closes it as settled. Per-seat disputes freeze only that seat's share; other seats keep their own confirm and refund rules. A single competitive submission still auto-settles at review_deadline (winner_take_all does not guess among multiple submissions). After that, winner_select_deadline refunds the pool if no winner was chosen.
-    - Additive in v0.1, visibility: task responses include submissions[] (current and superseded). Funding a task creates one chat (chat_id) with the publisher; accept adds the executor. GET /chats/{chatId}, GET /chats/{chatId}/messages (oldest first within a page), and GET /chats?task_id= read that thread. Dropout does not remove chat members.
+    - Additive in v0.1, visibility: task responses include submissions[] (current and superseded). Funding a task creates one chat (chat_id) with the publisher; accept adds the executor. GET /chats/{chatId}, GET /chats/{chatId}/messages (oldest first within a page), and GET /chats?task_id= read that thread. Dropout does not remove chat members. Chat.type is task, direct, or group.
+    - Additive in v0.1, direct chats: POST /chats {type: direct, user_id} opens one 1:1 thread per friend pair. The two users must already be friends (a pending request is not enough). The first call inserts the row and emits chat.created. A later call from either friend returns that same chat and does not insert another row. Both responses are 201. Unfriend does not remove members: GET and POST messages stay allowed. Opening the chat again requires friendship, and then returns the original id. type=group (or omitting type) with member_ids keeps the free-form chat, which inserts a new row every call. Task chats stay type=task and are not reused as direct chats.
     - Additive in v0.1, timeouts (default 72h, same ticker as auto-settle): open_timeout cancels an exclusive, an unaccepted competitive task, or a unified collaborative task that still has an open seat, at min(fund+OpenTimeout, acceptance.deadline). A unified task whose seats are all filled sets start_deadline and cancels with start_timeout if the publisher does not start. Per-seat open seats refund that share at min(opened_at+SeatTimeout, acceptance.deadline); filled and submitted seats are not auto-refunded. Competitive tasks with more than one current submission set winner_select_deadline = review_deadline + WinnerSelectHours and then refund with winner_select_timeout. Accepted work with no current submission cancels at acceptance.deadline (reason open_timeout). Executors on those refunds get 0 commission and 0 ability.
     - Additive in v0.1, assignee_policy is enforced on accept. specific allows user_ids or a pending/accepted invite, and a declined invite blocks until a new invite. criteria requires ability >= min_ability. The publisher cannot accept their own task. Funding a specific task invites each user_id (task.invited). GET /tasks?assignable=me lists tasks the caller can accept now. Friendship does not add an assignee_policy value and does not change who can accept a task.
     - Additive in v0.1, mutual friends and personal groups. POST /friends/requests {user_id} asks an existing user. You cannot friend yourself. Already friends, or a pending request you already sent, is 409 and does not insert a second row. If the other user already has a pending request toward you, that call accepts the existing request (200, status accepted) instead of opening another one. The recipient can accept or decline. The requester can cancel a pending outgoing request; cancel does not emit a webhook. Either friend can unfriend, which ends the relationship for both sides and clears both users' group membership for that pair. A later request is allowed. GET /friends is only the caller's list: groups are personal folders (a friend is in at most one of the owner's groups, or ungrouped). Deleting a group does not unfriend. Caps: 50 groups per user, 500 friends per user, 100 pending outgoing requests, group names 1–32 characters after trim and unique per owner, sort_order from -1000000 to 1000000. Friend objects expose user_id, integrity, ability, and since — the same public scores as GET /users/{userId}/scores — and never email, balance, or password. Webhook events friend.requested, friend.accepted, friend.declined, and friend.removed are delivered to the other party's existing webhook subscriptions (owner-scoped, same HMAC delivery as score.updated). They are not task-scoped.
@@ -907,6 +908,7 @@ paths:
       operationId: listChats
       description: |
         Requires task_id. The publisher sees the bound chat. A member sees it. Anyone else receives 403 when a chat exists.
+        Every item has type=task. Direct chats are not listed here; look them up with POST /chats {type: direct, user_id}.
       parameters:
         - name: task_id
           in: query
@@ -921,8 +923,20 @@ paths:
                 $ref: '#/components/schemas/ChatList'
     post:
       tags: [Chats]
-      summary: Create free-form chat
+      summary: Create or reuse a chat
       operationId: createChat
+      description: |
+        Two shapes, both 201.
+
+        Direct: `{ "type": "direct", "user_id": "usr_…" }`. The caller and user_id must already be friends.
+        A pending request, a stranger, or yourself is rejected (403 for a non-friend, 400 for yourself or a bad id).
+        The pair is stored once (user ids ordered, unique). The first call inserts the chat and emits chat.created
+        to both members. A later call, from either person, returns that same chat and does not emit again.
+        member_ids and task_id are rejected on this shape.
+
+        Group: omit type, or send type=group, with member_ids. The caller is added. Each call inserts a new row.
+        Optional task_id reuses the chat already bound to that task instead of creating a second one.
+        The caller must be the publisher or an executor. Fund still creates a chat if none exists.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -930,30 +944,30 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              required: [member_ids]
-              properties:
-                member_ids:
-                  type: array
-                  items: { type: string }
-                task_id:
-                  type: string
-                  description: |
-                    Optional. Reuses the chat already bound to that task instead of creating a second one.
-                    The caller must be the publisher or an executor. Fund still creates a chat if none exists.
+              $ref: '#/components/schemas/ChatCreate'
       responses:
         '201':
-          description: Created
+          description: |
+            Created, or the existing direct chat for this pair. The HTTP status stays 201 so an
+            Idempotency-Key replay matches the first response. Identity is the chat id, not the status.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Chat'
+        '403':
+          description: Not friends, or not allowed to bind the task chat
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /chats/{chatId}:
     get:
       tags: [Chats]
       summary: Chat metadata
       operationId: getChat
-      description: Members only. Includes task_id when the chat is bound to a task.
+      description: |
+        Members only. type is task, direct, or group. task_id is set only when type is task.
+        Unfriend does not remove direct-chat members, so this read stays allowed.
       parameters:
         - name: chatId
           in: path
@@ -1007,6 +1021,8 @@ paths:
       tags: [Chats]
       summary: Send message
       operationId: postMessage
+      description: |
+        Members only. Unfriend does not remove direct-chat members, so a former friend can still send.
       parameters:
         - name: chatId
           in: path
@@ -1148,6 +1164,7 @@ components:
         - escrow.release
         - escrow.refund
         - escrow.unfreeze
+        - chat.created
         - chat.message.created
         - score.updated
         - friend.requested
@@ -1506,15 +1523,47 @@ components:
         data:
           type: object
           additionalProperties: true
-    Chat:
+    ChatType:
+      type: string
+      enum: [task, direct, group]
+      description: |
+        task is the thread funding binds to a task. direct is the one 1:1 thread for a friend pair.
+        group is a free-form member_ids chat, and each create inserts a new row.
+    ChatCreate:
       type: object
-      required: [id, member_ids]
+      description: |
+        Direct uses type=direct and user_id. Group uses member_ids and may set task_id.
+        Do not send both shapes in one body.
       properties:
-        id: { type: string }
-        task_id: { type: [string, 'null'] }
+        type:
+          type: string
+          enum: [direct, group]
+          description: Omit for the historical group chat.
+        user_id:
+          type: string
+          description: The other user. Required when type is direct. Must already be a friend.
         member_ids:
           type: array
           items: { type: string }
+          description: Required for a group chat. The caller is added. Not used for direct.
+        task_id:
+          type: string
+          description: |
+            Optional on a group chat. Reuses the chat already bound to that task.
+            The caller must be the publisher or an executor.
+    Chat:
+      type: object
+      required: [id, type, member_ids]
+      properties:
+        id: { type: string }
+        type: { $ref: '#/components/schemas/ChatType' }
+        task_id:
+          type: [string, 'null']
+          description: Set when type is task. Absent for direct and group.
+        member_ids:
+          type: array
+          items: { type: string }
+          description: For a direct chat, the two user ids in ascending order.
     MessageCreate:
       type: object
       required: [type]

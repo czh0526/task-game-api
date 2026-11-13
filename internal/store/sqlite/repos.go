@@ -707,14 +707,24 @@ func (r *deliveryRepo) Update(ctx context.Context, id string, attempts int, stat
 
 type chatRepo struct{ q querier }
 
+const chatCols = `id, task_id, member_ids, created_at, type, pair_low, pair_high`
+
 func (r *chatRepo) InsertChat(ctx context.Context, c model.Chat) error {
 	members, err := jsonText(nilSlice(c.MemberIDs))
 	if err != nil {
 		return err
 	}
+	kind := c.Type
+	if kind == "" {
+		kind = model.ChatGroup
+	}
 	_, err = r.q.ExecContext(ctx, `
-		INSERT INTO chats (id, task_id, member_ids, created_at) VALUES (?, ?, ?, ?)`,
-		c.ID, nullString(c.TaskID), members, model.FormatTime(c.CreatedAt))
+		INSERT INTO chats (id, task_id, member_ids, created_at, type, pair_low, pair_high)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		c.ID, nullString(c.TaskID), members, model.FormatTime(c.CreatedAt), kind, c.PairLow, c.PairHigh)
+	if isUniqueConflict(err) {
+		return store.ErrConflict
+	}
 	return err
 }
 
@@ -723,8 +733,21 @@ func (r *chatRepo) UpdateChat(ctx context.Context, c model.Chat) error {
 	if err != nil {
 		return err
 	}
-	res, err := r.q.ExecContext(ctx, `UPDATE chats SET task_id = ?, member_ids = ? WHERE id = ?`, nullString(c.TaskID), members, c.ID)
+	kind := c.Type
+	if kind == "" {
+		if c.TaskID != "" {
+			kind = model.ChatTask
+		} else {
+			kind = model.ChatGroup
+		}
+	}
+	res, err := r.q.ExecContext(ctx, `
+		UPDATE chats SET task_id = ?, member_ids = ?, type = ?, pair_low = ?, pair_high = ? WHERE id = ?`,
+		nullString(c.TaskID), members, kind, c.PairLow, c.PairHigh, c.ID)
 	if err != nil {
+		if isUniqueConflict(err) {
+			return store.ErrConflict
+		}
 		return err
 	}
 	n, err := res.RowsAffected()
@@ -739,7 +762,7 @@ func (r *chatRepo) UpdateChat(ctx context.Context, c model.Chat) error {
 
 func (r *chatRepo) ListByTask(ctx context.Context, taskID string) ([]model.Chat, error) {
 	rows, err := r.q.QueryContext(ctx, `
-		SELECT id, task_id, member_ids, created_at FROM chats WHERE task_id = ? ORDER BY created_at ASC, id ASC`, taskID)
+		SELECT `+chatCols+` FROM chats WHERE task_id = ? ORDER BY created_at ASC, id ASC`, taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -759,7 +782,22 @@ func (r *chatRepo) ListByTask(ctx context.Context, taskID string) ([]model.Chat,
 }
 
 func (r *chatRepo) GetChat(ctx context.Context, id string) (model.Chat, error) {
-	row := r.q.QueryRowContext(ctx, `SELECT id, task_id, member_ids, created_at FROM chats WHERE id = ?`, id)
+	row := r.q.QueryRowContext(ctx, `SELECT `+chatCols+` FROM chats WHERE id = ?`, id)
+	c, err := scanChat(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.Chat{}, store.ErrNotFound
+	}
+	return c, err
+}
+
+func (r *chatRepo) FindDirect(ctx context.Context, a, b string) (model.Chat, error) {
+	low, high := model.OrderedPair(a, b)
+	if low == "" || low >= high {
+		return model.Chat{}, store.ErrNotFound
+	}
+	row := r.q.QueryRowContext(ctx, `
+		SELECT `+chatCols+` FROM chats
+		WHERE type = ? AND pair_low = ? AND pair_high = ?`, model.ChatDirect, low, high)
 	c, err := scanChat(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Chat{}, store.ErrNotFound
@@ -771,7 +809,7 @@ func scanChat(s scanner) (model.Chat, error) {
 	var c model.Chat
 	var taskID sql.NullString
 	var members, created string
-	err := s.Scan(&c.ID, &taskID, &members, &created)
+	err := s.Scan(&c.ID, &taskID, &members, &created, &c.Type, &c.PairLow, &c.PairHigh)
 	if err != nil {
 		return model.Chat{}, err
 	}

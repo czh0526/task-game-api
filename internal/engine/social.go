@@ -51,60 +51,122 @@ func (e *Engine) CreateWebhook(ctx context.Context, userID string, req *types.Cr
 	})
 }
 
-// CreateChat opens a free-form chat. Optional task_id reuses the task's bound chat.
+// CreateChat opens a chat.
+//
+// type=direct with user_id returns the one direct thread for that friend pair.
+// The first call inserts it (and emits chat.created). A later call returns the
+// same row. The two users must be friends at call time. Unfriend does not
+// remove members, so an existing thread stays readable and writable.
+//
+// Omit type, or pass type=group, to keep the free-form member_ids chat. Each
+// of those calls inserts a new row. Optional task_id still reuses the task chat.
 func (e *Engine) CreateChat(ctx context.Context, userID string, req *types.CreateChatReq) (*types.Chat, error) {
 	return call(e, ctx, userID, http.MethodPost, "/v1/chats", req.IdempotencyKey, req, func(ctx context.Context, r store.Repos) (*types.Chat, error) {
-		if len(req.MemberIds) == 0 {
-			return nil, biz.Invalid("member_ids is required")
+		switch trim(req.Type) {
+		case model.ChatDirect:
+			return e.createDirectChat(ctx, r, userID, req)
+		case "", model.ChatGroup:
+			return e.createGroupChat(ctx, r, userID, req)
+		default:
+			return nil, biz.Invalid("type must be direct or group")
 		}
-		members := make([]string, 0, len(req.MemberIds)+1)
-		for _, m := range req.MemberIds {
-			m = trim(m)
-			if !id.ValidUserID(m) {
-				return nil, biz.Invalid("member_ids contains an invalid user id")
-			}
-			members = append(members, m)
+	})
+}
+
+func (e *Engine) createDirectChat(ctx context.Context, r store.Repos, userID string, req *types.CreateChatReq) (*types.Chat, error) {
+	if len(req.MemberIds) > 0 {
+		return nil, biz.Invalid("member_ids is not used for a direct chat")
+	}
+	if trim(req.TaskId) != "" {
+		return nil, biz.Invalid("task_id is not used for a direct chat")
+	}
+	target := trim(req.UserId)
+	if !id.ValidUserID(target) {
+		return nil, biz.Invalid("user_id is invalid")
+	}
+	if target == userID {
+		return nil, biz.Invalid("cannot open a direct chat with yourself")
+	}
+	if _, err := r.Friends().GetFriendship(ctx, userID, target); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, biz.Forbidden("only friends can open a direct chat")
 		}
-		members = dedupe(append(members, userID))
-		if len(members) > 50 {
-			return nil, biz.Invalid("too many members")
+		return nil, err
+	}
+	existing, err := r.Chats().FindDirect(ctx, userID, target)
+	if err == nil {
+		return toChat(existing), nil
+	}
+	if !errors.Is(err, store.ErrNotFound) {
+		return nil, err
+	}
+	low, high := model.OrderedPair(userID, target)
+	now := e.now()
+	c := model.Chat{
+		ID: id.New("cht_"), Type: model.ChatDirect,
+		PairLow: low, PairHigh: high, MemberIDs: []string{low, high}, CreatedAt: now,
+	}
+	if err := r.Chats().InsertChat(ctx, c); err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			again, ferr := r.Chats().FindDirect(ctx, userID, target)
+			if ferr != nil {
+				return nil, ferr
+			}
+			return toChat(again), nil
 		}
-		taskID := trim(req.TaskId)
-		if taskID != "" {
-			t, err := loadTask(ctx, r, taskID)
-			if err != nil {
-				return nil, err
+		return nil, err
+	}
+	out := toChat(c)
+	if err := e.emit(ctx, r, c.MemberIDs, model.EventChatCreated, map[string]any{"chat": out}); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (e *Engine) createGroupChat(ctx context.Context, r store.Repos, userID string, req *types.CreateChatReq) (*types.Chat, error) {
+	if len(req.MemberIds) == 0 {
+		return nil, biz.Invalid("member_ids is required")
+	}
+	if trim(req.UserId) != "" {
+		return nil, biz.Invalid("user_id is only used for a direct chat")
+	}
+	members := make([]string, 0, len(req.MemberIds)+1)
+	for _, m := range req.MemberIds {
+		m = trim(m)
+		if !id.ValidUserID(m) {
+			return nil, biz.Invalid("member_ids contains an invalid user id")
+		}
+		members = append(members, m)
+	}
+	members = dedupe(append(members, userID))
+	if len(members) > 50 {
+		return nil, biz.Invalid("too many members")
+	}
+	taskID := trim(req.TaskId)
+	if taskID != "" {
+		t, err := loadTask(ctx, r, taskID)
+		if err != nil {
+			return nil, err
+		}
+		if userID != t.PublisherID && !contains(t.ExecutorIDs, userID) {
+			return nil, biz.Forbidden("only the publisher or an executor can bind a task chat")
+		}
+		existing, err := r.Chats().ListByTask(ctx, t.ID)
+		if err != nil {
+			return nil, err
+		}
+		if len(existing) > 0 {
+			c := existing[0]
+			if c.Type == "" || c.Type == model.ChatGroup {
+				c.Type = model.ChatTask
 			}
-			if userID != t.PublisherID && !contains(t.ExecutorIDs, userID) {
-				return nil, biz.Forbidden("only the publisher or an executor can bind a task chat")
-			}
-			existing, err := r.Chats().ListByTask(ctx, t.ID)
-			if err != nil {
-				return nil, err
-			}
-			if len(existing) > 0 {
-				c := existing[0]
-				c.MemberIDs = dedupe(append(c.MemberIDs, members...))
-				if err := r.Chats().UpdateChat(ctx, c); err != nil {
-					return nil, err
-				}
-				if t.ChatID == "" {
-					t.ChatID = c.ID
-					t.UpdatedAt = e.now()
-					if err := r.Tasks().Update(ctx, t); err != nil {
-						return nil, err
-					}
-				}
-				return toChat(c), nil
-			}
-			now := e.now()
-			c := model.Chat{ID: id.New("cht_"), TaskID: t.ID, MemberIDs: members, CreatedAt: now}
-			if err := r.Chats().InsertChat(ctx, c); err != nil {
+			c.MemberIDs = dedupe(append(c.MemberIDs, members...))
+			if err := r.Chats().UpdateChat(ctx, c); err != nil {
 				return nil, err
 			}
 			if t.ChatID == "" {
 				t.ChatID = c.ID
-				t.UpdatedAt = now
+				t.UpdatedAt = e.now()
 				if err := r.Tasks().Update(ctx, t); err != nil {
 					return nil, err
 				}
@@ -112,12 +174,25 @@ func (e *Engine) CreateChat(ctx context.Context, userID string, req *types.Creat
 			return toChat(c), nil
 		}
 		now := e.now()
-		c := model.Chat{ID: id.New("cht_"), MemberIDs: members, CreatedAt: now}
+		c := model.Chat{ID: id.New("cht_"), TaskID: t.ID, Type: model.ChatTask, MemberIDs: members, CreatedAt: now}
 		if err := r.Chats().InsertChat(ctx, c); err != nil {
 			return nil, err
 		}
+		if t.ChatID == "" {
+			t.ChatID = c.ID
+			t.UpdatedAt = now
+			if err := r.Tasks().Update(ctx, t); err != nil {
+				return nil, err
+			}
+		}
 		return toChat(c), nil
-	})
+	}
+	now := e.now()
+	c := model.Chat{ID: id.New("cht_"), Type: model.ChatGroup, MemberIDs: members, CreatedAt: now}
+	if err := r.Chats().InsertChat(ctx, c); err != nil {
+		return nil, err
+	}
+	return toChat(c), nil
 }
 
 // bindTaskChat returns the single chat bound to a task, creating it if needed, and adds userID.
@@ -139,6 +214,9 @@ func (e *Engine) bindTaskChat(ctx context.Context, r store.Repos, t *model.Task,
 		if c.TaskID == "" {
 			c.TaskID = t.ID
 		}
+		if c.Type == "" || c.Type == model.ChatGroup {
+			c.Type = model.ChatTask
+		}
 		if !contains(c.MemberIDs, userID) {
 			c.MemberIDs = append(c.MemberIDs, userID)
 		}
@@ -148,7 +226,7 @@ func (e *Engine) bindTaskChat(ctx context.Context, r store.Repos, t *model.Task,
 		return c, nil
 	}
 	now := e.now()
-	c := model.Chat{ID: id.New("cht_"), TaskID: t.ID, MemberIDs: []string{userID}, CreatedAt: now}
+	c := model.Chat{ID: id.New("cht_"), TaskID: t.ID, Type: model.ChatTask, MemberIDs: []string{userID}, CreatedAt: now}
 	if err := r.Chats().InsertChat(ctx, c); err != nil {
 		return model.Chat{}, err
 	}
@@ -332,8 +410,17 @@ func (e *Engine) GetUserScores(ctx context.Context, userID string) (*types.UserS
 }
 
 func toChat(c model.Chat) *types.Chat {
+	kind := c.Type
+	if kind == "" {
+		if c.TaskID != "" {
+			kind = model.ChatTask
+		} else {
+			kind = model.ChatGroup
+		}
+	}
 	out := &types.Chat{
 		Id:        c.ID,
+		Type:      kind,
 		MemberIds: append([]string{}, c.MemberIDs...),
 	}
 	if c.TaskID != "" {

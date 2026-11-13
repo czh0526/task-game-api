@@ -166,6 +166,26 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	}); err != nil {
 		return err
 	}
+	// Older chat tables have no type. Group is the historical free-form row.
+	// A non-empty task_id is the task thread funding already created.
+	if err := addColumns(ctx, db, "chats", map[string]string{
+		"type":      "TEXT NOT NULL DEFAULT 'group'",
+		"pair_low":  "TEXT NOT NULL DEFAULT ''",
+		"pair_high": "TEXT NOT NULL DEFAULT ''",
+	}); err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, `
+		UPDATE chats SET type = 'task'
+		WHERE task_id IS NOT NULL AND task_id != '' AND (type = '' OR type = 'group')`); err != nil {
+		return fmt.Errorf("migrate chats.type: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_chats_direct_pair
+		ON chats (pair_low, pair_high)
+		WHERE type = 'direct' AND pair_low != ''`); err != nil {
+		return fmt.Errorf("migrate chats direct pair: %w", err)
+	}
 	return nil
 }
 

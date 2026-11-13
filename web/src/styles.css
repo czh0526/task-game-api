@@ -262,6 +262,7 @@ th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line
   padding: 10px 0;
   border-bottom: 1px solid var(--line);
 }
+.friend-identity { min-width: 12rem; cursor: pointer; }
 .friend-actions, .group-edit { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .friend-actions select, .friend-actions input, .group-edit input, .friend-pick .btn {
   width: auto;

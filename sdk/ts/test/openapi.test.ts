@@ -81,5 +81,7 @@ describe("OpenAPI parity", () => {
     assert.match(yaml, /per_seat \| unified/);
     assert.equal(PROTOCOL_VERSION, "0.1.0");
     assert.match(yaml, /HMAC-SHA256\(raw_body, secret\)/);
+    assert.match(yaml, /chat\.created/);
+    assert.match(yaml, /one 1:1 thread per friend pair/);
   });
 });

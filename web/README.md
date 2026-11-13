@@ -57,9 +57,8 @@ make token USER_ID=usr_extra
 | --- | --- |
 | `VITE_TASKGAME_BASE_URL` | 还没有保存过设置时，作为 Base URL 的初始值 |
 | `taskgame.web.settings` | JSON：`baseUrl`、`role`、`authMode`（`apiKey` 或 `bearer`）、`apiKey`、`bearerToken`、`userId`、`email`。没有密钥也没有 JWT 时停在登录页 |
-| `taskgame.web.chats` | 本浏览器创建或记下的会话，以及 `postMessage` 返回的消息 |
 
-任务详情会读取绑定会话的历史（`GET /chats/{id}/messages`，页内从旧到新）。侧栏「邀请」列出 `GET /me/invites?status=pending`。侧栏「好友」可以按用户 id 发申请、处理收到和发出的申请、建分组、改名、排序、删除分组，以及把好友移进分组或未分组。分组只在自己的列表里。创建任务的指定人，和任务详情里的再邀请，都可以从好友列表点选用户 id。任务列表的「可接任务」使用 `assignable=me`。创建页可以选择开放、能力门槛或指定人。
+任务详情会读取绑定会话的历史（`GET /chats/{id}/messages`，页内从旧到新）。侧栏没有「会话」。侧栏「邀请」列出 `GET /me/invites?status=pending`。侧栏「好友」可以按用户 id 发申请、处理收到和发出的申请、建分组、改名、排序、删除分组，以及把好友移进分组或未分组。分组只在自己的列表里。双击一位好友，或点「发消息」，会先 `POST /chats` `{type: direct, user_id}`，再在新的浏览器标签打开 `#/chat/{chatId}`。已经有过一对一会话就打开原来的那条。单击不离开好友页。创建任务的指定人，和任务详情里的再邀请，都可以从好友列表点选用户 id。任务列表的「可接任务」使用 `assignable=me`。创建页可以选择开放、能力门槛或指定人。任务会话仍在任务详情里。
 
 ## 三条任务
 
@@ -86,6 +85,6 @@ make run
 cd web && npm install && npm run dev
 ```
 
-Open `http://localhost:5173`. Register or log in with email and password; the JWT and user id are stored in `localStorage` and sent as Bearer. The collapsed「开发快捷身份」panel still switches `dev-publisher-key` (`usr_publisher`) and `dev-executor-key` (`usr_executor`). Settings live in `taskgame.web.settings`. Optional `VITE_TASKGAME_BASE_URL` applies only before that key exists. Chat transcripts are local (`taskgame.web.chats`) because v0.1 has create and post, not list.
+Open `http://localhost:5173`. Register or log in with email and password; the JWT and user id are stored in `localStorage` and sent as Bearer. The collapsed「开发快捷身份」panel still switches `dev-publisher-key` (`usr_publisher`) and `dev-executor-key` (`usr_executor`). Settings live in `taskgame.web.settings`. Optional `VITE_TASKGAME_BASE_URL` applies only before that key exists. The left nav has no sessions entry. Double-click a friend (or use 发消息) to open `#/chat/{chatId}` in a new browser tab. That page loads `GET /chats/{id}` and `GET /chats/{id}/messages`. The task detail page still has the task chat.
 
 Exclusive and competitive tasks can use `payment.mode = milestone`. The create form keeps `payment.amount` as the escrow total and checks that stage amounts sum to it. Collaborative creates stay `one_shot`. After funding, the task page submits, confirms, and revises one `milestone_id` at a time.

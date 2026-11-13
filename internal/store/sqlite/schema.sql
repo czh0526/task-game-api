@@ -114,11 +114,18 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
 
 CREATE INDEX IF NOT EXISTS idx_deliveries_status ON webhook_deliveries (status, created_at);
 
+-- type is task (bound to task_id), direct (one row per friend pair), or group
+-- (free-form member_ids, a new row on each POST). pair_low and pair_high are
+-- set only for direct chats, in ascending user-id order. The unique index is
+-- created in Open after older files gain these columns.
 CREATE TABLE IF NOT EXISTS chats (
     id TEXT PRIMARY KEY,
     task_id TEXT,
     member_ids TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'group',
+    pair_low TEXT NOT NULL DEFAULT '',
+    pair_high TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_chats_task ON chats (task_id);
