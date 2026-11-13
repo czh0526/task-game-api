@@ -12,6 +12,7 @@ import {
   formatTime,
   isAbort,
 } from "../format";
+import { FriendPicker, appendUserId } from "../friends";
 import { href } from "../route";
 import { ActionRow, Button, ErrorNote, Field, IdText, KindPill, Screen, StatusPill } from "../ui";
 
@@ -686,9 +687,13 @@ export function TaskDetail({ id }: { id: string }) {
 
           {me === task.publisher_id && (task.status === "open" || task.status === "active") ? (
             <>
-              <Field label="再邀请 user_id" hint="还有空位时可以继续邀请。指定人任务会把 id 加进 assignee_policy。">
+              <Field label="再邀请 user_id" hint="还有空位时可以继续邀请。指定人任务会把 id 加进 assignee_policy。可以从好友列表点选。">
                 <input value={inviteUser} spellCheck={false} onChange={(event) => setInviteUser(event.target.value)} />
               </Field>
+              <FriendPicker
+                disabled={pending !== null}
+                onPick={(id) => setInviteUser((current) => appendUserId(current, id))}
+              />
               <Button
                 type="button"
                 pending={pending === "invite"}

@@ -18,7 +18,8 @@ Credits are simulated. There is no payment provider. Locked v0.1 rules:
 - funding creates one task chat (`chat_id`); accept adds the executor. `GET /chats/{id}` and `GET /chats/{id}/messages` (oldest first) are member-only
 - task bodies include `submissions[]` (`current` or `superseded`). Competitive confirm picks `submission_id` from that list
 - open / start / seat timeouts default to 72h on the same ticker. `open_deadline`, `start_deadline`, `winner_select_deadline`, and per-seat `refund_deadline` are on the task. An accepted task with no current submission cancels at `acceptance.deadline`
-- `assignee_policy` is enforced on accept. `specific` allows listed users or a pending invite; a declined invite blocks until re-invited. `GET /tasks?assignable=me` lists tasks the caller can accept. `GET /me/invites` is the inbox
+- `assignee_policy` is enforced on accept. `specific` allows listed users or a pending invite; a declined invite blocks until re-invited. `GET /tasks?assignable=me` lists tasks the caller can accept. `GET /me/invites` is the inbox. Friendship does not change who can accept a task
+- mutual friends: `POST /friends/requests`. Already friends, or your own pending request, is 409. If the other user already asked you, that call accepts their request (200) instead of creating a second one. Groups are personal (50 per user, name 1–32 characters, a friend is in at most one). Unfriend clears both sides. Events `friend.requested`, `friend.accepted`, `friend.declined`, `friend.removed` go to the other party's webhooks
 - mutating calls accept `Idempotency-Key`; the same key with a different body returns 409 `idempotency_conflict`
 - webhooks are queued and delivered with `X-Signature` (hex HMAC-SHA256 of the raw body) and `X-Event-Id`
 - auth is `Authorization: Bearer` (HS256 JWT) and/or `X-Api-Key`. `POST /v1/register` and `POST /v1/login` are public and issue that same JWT (`sub` is the new user id). Passwords are stored as bcrypt.
@@ -359,6 +360,33 @@ The OpenAPI server URL is `https://api.example.com/v1`, so the paths below inclu
 | POST | `/v1/chats/:chatId/messages` | `postMessage` | `handler/chat.PostMessageHandler` | `logic/chat.PostMessage` |
 | GET | `/v1/users/:userId/scores` | `getUserScores` | `handler/user.GetUserScoresHandler` | `logic/user.GetUserScores` |
 
-创建类接口（task、webhook、chat、message）返回 201，其余成功返回 200。除 `/health` 外都要 Bearer JWT 或 `X-Api-Key`。
+创建类接口（task、webhook、chat、message、新建好友分组）返回 201。新建好友申请在状态为 `pending` 时返回 201；如果直接接受了对方已有的申请，返回 200。其余成功返回 200。除 `/health`、`POST /v1/register`、`POST /v1/login` 外都要 Bearer JWT 或 `X-Api-Key`。
 
-Creates (task, webhook, chat, message) return 201. Other successes return 200. Every route except `/health` requires a bearer JWT or `X-Api-Key`.
+Creates (task, webhook, chat, message, friend group) return 201. A new friend request returns 201 while `pending`. Accepting the other side's existing request on that same route returns 200. Other successes return 200. Every route except `/health`, `POST /v1/register`, and `POST /v1/login` requires a bearer JWT or `X-Api-Key`.
+
+### 好友 / Friends
+
+好友是双向关系，存在 `friendships` 的一行里（`user_low < user_high`）。分组是个人文件夹，对方看不到。上限：每人 50 个分组、500 个好友、100 条待处理的发出申请。分组名去掉首尾空白后 1–32 个字符，同一用户下不能重复。`sort_order` 范围是 -1000000 到 1000000。
+
+重复申请：已经是好友，或自己已经发出待处理申请，返回 409，不插入第二行。如果对方已经有一条指向自己的待处理申请，`POST /friends/requests` 会接受那一条并返回 200 `status=accepted`，而不是再开一条。拒绝、撤回、解除好友之后可以重新申请。删除分组不会解除好友。解除好友会清掉双方对这一对的分组成员。
+
+好友卡片只有 `user_id`、`integrity`、`ability`、`since`，不含邮箱、余额和密码。Webhook `friend.requested`（发给接收方）、`friend.accepted` 和 `friend.declined`（发给申请方）、`friend.removed`（发给被解除的一方，`data.user_id` 是操作者）走现有的用户订阅和 HMAC 投递，不按任务过滤。撤回申请不发 webhook。
+
+| Method | Path | operationId |
+| --- | --- | --- |
+| GET | `/v1/friends` | `listFriends` |
+| POST | `/v1/friends/requests` | `createFriendRequest` |
+| GET | `/v1/friend-requests?direction=incoming\|outgoing` | `listFriendRequests` |
+| POST | `/v1/friend-requests/:requestId/accept` | `acceptFriendRequest` |
+| POST | `/v1/friend-requests/:requestId/decline` | `declineFriendRequest` |
+| DELETE | `/v1/friend-requests/:requestId` | `cancelFriendRequest` |
+| DELETE | `/v1/friends/:userId` | `unfriend` |
+| GET/POST | `/v1/friend-groups` | `listFriendGroups` / `createFriendGroup` |
+| PATCH/DELETE | `/v1/friend-groups/:groupId` | `updateFriendGroup` / `deleteFriendGroup` |
+| PUT | `/v1/friends/:userId/group` | `setFriendGroup` |
+
+Friendship is one row per pair (`user_low < user_high`). Groups are personal folders. Caps: 50 groups, 500 friends, and 100 pending outgoing requests per user. Names are 1–32 characters after trim and unique per owner. `sort_order` is from -1000000 to 1000000.
+
+Duplicate rule: already friends, or a pending request you already sent, is 409 with no second row. If the other user already has a pending request toward you, `POST /friends/requests` accepts that request and returns 200 `status=accepted`. Decline, cancel, and unfriend all allow a later request. Deleting a group leaves the friends in place, ungrouped. Unfriend clears both users' membership for that pair.
+
+A friend card is `user_id`, `integrity`, `ability`, and `since`. No email, balance, or password. `friend.requested` goes to the recipient. `friend.accepted` and `friend.declined` go to the requester. `friend.removed` goes to the other person (`data.user_id` is the actor). Delivery is the existing owner-scoped HMAC webhook, not task-scoped. Cancel does not emit an event.

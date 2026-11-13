@@ -10,6 +10,7 @@ import {
 } from "taskgame-client";
 import { useApp } from "../context";
 import { KIND_LABEL, SETTLEMENT_MODE_LABEL, formatError, parseIntStrict, validUserId } from "../format";
+import { FriendPicker, appendUserId } from "../friends";
 import { href } from "../route";
 import { type ExpandedSeat, type RoleTemplate, SHARE_BPS_TOTAL, expandRoleTemplates, templatesFromSeats } from "../roles";
 import { PRESETS } from "../settings";
@@ -232,14 +233,17 @@ export function CreateTask() {
           ))}
         </fieldset>
         {form.policy === "specific" ? (
-          <Field label="指定用户 user_ids" hint="用逗号或空格分隔。注资后会给他们发邀请。">
-            <input
-              value={form.policyUsers}
-              spellCheck={false}
-              placeholder="usr_executor"
-              onChange={(event) => patch({ policyUsers: event.target.value })}
-            />
-          </Field>
+          <>
+            <Field label="指定用户 user_ids" hint="用逗号或空格分隔，也可以从好友列表点选。注资后会给他们发邀请。">
+              <input
+                value={form.policyUsers}
+                spellCheck={false}
+                placeholder="usr_executor"
+                onChange={(event) => patch({ policyUsers: event.target.value })}
+              />
+            </Field>
+            <FriendPicker onPick={(id) => patch({ policyUsers: appendUserId(form.policyUsers, id) })} />
+          </>
         ) : null}
         {form.policy === "criteria" ? (
           <Field label="最低能力分 min_ability" hint="接任务时能力分必须达到这个数。">

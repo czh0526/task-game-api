@@ -29,6 +29,18 @@ import type {
   UserSummary,
   Webhook,
   WebhookCreate,
+  FriendGroup,
+  FriendGroupList,
+  FriendList,
+  FriendPlacement,
+  FriendRequest,
+  FriendRequestDirection,
+  FriendRequestList,
+  RemovedFriend,
+  CreateFriendGroupBody,
+  CreateFriendRequestBody,
+  PatchFriendGroupBody,
+  SetFriendGroupBody,
 } from "./types.js";
 
 export interface FetchInit {
@@ -400,6 +412,134 @@ export class TaskGameClient {
       undefined,
       false,
       "forbidden",
+    );
+  }
+
+  /** `GET /v1/friends`. The caller's groups and ungrouped friends. No emails. */
+  listFriends(options?: CallOptions): Promise<FriendList> {
+    return this.send("GET", `${this.apiBase}/friends`, options, undefined, false, "forbidden");
+  }
+
+  /**
+   * `POST /v1/friends/requests`.
+   * 201 when a pending request is created. 200 when the other user's pending
+   * request is accepted instead of opening a second one.
+   */
+  createFriendRequest(body: CreateFriendRequestBody, options?: CallOptions): Promise<FriendRequest> {
+    return this.send("POST", `${this.apiBase}/friends/requests`, options, body, true, "header");
+  }
+
+  /** `GET /v1/friend-requests?direction=incoming|outgoing`. Pending only. */
+  listFriendRequests(
+    query: { direction: FriendRequestDirection },
+    options?: CallOptions,
+  ): Promise<FriendRequestList> {
+    const params = new URLSearchParams();
+    params.set("direction", query.direction);
+    return this.send(
+      "GET",
+      `${this.apiBase}/friend-requests?${params.toString()}`,
+      options,
+      undefined,
+      false,
+      "forbidden",
+    );
+  }
+
+  /** `POST /v1/friend-requests/{requestId}/accept` */
+  acceptFriendRequest(requestId: string, options?: CallOptions): Promise<FriendRequest> {
+    return this.send(
+      "POST",
+      `${this.apiBase}/friend-requests/${segment(requestId, "requestId")}/accept`,
+      options,
+      {},
+      true,
+      "header",
+    );
+  }
+
+  /** `POST /v1/friend-requests/{requestId}/decline` */
+  declineFriendRequest(requestId: string, options?: CallOptions): Promise<FriendRequest> {
+    return this.send(
+      "POST",
+      `${this.apiBase}/friend-requests/${segment(requestId, "requestId")}/decline`,
+      options,
+      {},
+      true,
+      "header",
+    );
+  }
+
+  /** `DELETE /v1/friend-requests/{requestId}`. Cancels the caller's outgoing pending request. */
+  cancelFriendRequest(requestId: string, options?: CallOptions): Promise<FriendRequest> {
+    return this.send(
+      "DELETE",
+      `${this.apiBase}/friend-requests/${segment(requestId, "requestId")}`,
+      options,
+      undefined,
+      false,
+      "header",
+    );
+  }
+
+  /** `DELETE /v1/friends/{userId}` */
+  unfriend(userId: string, options?: CallOptions): Promise<RemovedFriend> {
+    return this.send(
+      "DELETE",
+      `${this.apiBase}/friends/${segment(userId, "userId")}`,
+      options,
+      undefined,
+      false,
+      "header",
+    );
+  }
+
+  /** `GET /v1/friend-groups` */
+  listFriendGroups(options?: CallOptions): Promise<FriendGroupList> {
+    return this.send("GET", `${this.apiBase}/friend-groups`, options, undefined, false, "forbidden");
+  }
+
+  /** `POST /v1/friend-groups` → 201 */
+  createFriendGroup(body: CreateFriendGroupBody, options?: CallOptions): Promise<FriendGroup> {
+    return this.send("POST", `${this.apiBase}/friend-groups`, options, body, true, "header");
+  }
+
+  /** `PATCH /v1/friend-groups/{groupId}` */
+  updateFriendGroup(groupId: string, body: PatchFriendGroupBody, options?: CallOptions): Promise<FriendGroup> {
+    return this.send(
+      "PATCH",
+      `${this.apiBase}/friend-groups/${segment(groupId, "groupId")}`,
+      options,
+      body,
+      true,
+      "header",
+    );
+  }
+
+  /** `DELETE /v1/friend-groups/{groupId}`. Friends in the folder stay friends and become ungrouped. */
+  deleteFriendGroup(groupId: string, options?: CallOptions): Promise<FriendGroup> {
+    return this.send(
+      "DELETE",
+      `${this.apiBase}/friend-groups/${segment(groupId, "groupId")}`,
+      options,
+      undefined,
+      false,
+      "header",
+    );
+  }
+
+  /**
+   * `PUT /v1/friends/{userId}/group`.
+   * Pass `group_id: null` to move the friend to the ungrouped bucket.
+   */
+  setFriendGroup(userId: string, body: SetFriendGroupBody, options?: CallOptions): Promise<FriendPlacement> {
+    return this.send(
+      "PUT",
+      `${this.apiBase}/friends/${segment(userId, "userId")}/group`,
+      options,
+      body,
+      true,
+      "header",
     );
   }
 

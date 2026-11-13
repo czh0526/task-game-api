@@ -293,6 +293,82 @@ type (
 		ExpiresIn   int64       `json:"expires_in"`
 		User        UserSummary `json:"user"`
 	}
+	Friend {
+		UserId    string `json:"user_id"`
+		Integrity int64  `json:"integrity"`
+		Ability   int64  `json:"ability"`
+		Since     string `json:"since"`
+	}
+	FriendGroup {
+		Id        string `json:"id"`
+		Name      string `json:"name"`
+		SortOrder int64  `json:"sort_order"`
+	}
+	FriendGroupWithFriends {
+		Id        string   `json:"id"`
+		Name      string   `json:"name"`
+		SortOrder int64    `json:"sort_order"`
+		Friends   []Friend `json:"friends"`
+	}
+	FriendList {
+		Groups    []FriendGroupWithFriends `json:"groups"`
+		Ungrouped []Friend                 `json:"ungrouped"`
+	}
+	FriendRequest {
+		Id         string `json:"id"`
+		FromUserId string `json:"from_user_id"`
+		ToUserId   string `json:"to_user_id"`
+		Status     string `json:"status"`
+		CreatedAt  string `json:"created_at"`
+		UpdatedAt  string `json:"updated_at"`
+	}
+	FriendRequestList {
+		Items []FriendRequest `json:"items"`
+	}
+	FriendGroupList {
+		Items []FriendGroup `json:"items"`
+	}
+	RemovedFriend {
+		UserId string `json:"user_id"`
+	}
+	FriendPlacement {
+		UserId  string  `json:"user_id"`
+		GroupId *string `json:"group_id"`
+	}
+	CreateFriendRequestReq {
+		IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
+		UserId         string `json:"user_id"`
+	}
+	ListFriendRequestsReq {
+		Direction string `form:"direction,optional"`
+	}
+	FriendRequestActionReq {
+		RequestId      string `path:"requestId" json:"-"`
+		IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
+	}
+	UnfriendReq {
+		UserId         string `path:"userId" json:"-"`
+		IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
+	}
+	CreateFriendGroupReq {
+		IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
+		Name           string `json:"name"`
+	}
+	PatchFriendGroupReq {
+		GroupId        string  `path:"groupId" json:"-"`
+		IdempotencyKey string  `header:"Idempotency-Key,optional" json:"-"`
+		Name           *string `json:"name,optional"`
+		SortOrder      *int64  `json:"sort_order,optional"`
+	}
+	DeleteFriendGroupReq {
+		GroupId        string `path:"groupId" json:"-"`
+		IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
+	}
+	SetFriendGroupReq {
+		UserId         string  `path:"userId" json:"-"`
+		IdempotencyKey string  `header:"Idempotency-Key,optional" json:"-"`
+		GroupId        *string `json:"group_id,optional"`
+	}
 )
 
 @server (
@@ -419,5 +495,48 @@ service taskgame {
 
 	@handler getUserScores
 	get /users/:userId/scores (GetUserScoresReq) returns (UserScores)
+}
+
+@server (
+	prefix:     /v1
+	group:      friend
+	middleware: Auth
+)
+service taskgame {
+	@handler listFriends
+	get /friends returns (FriendList)
+
+	@handler createFriendRequest
+	post /friends/requests (CreateFriendRequestReq) returns (FriendRequest)
+
+	@handler unfriend
+	delete /friends/:userId (UnfriendReq) returns (RemovedFriend)
+
+	@handler setFriendGroup
+	put /friends/:userId/group (SetFriendGroupReq) returns (FriendPlacement)
+
+	@handler listFriendRequests
+	get /friend-requests (ListFriendRequestsReq) returns (FriendRequestList)
+
+	@handler acceptFriendRequest
+	post /friend-requests/:requestId/accept (FriendRequestActionReq) returns (FriendRequest)
+
+	@handler declineFriendRequest
+	post /friend-requests/:requestId/decline (FriendRequestActionReq) returns (FriendRequest)
+
+	@handler cancelFriendRequest
+	delete /friend-requests/:requestId (FriendRequestActionReq) returns (FriendRequest)
+
+	@handler listFriendGroups
+	get /friend-groups returns (FriendGroupList)
+
+	@handler createFriendGroup
+	post /friend-groups (CreateFriendGroupReq) returns (FriendGroup)
+
+	@handler updateFriendGroup
+	patch /friend-groups/:groupId (PatchFriendGroupReq) returns (FriendGroup)
+
+	@handler deleteFriendGroup
+	delete /friend-groups/:groupId (DeleteFriendGroupReq) returns (FriendGroup)
 }
 

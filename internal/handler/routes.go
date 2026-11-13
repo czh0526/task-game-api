@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	chat "taskgame/internal/handler/chat"
+	friend "taskgame/internal/handler/friend"
 	health "taskgame/internal/handler/health"
 	session "taskgame/internal/handler/session"
 	task "taskgame/internal/handler/task"
@@ -204,6 +205,75 @@ func RegisterHandlers(server *rest.Server, serverCtx *svc.ServiceContext) {
 					Method:  http.MethodPost,
 					Path:    "/webhooks",
 					Handler: webhook.CreateWebhookHandler(serverCtx),
+				},
+			}...,
+		),
+		rest.WithPrefix("/v1"),
+	)
+
+	server.AddRoutes(
+		rest.WithMiddlewares(
+			[]rest.Middleware{serverCtx.Auth},
+			[]rest.Route{
+				{
+					Method:  http.MethodGet,
+					Path:    "/friend-groups",
+					Handler: friend.ListFriendGroupsHandler(serverCtx),
+				},
+				{
+					Method:  http.MethodPost,
+					Path:    "/friend-groups",
+					Handler: friend.CreateFriendGroupHandler(serverCtx),
+				},
+				{
+					Method:  http.MethodDelete,
+					Path:    "/friend-groups/:groupId",
+					Handler: friend.DeleteFriendGroupHandler(serverCtx),
+				},
+				{
+					Method:  http.MethodPatch,
+					Path:    "/friend-groups/:groupId",
+					Handler: friend.UpdateFriendGroupHandler(serverCtx),
+				},
+				{
+					Method:  http.MethodGet,
+					Path:    "/friend-requests",
+					Handler: friend.ListFriendRequestsHandler(serverCtx),
+				},
+				{
+					Method:  http.MethodDelete,
+					Path:    "/friend-requests/:requestId",
+					Handler: friend.CancelFriendRequestHandler(serverCtx),
+				},
+				{
+					Method:  http.MethodPost,
+					Path:    "/friend-requests/:requestId/accept",
+					Handler: friend.AcceptFriendRequestHandler(serverCtx),
+				},
+				{
+					Method:  http.MethodPost,
+					Path:    "/friend-requests/:requestId/decline",
+					Handler: friend.DeclineFriendRequestHandler(serverCtx),
+				},
+				{
+					Method:  http.MethodGet,
+					Path:    "/friends",
+					Handler: friend.ListFriendsHandler(serverCtx),
+				},
+				{
+					Method:  http.MethodPost,
+					Path:    "/friends/requests",
+					Handler: friend.CreateFriendRequestHandler(serverCtx),
+				},
+				{
+					Method:  http.MethodDelete,
+					Path:    "/friends/:userId",
+					Handler: friend.UnfriendHandler(serverCtx),
+				},
+				{
+					Method:  http.MethodPut,
+					Path:    "/friends/:userId/group",
+					Handler: friend.SetFriendGroupHandler(serverCtx),
 				},
 			}...,
 		),

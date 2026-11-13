@@ -47,4 +47,10 @@ func TestSetLocalDevCORSHeaders(t *testing.T) {
 	if strings.Count(got, "Content-Type") != 1 {
 		t.Fatalf("allow headers should replace the previous value, got %q", got)
 	}
+	methods := header.Get("Access-Control-Allow-Methods")
+	for _, method := range []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"} {
+		if !strings.Contains(methods, method) {
+			t.Fatalf("allow methods %q missing %s", methods, method)
+		}
+	}
 }

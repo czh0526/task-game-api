@@ -90,6 +90,7 @@ func (d *DB) Webhooks() store.WebhookRepo       { return &webhookRepo{q: d.db} }
 func (d *DB) Deliveries() store.DeliveryRepo    { return &deliveryRepo{q: d.db} }
 func (d *DB) Chats() store.ChatRepo             { return &chatRepo{q: d.db} }
 func (d *DB) Invites() store.InviteRepo         { return &inviteRepo{q: d.db} }
+func (d *DB) Friends() store.FriendRepo         { return &friendRepo{q: d.db} }
 func (d *DB) Idem() store.IdemRepo              { return &idemRepo{q: d.db} }
 
 func (d *DB) InTx(ctx context.Context, fn func(ctx context.Context, r store.Repos) error) error {
@@ -119,6 +120,7 @@ func (t *txRepos) Webhooks() store.WebhookRepo       { return &webhookRepo{q: t.
 func (t *txRepos) Deliveries() store.DeliveryRepo    { return &deliveryRepo{q: t.q} }
 func (t *txRepos) Chats() store.ChatRepo             { return &chatRepo{q: t.q} }
 func (t *txRepos) Invites() store.InviteRepo         { return &inviteRepo{q: t.q} }
+func (t *txRepos) Friends() store.FriendRepo         { return &friendRepo{q: t.q} }
 func (t *txRepos) Idem() store.IdemRepo              { return &idemRepo{q: t.q} }
 
 // migrate adds password-account columns on databases created before they existed.

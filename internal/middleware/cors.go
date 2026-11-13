@@ -29,7 +29,7 @@ func LocalDevCORS() rest.RunOption {
 
 func setLocalDevCORSHeaders(header http.Header) {
 	header.Set("Access-Control-Allow-Headers", localDevAllowHeaders)
-	header.Set("Access-Control-Allow-Methods", "GET, HEAD, POST, OPTIONS")
+	header.Set("Access-Control-Allow-Methods", "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS")
 }
 
 func localDevOrigins() []string {

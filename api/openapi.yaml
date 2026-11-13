@@ -19,7 +19,8 @@ info:
     - Additive in v0.1, workflow closure: POST /tasks/{taskId}/cancel, /revise, /resolve, and /arbitrate. Cancel refunds held funds when work has not been submitted. A per_seat task with submissions cancels only unfinished seats (open or filled, not submitted). Revise marks a submission superseded and returns the seat or task to active, up to acceptance.max_revisions (default 3). Dispute still freezes. Mutual resolve needs both sides to post the same outcome. Arbitrate applies immediately and only for Escrow.ArbiterUserIds. A full refund closes the task as cancelled. A payout closes it as settled. Per-seat disputes freeze only that seat's share; other seats keep their own confirm and refund rules. A single competitive submission still auto-settles at review_deadline (winner_take_all does not guess among multiple submissions). After that, winner_select_deadline refunds the pool if no winner was chosen.
     - Additive in v0.1, visibility: task responses include submissions[] (current and superseded). Funding a task creates one chat (chat_id) with the publisher; accept adds the executor. GET /chats/{chatId}, GET /chats/{chatId}/messages (oldest first within a page), and GET /chats?task_id= read that thread. Dropout does not remove chat members.
     - Additive in v0.1, timeouts (default 72h, same ticker as auto-settle): open_timeout cancels an exclusive, an unaccepted competitive task, or a unified collaborative task that still has an open seat, at min(fund+OpenTimeout, acceptance.deadline). A unified task whose seats are all filled sets start_deadline and cancels with start_timeout if the publisher does not start. Per-seat open seats refund that share at min(opened_at+SeatTimeout, acceptance.deadline); filled and submitted seats are not auto-refunded. Competitive tasks with more than one current submission set winner_select_deadline = review_deadline + WinnerSelectHours and then refund with winner_select_timeout. Accepted work with no current submission cancels at acceptance.deadline (reason open_timeout). Executors on those refunds get 0 commission and 0 ability.
-    - Additive in v0.1, assignee_policy is enforced on accept. specific allows user_ids or a pending/accepted invite, and a declined invite blocks until a new invite. criteria requires ability >= min_ability. The publisher cannot accept their own task. Funding a specific task invites each user_id (task.invited). GET /tasks?assignable=me lists tasks the caller can accept now.
+    - Additive in v0.1, assignee_policy is enforced on accept. specific allows user_ids or a pending/accepted invite, and a declined invite blocks until a new invite. criteria requires ability >= min_ability. The publisher cannot accept their own task. Funding a specific task invites each user_id (task.invited). GET /tasks?assignable=me lists tasks the caller can accept now. Friendship does not add an assignee_policy value and does not change who can accept a task.
+    - Additive in v0.1, mutual friends and personal groups. POST /friends/requests {user_id} asks an existing user. You cannot friend yourself. Already friends, or a pending request you already sent, is 409 and does not insert a second row. If the other user already has a pending request toward you, that call accepts the existing request (200, status accepted) instead of opening another one. The recipient can accept or decline. The requester can cancel a pending outgoing request; cancel does not emit a webhook. Either friend can unfriend, which ends the relationship for both sides and clears both users' group membership for that pair. A later request is allowed. GET /friends is only the caller's list: groups are personal folders (a friend is in at most one of the owner's groups, or ungrouped). Deleting a group does not unfriend. Caps: 50 groups per user, 500 friends per user, 100 pending outgoing requests, group names 1–32 characters after trim and unique per owner, sort_order from -1000000 to 1000000. Friend objects expose user_id, integrity, ability, and since — the same public scores as GET /users/{userId}/scores — and never email, balance, or password. Webhook events friend.requested, friend.accepted, friend.declined, and friend.removed are delivered to the other party's existing webhook subscriptions (owner-scoped, same HMAC delivery as score.updated). They are not task-scoped.
 servers:
   - url: https://api.example.com/v1
 security:
@@ -32,6 +33,7 @@ tags:
   - name: Webhooks
   - name: Chats
   - name: Users
+  - name: Friends
 paths:
   /register:
     post:
@@ -575,6 +577,272 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Task'
+  /friends:
+    get:
+      tags: [Friends]
+      summary: Caller's friends, grouped
+      operationId: listFriends
+      description: |
+        Only the authenticated owner. Groups are that owner's personal folders, including empty ones.
+        ungrouped holds friends with no folder. The other person does not see these folders.
+        Each friend has user_id, integrity, ability, and since. Email and secrets are omitted.
+      responses:
+        '200':
+          description: Grouped friend list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FriendList'
+  /friends/requests:
+    post:
+      tags: [Friends]
+      summary: Send a friend request, or accept the reverse pending request
+      operationId: createFriendRequest
+      description: |
+        Mutual friendship, not a follow. user_id must be an existing user and must not be the caller.
+        Already friends, or a pending request the caller already sent, is 409 conflict and does not insert a second row.
+        If the other user already has a pending request toward the caller, this accepts that request and returns 200 with status accepted.
+        A newly created pending request returns 201 and emits friend.requested to the recipient's webhook subscriptions.
+        Accepting the reverse request emits friend.accepted to the original requester.
+        Caps: 100 pending outgoing requests. The 500-friend cap is enforced when the friendship is created.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateFriendRequest'
+      responses:
+        '201':
+          description: Pending request created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FriendRequest'
+        '200':
+          description: The other user's pending request was accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FriendRequest'
+        '409':
+          description: Already friends, or the caller already has a pending request to that user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /friends/{userId}:
+    delete:
+      tags: [Friends]
+      summary: Unfriend
+      operationId: unfriend
+      description: |
+        Ends the friendship for both users and clears both users' group membership for the pair.
+        A later request is allowed. Emits friend.removed to the other user's webhook subscriptions.
+        data.user_id is the caller. data.friend_user_id is the person who was removed.
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RemovedFriend'
+        '404':
+          description: Not friends
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /friends/{userId}/group:
+    put:
+      tags: [Friends]
+      summary: Move a friend into a personal group, or ungroup them
+      operationId: setFriendGroup
+      description: |
+        group_id null, or omitting the field, puts the friend in the ungrouped bucket.
+        An empty string is 400. A missing group, or a group owned by someone else, is 404.
+        A user who is not a friend is 404.
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetFriendGroup'
+      responses:
+        '200':
+          description: Updated placement
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FriendPlacement'
+  /friend-requests:
+    get:
+      tags: [Friends]
+      summary: Pending friend requests
+      operationId: listFriendRequests
+      description: direction is required. Only pending requests are returned.
+      parameters:
+        - name: direction
+          in: query
+          required: true
+          schema: { type: string, enum: [incoming, outgoing] }
+      responses:
+        '200':
+          description: Pending requests
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FriendRequestList'
+  /friend-requests/{requestId}/accept:
+    post:
+      tags: [Friends]
+      summary: Accept an incoming friend request
+      operationId: acceptFriendRequest
+      description: |
+        Recipient only, and only while pending. Both users then see each other as friends.
+        Emits friend.accepted to the requester. 500 friends per user is the cap.
+      parameters:
+        - name: requestId
+          in: path
+          required: true
+          schema: { type: string, pattern: '^frq_' }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FriendRequest'
+  /friend-requests/{requestId}/decline:
+    post:
+      tags: [Friends]
+      summary: Decline an incoming friend request
+      operationId: declineFriendRequest
+      description: Recipient only, and only while pending. Emits friend.declined to the requester. A later request is allowed.
+      parameters:
+        - name: requestId
+          in: path
+          required: true
+          schema: { type: string, pattern: '^frq_' }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Declined
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FriendRequest'
+  /friend-requests/{requestId}:
+    delete:
+      tags: [Friends]
+      summary: Cancel an outgoing friend request
+      operationId: cancelFriendRequest
+      description: Requester only, and only while pending. Does not emit a webhook. A later request is allowed.
+      parameters:
+        - name: requestId
+          in: path
+          required: true
+          schema: { type: string, pattern: '^frq_' }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FriendRequest'
+  /friend-groups:
+    get:
+      tags: [Friends]
+      summary: Caller's friend groups
+      operationId: listFriendGroups
+      description: Folders only, without members. GET /friends nests the members. At most 50 groups per user.
+      responses:
+        '200':
+          description: Groups
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FriendGroupList'
+    post:
+      tags: [Friends]
+      summary: Create a friend group
+      operationId: createFriendGroup
+      description: |
+        Name is trimmed. 1–32 characters, unique per owner. sort_order defaults to the current count (appended).
+        The 51st group is 409 friend group limit reached.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateFriendGroup'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FriendGroup'
+  /friend-groups/{groupId}:
+    patch:
+      tags: [Friends]
+      summary: Rename or reorder a friend group
+      operationId: updateFriendGroup
+      description: Send name, sort_order, or both. A group the caller does not own is 404. sort_order is an integer from -1000000 to 1000000.
+      parameters:
+        - name: groupId
+          in: path
+          required: true
+          schema: { type: string, pattern: '^fgp_' }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchFriendGroup'
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FriendGroup'
+    delete:
+      tags: [Friends]
+      summary: Delete a friend group
+      operationId: deleteFriendGroup
+      description: Friends in the folder become ungrouped. They stay friends. A group the caller does not own is 404.
+      parameters:
+        - name: groupId
+          in: path
+          required: true
+          schema: { type: string, pattern: '^fgp_' }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FriendGroup'
   /webhooks:
     post:
       tags: [Webhooks]
@@ -882,6 +1150,10 @@ components:
         - escrow.unfreeze
         - chat.message.created
         - score.updated
+        - friend.requested
+        - friend.accepted
+        - friend.declined
+        - friend.removed
     MoneyAmount:
       type: integer
       minimum: 0
@@ -1279,3 +1551,110 @@ components:
               reason: { type: string }
               task_id: { type: string }
               created_at: { type: string, format: date-time }
+    Friend:
+      type: object
+      description: |
+        Public friend card. integrity and ability match GET /users/{userId}/scores.
+        Email, balance, and password are not included.
+      required: [user_id, integrity, ability, since]
+      properties:
+        user_id: { type: string }
+        integrity: { type: integer }
+        ability: { type: integer }
+        since:
+          type: string
+          format: date-time
+          description: When the friendship was accepted.
+    FriendGroup:
+      type: object
+      required: [id, name, sort_order]
+      properties:
+        id: { type: string, pattern: '^fgp_' }
+        name: { type: string, minLength: 1, maxLength: 32 }
+        sort_order: { type: integer, minimum: -1000000, maximum: 1000000 }
+    FriendGroupWithFriends:
+      type: object
+      required: [id, name, sort_order, friends]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        sort_order: { type: integer }
+        friends:
+          type: array
+          items: { $ref: '#/components/schemas/Friend' }
+    FriendList:
+      type: object
+      required: [groups, ungrouped]
+      properties:
+        groups:
+          type: array
+          description: The caller's folders, including empty ones, ordered by sort_order, then created time.
+          items: { $ref: '#/components/schemas/FriendGroupWithFriends' }
+        ungrouped:
+          type: array
+          items: { $ref: '#/components/schemas/Friend' }
+    FriendRequest:
+      type: object
+      required: [id, from_user_id, to_user_id, status, created_at, updated_at]
+      properties:
+        id: { type: string, pattern: '^frq_' }
+        from_user_id: { type: string }
+        to_user_id: { type: string }
+        status:
+          type: string
+          enum: [pending, accepted, declined, cancelled]
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    FriendRequestList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/FriendRequest' }
+    FriendGroupList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/FriendGroup' }
+    RemovedFriend:
+      type: object
+      required: [user_id]
+      properties:
+        user_id: { type: string, description: The user who is no longer a friend. }
+    FriendPlacement:
+      type: object
+      required: [user_id]
+      properties:
+        user_id: { type: string }
+        group_id:
+          type: [string, 'null']
+          description: null when the friend is in the ungrouped bucket.
+    CreateFriendRequest:
+      type: object
+      required: [user_id]
+      properties:
+        user_id: { type: string }
+    CreateFriendGroup:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: Trimmed. 1–32 characters. Unique per owner.
+    PatchFriendGroup:
+      type: object
+      description: At least one of name or sort_order is required.
+      properties:
+        name: { type: string }
+        sort_order: { type: integer, minimum: -1000000, maximum: 1000000 }
+    SetFriendGroup:
+      type: object
+      properties:
+        group_id:
+          type: [string, 'null']
+          description: |
+            A group id the caller owns. null, or omitting the field, moves the friend to the ungrouped bucket.
+            An empty string is 400. A group the caller does not own is 404. A user who is not a friend is 404.

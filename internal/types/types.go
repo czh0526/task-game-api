@@ -379,3 +379,96 @@ type AuthSession struct {
 	ExpiresIn   int64       `json:"expires_in"`
 	User        UserSummary `json:"user"`
 }
+
+type Friend struct {
+	UserId    string `json:"user_id"`
+	Integrity int64  `json:"integrity"`
+	Ability   int64  `json:"ability"`
+	Since     string `json:"since"`
+}
+
+type FriendGroup struct {
+	Id        string `json:"id"`
+	Name      string `json:"name"`
+	SortOrder int64  `json:"sort_order"`
+}
+
+type FriendGroupWithFriends struct {
+	Id        string   `json:"id"`
+	Name      string   `json:"name"`
+	SortOrder int64    `json:"sort_order"`
+	Friends   []Friend `json:"friends"`
+}
+
+type FriendList struct {
+	Groups    []FriendGroupWithFriends `json:"groups"`
+	Ungrouped []Friend                 `json:"ungrouped"`
+}
+
+type FriendRequest struct {
+	Id         string `json:"id"`
+	FromUserId string `json:"from_user_id"`
+	ToUserId   string `json:"to_user_id"`
+	Status     string `json:"status"`
+	CreatedAt  string `json:"created_at"`
+	UpdatedAt  string `json:"updated_at"`
+}
+
+type FriendRequestList struct {
+	Items []FriendRequest `json:"items"`
+}
+
+type FriendGroupList struct {
+	Items []FriendGroup `json:"items"`
+}
+
+type RemovedFriend struct {
+	UserId string `json:"user_id"`
+}
+
+type FriendPlacement struct {
+	UserId  string  `json:"user_id"`
+	GroupId *string `json:"group_id"`
+}
+
+type CreateFriendRequestReq struct {
+	IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
+	UserId         string `json:"user_id"`
+}
+
+type ListFriendRequestsReq struct {
+	Direction string `form:"direction,optional"`
+}
+
+type FriendRequestActionReq struct {
+	RequestId      string `path:"requestId" json:"-"`
+	IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
+}
+
+type UnfriendReq struct {
+	UserId         string `path:"userId" json:"-"`
+	IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
+}
+
+type CreateFriendGroupReq struct {
+	IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
+	Name           string `json:"name"`
+}
+
+type PatchFriendGroupReq struct {
+	GroupId        string  `path:"groupId" json:"-"`
+	IdempotencyKey string  `header:"Idempotency-Key,optional" json:"-"`
+	Name           *string `json:"name,optional"`
+	SortOrder      *int64  `json:"sort_order,optional"`
+}
+
+type DeleteFriendGroupReq struct {
+	GroupId        string `path:"groupId" json:"-"`
+	IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
+}
+
+type SetFriendGroupReq struct {
+	UserId         string  `path:"userId" json:"-"`
+	IdempotencyKey string  `header:"Idempotency-Key,optional" json:"-"`
+	GroupId        *string `json:"group_id,optional"`
+}

@@ -251,6 +251,29 @@ th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line
 .bubble.mine .en, .bubble.mine header, .bubble.mine footer, .bubble.mine code { color: #f0d7cc; }
 .composer { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; margin-top: 12px; }
 
+.friend-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.friend-actions, .group-edit { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.friend-actions select, .friend-actions input, .group-edit input, .friend-pick .btn {
+  width: auto;
+  border: 1px solid #d9d0c2;
+  background: var(--bg-raised);
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+.sort-input { width: 6rem; }
+.friend-pick { margin-top: 8px; }
+.friend-pick summary { cursor: pointer; font-weight: 650; }
+.pick-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.pick-block { margin-top: 8px; }
+
 .empty { color: var(--ink-soft); }
 .plain { padding-left: 1.1rem; }
 .toolbar { margin: 12px 0; }
