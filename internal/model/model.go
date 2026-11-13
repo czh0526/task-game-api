@@ -68,6 +68,13 @@ const (
 	InviteAccepted = "accepted"
 	InviteDeclined = "declined"
 
+	FriendPending   = "pending"
+	FriendAccepted  = "accepted"
+	FriendDeclined  = "declined"
+	FriendCancelled = "cancelled"
+	FriendIncoming  = "incoming"
+	FriendOutgoing  = "outgoing"
+
 	OutcomePayExecutor     = "pay_executor"
 	OutcomeRefundPublisher = "refund_publisher"
 	OutcomeSplit           = "split"
@@ -116,6 +123,10 @@ const (
 	EventEscrowUnfreeze        = "escrow.unfreeze"
 	EventChatMessageCreated    = "chat.message.created"
 	EventScoreUpdated          = "score.updated"
+	EventFriendRequested       = "friend.requested"
+	EventFriendAccepted        = "friend.accepted"
+	EventFriendDeclined        = "friend.declined"
+	EventFriendRemoved         = "friend.removed"
 )
 
 // WebhookEventTypes is the closed set from the OpenAPI enum.
@@ -142,6 +153,10 @@ var WebhookEventTypes = map[string]struct{}{
 	EventEscrowUnfreeze:        {},
 	EventChatMessageCreated:    {},
 	EventScoreUpdated:          {},
+	EventFriendRequested:       {},
+	EventFriendAccepted:        {},
+	EventFriendDeclined:        {},
+	EventFriendRemoved:         {},
 }
 
 type Payment struct {
@@ -364,4 +379,51 @@ type IdemRecord struct {
 	RequestHash  string
 	ResponseBody string
 	CreatedAt    time.Time
+}
+
+// OrderedPair returns user ids in ascending byte order. Friendship and the
+// pending-request uniqueness key both use this so a pair is stored once.
+func OrderedPair(a, b string) (low, high string) {
+	if a <= b {
+		return a, b
+	}
+	return b, a
+}
+
+// FriendRequest is one directed request. Pending rows are unique per unordered pair.
+type FriendRequest struct {
+	ID         string
+	FromUserID string
+	ToUserID   string
+	Status     string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+// Friendship is the mutual relationship. UserLow < UserHigh.
+type Friendship struct {
+	UserLow   string
+	UserHigh  string
+	CreatedAt time.Time
+}
+
+// FriendGroup is a personal folder owned by one user. Friends of that user
+// see their own folders, not this one.
+type FriendGroup struct {
+	ID        string
+	OwnerID   string
+	Name      string
+	SortOrder int64
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// FriendEdge is one friend of a user, with the public scores and the owner's group.
+// GroupID is empty when the friend is in the ungrouped bucket.
+type FriendEdge struct {
+	UserID    string
+	Integrity int64
+	Ability   int64
+	Since     time.Time
+	GroupID   string
 }

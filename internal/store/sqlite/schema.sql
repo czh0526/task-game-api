@@ -158,6 +158,63 @@ CREATE TABLE IF NOT EXISTS score_events (
 
 CREATE INDEX IF NOT EXISTS idx_score_events_user ON score_events (user_id, created_at, id);
 
+-- Friendships are mutual and stored once per pair (user_low < user_high).
+-- friend_requests.pair_low / pair_high use the same order so only one pending
+-- request can exist for a pair. Accepted, declined, and cancelled rows stay
+-- so a later request can be created. Groups are personal folders: the other
+-- person does not see them. Caps live in the engine (50 groups, 500 friends,
+-- 100 pending outgoing requests, group names of 1–32 characters).
+
+CREATE TABLE IF NOT EXISTS friend_requests (
+    id TEXT PRIMARY KEY,
+    from_user_id TEXT NOT NULL,
+    to_user_id TEXT NOT NULL,
+    pair_low TEXT NOT NULL,
+    pair_high TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK (pair_low < pair_high),
+    CHECK (status IN ('pending', 'accepted', 'declined', 'cancelled'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_friend_req_to ON friend_requests (to_user_id, status, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_friend_req_from ON friend_requests (from_user_id, status, created_at, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_friend_req_pending_pair
+    ON friend_requests (pair_low, pair_high) WHERE status = 'pending';
+
+CREATE TABLE IF NOT EXISTS friendships (
+    user_low TEXT NOT NULL,
+    user_high TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (user_low, user_high),
+    CHECK (user_low < user_high)
+);
+
+CREATE INDEX IF NOT EXISTS idx_friendships_high ON friendships (user_high, user_low);
+
+CREATE TABLE IF NOT EXISTS friend_groups (
+    id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    sort_order INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK (length(name) > 0)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_friend_groups_owner_name ON friend_groups (owner_id, name);
+CREATE INDEX IF NOT EXISTS idx_friend_groups_owner_sort ON friend_groups (owner_id, sort_order, created_at, id);
+
+CREATE TABLE IF NOT EXISTS friend_group_members (
+    owner_id TEXT NOT NULL,
+    friend_user_id TEXT NOT NULL,
+    group_id TEXT NOT NULL,
+    PRIMARY KEY (owner_id, friend_user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_friend_group_members_group ON friend_group_members (group_id);
+
 CREATE TABLE IF NOT EXISTS idempotency_keys (
     user_id TEXT NOT NULL,
     method TEXT NOT NULL,

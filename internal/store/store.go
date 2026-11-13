@@ -38,6 +38,7 @@ type Repos interface {
 	Deliveries() DeliveryRepo
 	Chats() ChatRepo
 	Invites() InviteRepo
+	Friends() FriendRepo
 	Idem() IdemRepo
 }
 
@@ -102,6 +103,36 @@ type InviteRepo interface {
 	Find(ctx context.Context, taskID, userID string) (model.Invite, error)
 	ListByTask(ctx context.Context, taskID string) ([]model.Invite, error)
 	ListByUser(ctx context.Context, userID, status string) ([]model.Invite, error)
+}
+
+// FriendRepo stores mutual friendships, directed requests, and personal groups.
+// A friendship is one row per unordered pair. At most one request between a
+// pair may be pending. Group membership is visible only to the owner.
+type FriendRepo interface {
+	InsertRequest(ctx context.Context, row model.FriendRequest) error
+	UpdateRequest(ctx context.Context, row model.FriendRequest) error
+	GetRequest(ctx context.Context, id string) (model.FriendRequest, error)
+	FindPendingBetween(ctx context.Context, a, b string) (model.FriendRequest, error)
+	ListPending(ctx context.Context, userID, direction string) ([]model.FriendRequest, error)
+	CountPendingOutgoing(ctx context.Context, userID string) (int, error)
+
+	InsertFriendship(ctx context.Context, row model.Friendship) error
+	DeleteFriendship(ctx context.Context, a, b string) error
+	GetFriendship(ctx context.Context, a, b string) (model.Friendship, error)
+	CountFriendships(ctx context.Context, userID string) (int, error)
+	ListFriendEdges(ctx context.Context, userID string) ([]model.FriendEdge, error)
+
+	InsertGroup(ctx context.Context, row model.FriendGroup) error
+	UpdateGroup(ctx context.Context, row model.FriendGroup) error
+	DeleteGroup(ctx context.Context, ownerID, id string) error
+	GetGroup(ctx context.Context, id string) (model.FriendGroup, error)
+	ListGroups(ctx context.Context, ownerID string) ([]model.FriendGroup, error)
+	CountGroups(ctx context.Context, ownerID string) (int, error)
+
+	SetMembership(ctx context.Context, ownerID, friendUserID, groupID string) error
+	ClearMembership(ctx context.Context, ownerID, friendUserID string) error
+	ClearMembershipsForPair(ctx context.Context, a, b string) error
+	ClearMembershipsForGroup(ctx context.Context, groupID string) error
 }
 
 type IdemRepo interface {

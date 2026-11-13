@@ -282,6 +282,27 @@ await publisher.createTask({
 await client.acceptTask(taskId, { role_id: "writer_1" });
 ```
 
+### 好友
+
+好友是双向的。`listFriends()` 只返回调用者自己的分组和未分组好友，字段是 `user_id`、`integrity`、`ability`、`since`，没有邮箱。分组是个人文件夹：一个人最多在一个分组里。每人最多 50 个分组、500 个好友、100 条待处理的发出申请。分组名去掉首尾空白后 1–32 个字符，同一用户不能重复。
+
+已经是好友，或自己已经发出待处理申请，是 409。如果对方已经有一条指向你的待处理申请，`createFriendRequest` 会接受那一条（HTTP 200，`status` 为 `accepted`），不会再插入一行。新申请是 201。解除好友之后可以重新申请。删除分组不会解除好友。
+
+`friend.requested` 发给接收方，`friend.accepted` 和 `friend.declined` 发给申请方，`friend.removed` 发给另一方。投递仍是用户自己的 webhook 订阅和原来的 HMAC。撤回申请不发事件。
+
+```ts
+const pending = await client.createFriendRequest(
+  { user_id: "usr_executor" },
+  { idempotencyKey: "friend-1" },
+);
+await client.acceptFriendRequest(pending.id);
+const folder = await client.createFriendGroup({ name: "同事" });
+await client.setFriendGroup("usr_executor", { group_id: folder.id });
+const mine = await client.listFriends();
+await client.setFriendGroup("usr_executor", { group_id: null });
+await client.unfriend("usr_executor");
+```
+
 ### Webhook 签名
 
 登记时带上 `secret`（至少 16 个字符）和 `events`。投递是 HTTP POST，请求头：
@@ -580,6 +601,27 @@ await publisher.createTask({
 });
 // seats writer_1 … writer_4, each share_bps 2500, template_id "writer"
 await client.acceptTask(taskId, { role_id: "writer_1" });
+```
+
+### Friends
+
+Friendship is mutual. `listFriends()` returns only the caller's groups and ungrouped friends, with `user_id`, `integrity`, `ability`, and `since`. There is no email. A friend sits in at most one of the owner's groups. Caps are 50 groups, 500 friends, and 100 pending outgoing requests per user. A group name is 1–32 characters after trim and unique for that owner.
+
+Already friends, or a pending request you already sent, is 409. If the other user already has a pending request toward you, `createFriendRequest` accepts that request (HTTP 200, `status` `accepted`) and does not insert another row. A new request is 201. Unfriend allows a later request. Deleting a group does not unfriend anyone.
+
+`friend.requested` is delivered to the recipient. `friend.accepted` and `friend.declined` go to the requester. `friend.removed` goes to the other person. Delivery uses that user's existing webhook subscription and the same HMAC. Cancelling a request does not emit an event.
+
+```ts
+const pending = await client.createFriendRequest(
+  { user_id: "usr_executor" },
+  { idempotencyKey: "friend-1" },
+);
+await client.acceptFriendRequest(pending.id);
+const folder = await client.createFriendGroup({ name: "同事" });
+await client.setFriendGroup("usr_executor", { group_id: folder.id });
+const mine = await client.listFriends();
+await client.setFriendGroup("usr_executor", { group_id: null });
+await client.unfriend("usr_executor");
 ```
 
 ### Webhook signatures

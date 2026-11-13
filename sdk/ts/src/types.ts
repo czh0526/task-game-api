@@ -66,7 +66,11 @@ export type WebhookEventType =
   | "escrow.refund"
   | "escrow.unfreeze"
   | "chat.message.created"
-  | "score.updated";
+  | "score.updated"
+  | "friend.requested"
+  | "friend.accepted"
+  | "friend.declined"
+  | "friend.removed";
 
 export interface Milestone {
   id: string;
@@ -413,4 +417,77 @@ export interface AuthSession {
   access_token: string;
   expires_in: number;
   user: UserSummary;
+}
+
+export type FriendRequestStatus = "pending" | "accepted" | "declined" | "cancelled";
+
+export type FriendRequestDirection = "incoming" | "outgoing";
+
+/** Public friend card. Same scores as `GET /users/{userId}/scores`. No email. */
+export interface Friend {
+  user_id: string;
+  integrity: number;
+  ability: number;
+  /** When the friendship was accepted. */
+  since: string;
+}
+
+export interface FriendGroup {
+  id: string;
+  name: string;
+  sort_order: number;
+}
+
+export interface FriendGroupWithFriends extends FriendGroup {
+  friends: Friend[];
+}
+
+/** Owner-only. `groups` includes empty folders. `ungrouped` is the null group_id bucket. */
+export interface FriendList {
+  groups: FriendGroupWithFriends[];
+  ungrouped: Friend[];
+}
+
+export interface FriendRequest {
+  id: string;
+  from_user_id: string;
+  to_user_id: string;
+  status: FriendRequestStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FriendRequestList {
+  items: FriendRequest[];
+}
+
+export interface FriendGroupList {
+  items: FriendGroup[];
+}
+
+export interface RemovedFriend {
+  user_id: string;
+}
+
+export interface FriendPlacement {
+  user_id: string;
+  group_id?: string | null;
+}
+
+export interface CreateFriendRequestBody {
+  user_id: string;
+}
+
+export interface CreateFriendGroupBody {
+  name: string;
+}
+
+export interface PatchFriendGroupBody {
+  name?: string;
+  sort_order?: number;
+}
+
+/** `group_id` null, or omitted, moves the friend to the ungrouped bucket. */
+export interface SetFriendGroupBody {
+  group_id?: string | null;
 }

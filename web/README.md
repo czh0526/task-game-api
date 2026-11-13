@@ -19,7 +19,7 @@ npm install
 npm run dev
 ```
 
-浏览器打开 `http://localhost:5173`。未登录时停在注册/登录页。注册或登录成功后，Bearer JWT 和用户 id 写进 `localStorage`，之后的任务请求带 `Authorization: Bearer`。Vite 如果 5173 被占用，会顺延到 5185 以内；`npm run preview` 使用 4173。服务只给这些本机源回 CORS 头：`localhost`、`127.0.0.1`、`[::1]` 的端口 4173 和 5173–5185。`POST /v1/register`、`POST /v1/login` 和 `GET /v1/me` 走同一套 CORS。
+浏览器打开 `http://localhost:5173`。未登录时停在注册/登录页。注册或登录成功后，Bearer JWT 和用户 id 写进 `localStorage`，之后的任务请求带 `Authorization: Bearer`。Vite 如果 5173 被占用，会顺延到 5185 以内；`npm run preview` 使用 4173。服务只给这些本机源回 CORS 头：`localhost`、`127.0.0.1`、`[::1]` 的端口 4173 和 5173–5185。允许的方法包括 GET、POST、PUT、PATCH 和 DELETE。`POST /v1/register`、`POST /v1/login` 和 `GET /v1/me` 走同一套 CORS。
 
 ```bash
 cd web
@@ -59,7 +59,7 @@ make token USER_ID=usr_extra
 | `taskgame.web.settings` | JSON：`baseUrl`、`role`、`authMode`（`apiKey` 或 `bearer`）、`apiKey`、`bearerToken`、`userId`、`email`。没有密钥也没有 JWT 时停在登录页 |
 | `taskgame.web.chats` | 本浏览器创建或记下的会话，以及 `postMessage` 返回的消息 |
 
-任务详情会读取绑定会话的历史（`GET /chats/{id}/messages`，页内从旧到新）。侧栏「邀请」列出 `GET /me/invites?status=pending`。任务列表的「可接任务」使用 `assignable=me`。创建页可以选择开放、能力门槛或指定人。
+任务详情会读取绑定会话的历史（`GET /chats/{id}/messages`，页内从旧到新）。侧栏「邀请」列出 `GET /me/invites?status=pending`。侧栏「好友」可以按用户 id 发申请、处理收到和发出的申请、建分组、改名、排序、删除分组，以及把好友移进分组或未分组。分组只在自己的列表里。创建任务的指定人，和任务详情里的再邀请，都可以从好友列表点选用户 id。任务列表的「可接任务」使用 `assignable=me`。创建页可以选择开放、能力门槛或指定人。
 
 ## 三条任务
 

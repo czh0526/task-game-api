@@ -373,6 +373,41 @@ describe("typed errors", () => {
     assert.deepEqual(JSON.parse(calls[1]?.body ?? ""), { role_id: "design" });
   });
 
+  it("sends a friend request and ungroups with a null group id", async () => {
+    const calls: Captured[] = [];
+    const request = {
+      id: "frq_1",
+      from_user_id: "usr_a",
+      to_user_id: "usr_b",
+      status: "pending" as const,
+      created_at: "2026-11-13T00:00:00.000000000Z",
+      updated_at: "2026-11-13T00:00:00.000000000Z",
+    };
+    const client = new TaskGameClient({
+      baseUrl: "http://127.0.0.1:8891/v1",
+      auth: apiKey("dev-publisher-key"),
+      fetch: captureFetch(201, request, calls),
+    });
+    const created = await client.createFriendRequest({ user_id: "usr_b" }, { idempotencyKey: "fr-1" });
+    assert.equal(created.id, "frq_1");
+    assert.equal(calls[0]?.method, "POST");
+    assert.equal(calls[0]?.url, "http://127.0.0.1:8891/v1/friends/requests");
+    assert.equal(calls[0]?.headers["Idempotency-Key"], "fr-1");
+    assert.equal(calls[0]?.headers["X-Api-Key"], "dev-publisher-key");
+    assert.deepEqual(JSON.parse(calls[0]?.body ?? ""), { user_id: "usr_b" });
+
+    calls.length = 0;
+    const grouped = new TaskGameClient({
+      baseUrl: "http://127.0.0.1:8891",
+      apiKey: "k",
+      fetch: captureFetch(200, { user_id: "usr_b", group_id: null }, calls),
+    });
+    await grouped.setFriendGroup("usr_b", { group_id: null });
+    assert.equal(calls[0]?.method, "PUT");
+    assert.equal(calls[0]?.url, "http://127.0.0.1:8891/v1/friends/usr_b/group");
+    assert.deepEqual(JSON.parse(calls[0]?.body ?? ""), { group_id: null });
+  });
+
   it("reads competitive submission ids from the confirm 400", () => {
     const error = new InvalidArgumentError(
       400,

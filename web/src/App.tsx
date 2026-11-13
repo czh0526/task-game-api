@@ -6,6 +6,7 @@ import { href, useRoute } from "./route";
 import { AuthScreen } from "./screens/AuthScreen";
 import { ChatPane } from "./screens/ChatPane";
 import { CreateTask } from "./screens/CreateTask";
+import { Friends } from "./screens/Friends";
 import { Invites } from "./screens/Invites";
 import { Scores } from "./screens/Scores";
 import { TaskDetail } from "./screens/TaskDetail";
@@ -19,6 +20,7 @@ const TITLES: Record<string, string> = {
   scores: "积分",
   chat: "会话",
   invites: "邀请",
+  friends: "好友",
 };
 
 export function App() {
@@ -62,6 +64,9 @@ export function App() {
           <a href={href.invites} aria-current={route.name === "invites" ? "page" : undefined}>
             邀请
           </a>
+          <a href={href.friends} aria-current={route.name === "friends" ? "page" : undefined}>
+            好友
+          </a>
           <a href={href.scores} aria-current={route.name === "scores" ? "page" : undefined}>
             积分
           </a>
@@ -80,6 +85,7 @@ export function App() {
             {route.name === "task" ? <TaskDetail key={route.id} id={route.id} /> : null}
             {route.name === "scores" ? <Scores /> : null}
             {route.name === "invites" ? <Invites /> : null}
+            {route.name === "friends" ? <Friends /> : null}
             {route.name === "chat" ? <ChatPane /> : null}
           </>
         ) : (

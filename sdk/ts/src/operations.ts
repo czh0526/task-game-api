@@ -31,6 +31,18 @@ export const protocolOperations = [
   "listMessages",
   "postMessage",
   "getUserScores",
+  "listFriends",
+  "createFriendRequest",
+  "unfriend",
+  "setFriendGroup",
+  "listFriendRequests",
+  "acceptFriendRequest",
+  "declineFriendRequest",
+  "cancelFriendRequest",
+  "listFriendGroups",
+  "createFriendGroup",
+  "updateFriendGroup",
+  "deleteFriendGroup",
 ] as const;
 
 export type ProtocolOperation = (typeof protocolOperations)[number];

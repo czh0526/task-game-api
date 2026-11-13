@@ -8,6 +8,7 @@
 #   collaborative:  unified (default): start after full, dropout stays active,
 #                   confirm waits for every seat. quantity=4 template total 10000.
 #                   per_seat: each role_id confirm releases only that share.
+#   friends:        two registered users request, accept, group, unfriend, request again.
 #
 # Start the API first, from the repo root:
 #   CGO_ENABLED=0 go run . -f etc/taskgame.yaml
@@ -357,6 +358,48 @@ elif op == "quantity_settled":
     entries = (doc.get("escrow") or {}).get("entries") or []
     if any(e.get("type") == "refund" for e in entries):
         fail("unexpected refund")
+elif op == "code":
+    if doc.get("code") != args[0]:
+        fail("expected code %s" % args[0])
+elif op == "eq":
+    if str(doc.get(args[0])) != args[1]:
+        fail("expected %s=%s got %s" % (args[0], args[1], doc.get(args[0])))
+elif op == "friend_in":
+    uid, where = args[0], args[1]
+    def ids(bucket):
+        return [item.get("user_id") for item in (bucket or [])]
+    ungrouped = ids(doc.get("ungrouped"))
+    grouped = {}
+    for group in doc.get("groups") or []:
+        grouped[group.get("name")] = ids(group.get("friends"))
+    if where == "ungrouped":
+        if uid not in ungrouped:
+            fail("%s not ungrouped" % uid)
+        for name, members in grouped.items():
+            if uid in members:
+                fail("%s also in %s" % (uid, name))
+    elif uid not in grouped.get(where, []):
+        fail("%s not in group %s (%s)" % (uid, where, grouped))
+elif op == "no_friend":
+    uid = args[0]
+    found = [item.get("user_id") for item in (doc.get("ungrouped") or [])]
+    for group in doc.get("groups") or []:
+        found.extend(item.get("user_id") for item in (group.get("friends") or []))
+    if uid in found:
+        fail("still friends with %s" % uid)
+elif op == "no_group":
+    names = [group.get("name") for group in (doc.get("groups") or [])]
+    if args[0] in names:
+        fail("group %s is visible" % args[0])
+elif op == "no_private":
+    blob = json.dumps(doc)
+    for word in ("email", "password", "balance"):
+        if word in blob:
+            fail("private field %s" % word)
+elif op == "has_request":
+    ids = [item.get("id") for item in (doc.get("items") or [])]
+    if args[0] not in ids:
+        fail("request list missing %s" % args[0])
 else:
     fail("unknown check %s" % op)
 PY
@@ -877,6 +920,130 @@ run_workflow() {
   echo "workflow ok"
 }
 
+register_user() {
+  local email="$1"
+  request POST "${BASE}/v1/register" none "" "{\"email\":\"${email}\",\"password\":\"password123\"}"
+  expect_code 201 "register ${email}"
+  REG_ID="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["user"]["id"])' <<<"$RESP_BODY")"
+  REG_TOK="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])' <<<"$RESP_BODY")"
+}
+
+run_friends() {
+  # Mutual friends and personal groups. Does not touch task acceptance.
+  local id_a tok_a id_b tok_b req_id group_id group_b
+  echo "== friends mutual request / groups =="
+  register_user "friend-a-${STAMP}@example.com"
+  id_a="$REG_ID"
+  tok_a="$REG_TOK"
+  register_user "friend-b-${STAMP}@example.com"
+  id_b="$REG_ID"
+  tok_b="$REG_TOK"
+
+  request POST "${BASE}/v1/friends/requests" bearer "$tok_a" "{\"user_id\":\"${id_a}\"}"
+  expect_code 400 "cannot friend yourself"
+  check "$RESP_BODY" code invalid_argument
+  request POST "${BASE}/v1/friends/requests" bearer "$tok_a" '{"user_id":"usr_nobody_smoke"}'
+  expect_code 404 "unknown friend target"
+
+  request POST "${BASE}/v1/friends/requests" bearer "$tok_a" "{\"user_id\":\"${id_b}\"}" "friend-${STAMP}"
+  expect_code 201 "friend request"
+  check "$RESP_BODY" eq status pending
+  check "$RESP_BODY" eq from_user_id "$id_a"
+  check "$RESP_BODY" eq to_user_id "$id_b"
+  req_id="$(json_id "$RESP_BODY")"
+  request POST "${BASE}/v1/friends/requests" bearer "$tok_a" "{\"user_id\":\"${id_b}\"}" "friend-${STAMP}"
+  expect_code 201 "friend request idempotent replay"
+  check "$RESP_BODY" eq id "$req_id"
+  request POST "${BASE}/v1/friends/requests" bearer "$tok_a" "{\"user_id\":\"${id_b}\"}"
+  expect_code 409 "duplicate outgoing request"
+
+  request GET "${BASE}/v1/friend-requests?direction=incoming" bearer "$tok_b"
+  expect_code 200 "incoming requests"
+  check "$RESP_BODY" has_request "$req_id"
+  request GET "${BASE}/v1/friend-requests?direction=outgoing" bearer "$tok_a"
+  expect_code 200 "outgoing requests"
+  check "$RESP_BODY" has_request "$req_id"
+
+  request POST "${BASE}/v1/friend-requests/${req_id}/accept" bearer "$tok_b" '{}'
+  expect_code 200 "accept friend request"
+  check "$RESP_BODY" eq status accepted
+  request GET "${BASE}/v1/friends" bearer "$tok_a"
+  expect_code 200 "A friend list"
+  check "$RESP_BODY" friend_in "$id_b" ungrouped
+  check "$RESP_BODY" no_private
+  request GET "${BASE}/v1/friends" bearer "$tok_b"
+  expect_code 200 "B friend list"
+  check "$RESP_BODY" friend_in "$id_a" ungrouped
+
+  request POST "${BASE}/v1/friend-groups" bearer "$tok_a" '{"name":" 同事 "}' "grp-${STAMP}"
+  expect_code 201 "create group"
+  check "$RESP_BODY" eq name "同事"
+  group_id="$(json_id "$RESP_BODY")"
+  request POST "${BASE}/v1/friend-groups" bearer "$tok_a" '{"name":"同学"}'
+  expect_code 201 "second group"
+  group_b="$(json_id "$RESP_BODY")"
+  request PUT "${BASE}/v1/friends/${id_b}/group" bearer "$tok_a" "{\"group_id\":\"${group_id}\"}"
+  expect_code 200 "move friend into group"
+  request GET "${BASE}/v1/friends" bearer "$tok_a"
+  expect_code 200 "A grouped list"
+  check "$RESP_BODY" friend_in "$id_b" "同事"
+  request GET "${BASE}/v1/friends" bearer "$tok_b"
+  expect_code 200 "B does not see A's folder"
+  check "$RESP_BODY" friend_in "$id_a" ungrouped
+  check "$RESP_BODY" no_group "同事"
+
+  request PUT "${BASE}/v1/friends/${id_b}/group" bearer "$tok_a" "{\"group_id\":\"${group_b}\"}"
+  expect_code 200 "move friend to the other group"
+  request GET "${BASE}/v1/friends" bearer "$tok_a"
+  expect_code 200 "A moved list"
+  check "$RESP_BODY" friend_in "$id_b" "同学"
+  request DELETE "${BASE}/v1/friend-groups/${group_b}" bearer "$tok_a"
+  expect_code 200 "delete group keeps the friend"
+  request GET "${BASE}/v1/friends" bearer "$tok_a"
+  expect_code 200 "A after delete group"
+  check "$RESP_BODY" friend_in "$id_b" ungrouped
+  check "$RESP_BODY" no_group "同学"
+
+  request DELETE "${BASE}/v1/friends/${id_b}" bearer "$tok_a"
+  expect_code 200 "unfriend"
+  request GET "${BASE}/v1/friends" bearer "$tok_a"
+  expect_code 200 "A after unfriend"
+  check "$RESP_BODY" no_friend "$id_b"
+  request GET "${BASE}/v1/friends" bearer "$tok_b"
+  expect_code 200 "B after unfriend"
+  check "$RESP_BODY" no_friend "$id_a"
+
+  request POST "${BASE}/v1/friends/requests" bearer "$tok_b" "{\"user_id\":\"${id_a}\"}"
+  expect_code 201 "request after unfriend"
+  check "$RESP_BODY" eq status pending
+  req_id="$(json_id "$RESP_BODY")"
+  request POST "${BASE}/v1/friends/requests" bearer "$tok_a" "{\"user_id\":\"${id_b}\"}"
+  expect_code 200 "reverse pending request is accepted"
+  check "$RESP_BODY" eq status accepted
+  check "$RESP_BODY" eq id "$req_id"
+  request GET "${BASE}/v1/friends" bearer "$tok_a"
+  expect_code 200 "friends again"
+  check "$RESP_BODY" friend_in "$id_b" ungrouped
+
+  request DELETE "${BASE}/v1/friends/${id_a}" bearer "$tok_b"
+  expect_code 200 "unfriend before decline path"
+  request POST "${BASE}/v1/friends/requests" bearer "$tok_a" "{\"user_id\":\"${id_b}\"}"
+  expect_code 201 "request to cancel"
+  req_id="$(json_id "$RESP_BODY")"
+  request DELETE "${BASE}/v1/friend-requests/${req_id}" bearer "$tok_a"
+  expect_code 200 "cancel outgoing request"
+  check "$RESP_BODY" eq status cancelled
+  request POST "${BASE}/v1/friends/requests" bearer "$tok_b" "{\"user_id\":\"${id_a}\"}"
+  expect_code 201 "request to decline"
+  req_id="$(json_id "$RESP_BODY")"
+  request POST "${BASE}/v1/friend-requests/${req_id}/decline" bearer "$tok_a" '{}'
+  expect_code 200 "decline friend request"
+  check "$RESP_BODY" eq status declined
+  request POST "${BASE}/v1/friends/requests" bearer "$tok_a" "{\"user_id\":\"${id_b}\"}"
+  expect_code 201 "new request after decline"
+  echo "friends ok"
+}
+
 run_milestone() {
   local amount=500 m1=200 m2=300 body id sub_id other_tok
   echo "== milestone =="
@@ -1080,4 +1247,5 @@ run_collaborative_quantity
 run_collaborative_per_seat
 run_workflow
 run_milestone
-echo "smoke ok exclusive + competitive winner_take_all + collaborative unified + quantity + per_seat + workflow + milestone"
+run_friends
+echo "smoke ok exclusive + competitive winner_take_all + collaborative unified + quantity + per_seat + workflow + milestone + friends"
