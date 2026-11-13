@@ -203,7 +203,7 @@ function otherMember(chat: Chat, me: string): string {
 }
 
 function kindLabel(type: Chat["type"]): string {
-  if (type === "direct") return "好友会话";
+  if (type === "direct") return "一对一";
   if (type === "task") return "任务会话";
   return "多人会话";
 }
@@ -211,7 +211,7 @@ function kindLabel(type: Chat["type"]): string {
 function ledeFor(chat: Chat | null): string {
   if (!chat) return "读取这条会话的历史，并在这里继续发消息。";
   if (chat.type === "direct") {
-    return "这是你们两个人的会话，和任务里的会话不是同一条。解除好友之后，已经有的消息仍然可以看，也可以继续发。";
+    return "这是你们两个人的会话，和任务里的会话不是同一条。点别人的昵称也会打开或回到这一条，不需要先加好友。";
   }
   if (chat.type === "task") {
     return "这是任务注资时绑定的会话。任务详情里也能打开同一条。";

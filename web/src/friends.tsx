@@ -48,7 +48,7 @@ export function FriendPicker({ onPick, disabled }: { onPick: (userId: string) =>
           <div className="pick-list">
             {row.friends.map((friend) => (
               <button key={friend.user_id} type="button" className="btn ghost" disabled={disabled} onClick={() => onPick(friend.user_id)}>
-                <PersonName nickname={friend.nickname} userId={friend.user_id} />
+                <PersonName nickname={friend.nickname} userId={friend.user_id} chat={false} />
               </button>
             ))}
           </div>

@@ -53,10 +53,10 @@ func (e *Engine) CreateWebhook(ctx context.Context, userID string, req *types.Cr
 
 // CreateChat opens a chat.
 //
-// type=direct with user_id returns the one direct thread for that friend pair.
-// The first call inserts it (and emits chat.created). A later call returns the
-// same row. The two users must be friends at call time. Unfriend does not
-// remove members, so an existing thread stays readable and writable.
+// type=direct with user_id returns the one 1:1 thread for that pair.
+// Friendship is not required and is not created. The other user must exist.
+// The first call inserts the row and emits chat.created. A later call returns
+// the same row, including after unfriend. You cannot open a thread with yourself.
 //
 // Omit type, or pass type=group, to keep the free-form member_ids chat. Each
 // of those calls inserts a new row. Optional task_id still reuses the task chat.
@@ -87,17 +87,17 @@ func (e *Engine) createDirectChat(ctx context.Context, r store.Repos, userID str
 	if target == userID {
 		return nil, biz.Invalid("cannot open a direct chat with yourself")
 	}
-	if _, err := r.Friends().GetFriendship(ctx, userID, target); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, biz.Forbidden("only friends can open a direct chat")
-		}
-		return nil, err
-	}
 	existing, err := r.Chats().FindDirect(ctx, userID, target)
 	if err == nil {
 		return toChat(existing), nil
 	}
 	if !errors.Is(err, store.ErrNotFound) {
+		return nil, err
+	}
+	if _, err := r.Users().Get(ctx, target); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, biz.NotFound("user not found")
+		}
 		return nil, err
 	}
 	low, high := model.OrderedPair(userID, target)
