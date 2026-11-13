@@ -24,7 +24,8 @@ run:
 	go run . -f etc/taskgame.yaml
 
 # The API must already be listening (make run). scripts/smoke.sh covers
-# exclusive, competitive winner_take_all, and collaborative on_dropout=replace.
+# exclusive, competitive winner_take_all, collaborative on_dropout=replace,
+# and exclusive/competitive milestone payments.
 smoke:
 	bash scripts/smoke.sh
 

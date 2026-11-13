@@ -3,6 +3,8 @@
 #
 #   exclusive:      create → fund → accept → submit → confirm → settled
 #   competitive:    winner_take_all, two executors, confirm one submission_id
+#   milestone:      exclusive and competitive. Fund holds payment.amount.
+#                   Confirm releases one stage; revise returns that stage to pending.
 #   collaborative:  unified (default): start after full, dropout stays active,
 #                   confirm waits for every seat. quantity=4 template total 10000.
 #                   per_seat: each role_id confirm releases only that share.
@@ -309,6 +311,38 @@ elif op == "per_seat_partial":
     entries = (doc.get("escrow") or {}).get("entries") or []
     if any(e.get("type") == "refund" for e in entries):
         fail("unexpected refund")
+elif op == "milestones":
+    if doc.get("status") != args[0]:
+        fail("expected status %s got %s" % (args[0], doc.get("status")))
+    if args[1] != "-":
+        held = (doc.get("escrow") or {}).get("held")
+        if held != int(args[1]):
+            fail("held %s want %s" % (held, args[1]))
+    payment = doc.get("payment") or {}
+    if payment.get("mode") != "milestone":
+        fail("mode %s" % payment.get("mode"))
+    got = {m.get("id"): m.get("status") for m in payment.get("milestones") or []}
+    pairs = args[2:]
+    if len(pairs) % 2:
+        fail("milestone pairs")
+    want = {pairs[i]: pairs[i + 1] for i in range(0, len(pairs), 2)}
+    if got != want:
+        fail("milestones %s want %s" % (got, want))
+elif op == "submission_for_milestone":
+    want = args[0]
+    found = ""
+    for sub in doc.get("submissions") or []:
+        if sub.get("milestone_id") == want and sub.get("status") == "current":
+            found = sub.get("id") or ""
+            break
+    if not found:
+        fail("no current submission for milestone %s" % want)
+    print(found)
+elif op == "release_amounts":
+    got = [e.get("amount") for e in releases()]
+    want = [int(item) for item in args]
+    if got != want:
+        fail("releases %s want %s" % (got, want))
 elif op == "quantity_settled":
     users = args[:4]
     amount = int(args[4])
@@ -843,6 +877,201 @@ run_workflow() {
   echo "workflow ok"
 }
 
+run_milestone() {
+  local amount=500 m1=200 m2=300 body id sub_id other_tok
+  echo "== milestone =="
+
+  body="$(python3 - "$DEADLINE" <<'PY'
+import json, sys
+deadline = sys.argv[1]
+doc = {
+    "kind": "exclusive",
+    "title": "Milestone sum mismatch",
+    "description": "Stage amounts do not add up to payment.amount.",
+    "payment": {
+        "mode": "milestone",
+        "amount": 500,
+        "milestones": [
+            {"id": "m1", "amount": 100, "condition": "draft"},
+            {"id": "m2", "amount": 100, "condition": "final"},
+        ],
+    },
+    "acceptance": {"deadline": deadline, "quality": "Meets the written acceptance bar", "review_hours": 72},
+    "assignee_policy": {"type": "open"},
+}
+print(json.dumps(doc, separators=(",", ":")))
+PY
+)"
+  request POST "${BASE}/v1/tasks" key "$PUB_KEY" "$body" "smoke-ms-bad-${STAMP}"
+  expect_code 400 "milestone sum mismatch"
+  check "$RESP_BODY" error_has invalid_argument "milestone amounts must sum to payment.amount"
+
+  body="$(python3 - "$DEADLINE" <<'PY'
+import json, sys
+deadline = sys.argv[1]
+doc = {
+    "kind": "collaborative",
+    "title": "Collaborative cannot be milestone",
+    "description": "v0.1 collaborative payments stay one_shot.",
+    "payment": {
+        "mode": "milestone",
+        "amount": 500,
+        "milestones": [
+            {"id": "m1", "amount": 200, "condition": "draft"},
+            {"id": "m2", "amount": 300, "condition": "final"},
+        ],
+    },
+    "acceptance": {"deadline": deadline, "quality": "Meets the written acceptance bar", "review_hours": 72},
+    "assignee_policy": {"type": "open"},
+    "collaborative": {
+        "on_dropout": "replace",
+        "roles": [
+            {"id": "design", "name": "Design", "share_bps": 6000},
+            {"id": "copy", "name": "Copy", "share_bps": 4000},
+        ],
+    },
+}
+print(json.dumps(doc, separators=(",", ":")))
+PY
+)"
+  request POST "${BASE}/v1/tasks" key "$PUB_KEY" "$body" "smoke-ms-collab-${STAMP}"
+  expect_code 400 "collaborative milestone rejected"
+  check "$RESP_BODY" error_has invalid_argument "payment.mode one_shot"
+
+  body="$(python3 - "$DEADLINE" "$amount" "$m1" "$m2" <<'PY'
+import json, sys
+deadline, amount, m1, m2 = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+doc = {
+    "kind": "exclusive",
+    "title": "Milestone exclusive",
+    "description": "Two stages. Confirm releases one stage at a time.",
+    "payment": {
+        "mode": "milestone",
+        "amount": amount,
+        "milestones": [
+            {"id": "m1", "amount": m1, "condition": "draft"},
+            {"id": "m2", "amount": m2, "condition": "final"},
+        ],
+    },
+    "acceptance": {"deadline": deadline, "quality": "Meets the written acceptance bar", "review_hours": 72},
+    "assignee_policy": {"type": "open"},
+}
+print(json.dumps(doc, separators=(",", ":")))
+PY
+)"
+  request POST "${BASE}/v1/tasks" key "$PUB_KEY" "$body" "smoke-ms-ex-${STAMP}"
+  expect_code 201 "milestone exclusive create"
+  id="$(json_id "$RESP_BODY")"
+  check "$RESP_BODY" milestones draft - m1 pending m2 pending
+  echo "created ${id}"
+
+  request POST "${BASE}/v1/tasks/${id}/fund" key "$PUB_KEY" "" "fund-ms-ex-${STAMP}"
+  expect_code 200 "milestone fund"
+  check "$RESP_BODY" milestones open "$amount" m1 pending m2 pending
+  echo "funded full amount ${amount}"
+
+  request POST "${BASE}/v1/tasks/${id}/accept" key "$EXE_KEY" '{}'
+  expect_code 200 "milestone accept"
+  request POST "${BASE}/v1/tasks/${id}/submit" key "$EXE_KEY" '{"payload":{"step":1}}'
+  expect_code 400 "milestone submit without milestone_id"
+  check "$RESP_BODY" error_has invalid_argument "milestone_id is required"
+
+  request POST "${BASE}/v1/tasks/${id}/submit" key "$EXE_KEY" '{"payload":{"step":1},"milestone_id":"m1"}'
+  expect_code 200 "milestone submit m1"
+  check "$RESP_BODY" milestones in_review "$amount" m1 submitted m2 pending
+  request POST "${BASE}/v1/tasks/${id}/submit" key "$EXE_KEY" '{"payload":{"step":2},"milestone_id":"m2"}'
+  expect_code 409 "second stage blocked while the first is in review"
+  check "$RESP_BODY" error_has conflict "task is not active"
+
+  request POST "${BASE}/v1/tasks/${id}/confirm" key "$PUB_KEY" '{"milestone_id":"m1"}'
+  expect_code 200 "milestone confirm m1"
+  check "$RESP_BODY" milestones active "$((amount - m1))" m1 released m2 pending
+  check "$RESP_BODY" release_amounts "$m1"
+  echo "m1 released; held $((amount - m1))"
+
+  request POST "${BASE}/v1/tasks/${id}/submit" key "$EXE_KEY" '{"payload":{"step":2},"milestone_id":"m2"}'
+  expect_code 200 "milestone submit m2"
+  check "$RESP_BODY" milestones in_review "$((amount - m1))" m1 released m2 submitted
+  request POST "${BASE}/v1/tasks/${id}/revise" key "$PUB_KEY" '{"reason":"please tighten stage 2"}' "revise-ms-bare-${STAMP}"
+  expect_code 400 "revise needs the in-review submission once an earlier stage is still current"
+  check "$RESP_BODY" error_has invalid_argument "submission_id is required"
+  request GET "${BASE}/v1/tasks/${id}" key "$PUB_KEY"
+  expect_code 200 "read milestone submissions"
+  sub_id="$(check "$RESP_BODY" submission_for_milestone m2)" || exit 1
+  request POST "${BASE}/v1/tasks/${id}/revise" key "$PUB_KEY" "{\"reason\":\"please tighten stage 2\",\"submission_id\":\"${sub_id}\"}" "revise-ms-${STAMP}"
+  expect_code 200 "milestone revise m2"
+  check "$RESP_BODY" milestones active "$((amount - m1))" m1 released m2 pending
+  check "$RESP_BODY" release_amounts "$m1"
+
+  request POST "${BASE}/v1/tasks/${id}/submit" key "$EXE_KEY" '{"payload":{"step":2,"body":"final"},"milestone_id":"m2"}'
+  expect_code 200 "milestone resubmit m2"
+  request POST "${BASE}/v1/tasks/${id}/confirm" key "$PUB_KEY" '{"milestone_id":"m2"}'
+  expect_code 200 "milestone confirm m2"
+  check "$RESP_BODY" milestones settled 0 m1 released m2 released
+  check "$RESP_BODY" release_amounts "$m1" "$m2"
+  echo "milestone exclusive ok task=${id}"
+
+  echo "minting JWT for milestone competitive partner"
+  other_tok="$(mint "usr_s${STAMP}ms")"
+  body="$(python3 - "$DEADLINE" "$amount" "$m1" "$m2" <<'PY'
+import json, sys
+deadline, amount, m1, m2 = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+doc = {
+    "kind": "competitive",
+    "title": "Milestone competitive",
+    "description": "The first submit of a stage is the one reviewed.",
+    "payment": {
+        "mode": "milestone",
+        "amount": amount,
+        "milestones": [
+            {"id": "m1", "amount": m1, "condition": "draft"},
+            {"id": "m2", "amount": m2, "condition": "final"},
+        ],
+    },
+    "acceptance": {"deadline": deadline, "quality": "Meets the written acceptance bar", "review_hours": 72},
+    "assignee_policy": {"type": "open"},
+    "competitive": {"slots": 2, "settlement_rule": "winner_take_all"},
+}
+print(json.dumps(doc, separators=(",", ":")))
+PY
+)"
+  request POST "${BASE}/v1/tasks" key "$PUB_KEY" "$body" "smoke-ms-comp-${STAMP}"
+  expect_code 201 "milestone competitive create"
+  id="$(json_id "$RESP_BODY")"
+  request POST "${BASE}/v1/tasks/${id}/fund" key "$PUB_KEY" "" "fund-ms-comp-${STAMP}"
+  expect_code 200 "milestone competitive fund"
+  check "$RESP_BODY" held "$amount"
+  request POST "${BASE}/v1/tasks/${id}/accept" key "$EXE_KEY" '{}'
+  expect_code 200 "milestone competitive accept first"
+  request POST "${BASE}/v1/tasks/${id}/accept" bearer "$other_tok" '{}'
+  expect_code 200 "milestone competitive accept second"
+  request POST "${BASE}/v1/tasks/${id}/submit" key "$EXE_KEY" '{"payload":{"step":1},"milestone_id":"m1"}'
+  expect_code 200 "milestone competitive first submit"
+  check "$RESP_BODY" milestones in_review "$amount" m1 submitted m2 pending
+  request POST "${BASE}/v1/tasks/${id}/submit" bearer "$other_tok" '{"payload":{"step":1},"milestone_id":"m1"}'
+  expect_code 409 "later submit for the stage is blocked while not active"
+  check "$RESP_BODY" error_has conflict "task is not active"
+  request GET "${BASE}/v1/tasks/${id}" key "$PUB_KEY"
+  expect_code 200 "milestone competitive submissions"
+  sub_id="$(check "$RESP_BODY" submission_for_milestone m1)" || exit 1
+  request POST "${BASE}/v1/tasks/${id}/confirm" key "$PUB_KEY" "{\"milestone_id\":\"m1\",\"submission_id\":\"${sub_id}\"}"
+  expect_code 200 "milestone competitive confirm m1"
+  check "$RESP_BODY" milestones active "$((amount - m1))" m1 released m2 pending
+  request POST "${BASE}/v1/tasks/${id}/submit" bearer "$other_tok" '{"payload":{"step":2},"milestone_id":"m2"}'
+  expect_code 200 "milestone competitive submit m2"
+  check "$RESP_BODY" milestones in_review "$((amount - m1))" m1 released m2 submitted
+  request POST "${BASE}/v1/tasks/${id}/submit" key "$EXE_KEY" '{"payload":{"step":2},"milestone_id":"m2"}'
+  expect_code 409 "m2 also locked after the first submit"
+  check "$RESP_BODY" error_has conflict "task is not active"
+  request GET "${BASE}/v1/tasks/${id}" key "$PUB_KEY"
+  expect_code 200 "milestone competitive m2 submission"
+  sub_id="$(check "$RESP_BODY" submission_for_milestone m2)" || exit 1
+  request POST "${BASE}/v1/tasks/${id}/confirm" key "$PUB_KEY" "{\"milestone_id\":\"m2\",\"submission_id\":\"${sub_id}\"}"
+  expect_code 200 "milestone competitive confirm m2"
+  check "$RESP_BODY" milestones settled 0 m1 released m2 released
+  echo "milestone competitive ok task=${id}"
+}
+
 wait_health
 run_exclusive
 run_competitive
@@ -850,4 +1079,5 @@ run_collaborative
 run_collaborative_quantity
 run_collaborative_per_seat
 run_workflow
-echo "smoke ok exclusive + competitive winner_take_all + collaborative unified + quantity + per_seat + workflow"
+run_milestone
+echo "smoke ok exclusive + competitive winner_take_all + collaborative unified + quantity + per_seat + workflow + milestone"
