@@ -1,18 +1,23 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { nicknameError, personLabel, shortUserId } from "../src/person.ts";
+import { idSuffix, nicknameError, personLabel } from "../src/person.ts";
 
-test("missing nickname falls back to a short id", () => {
-  const id = "usr_" + "ab12cd34ef56ab12cd34ef56";
-  assert.equal(personLabel("", id), "usr_ab12…ef56");
-  assert.equal(personLabel("   ", id), "usr_ab12…ef56");
-  assert.equal(personLabel(undefined, id), shortUserId(id));
-  assert.notEqual(personLabel("", id), "");
+test("a nickname and the last 6 id characters share one line", () => {
+  const id = "usr_ab12cd34ef56ab12cda1b2c3";
+  assert.equal(idSuffix(id), "a1b2c3");
+  assert.equal(personLabel("阿宁同学", id), "阿宁同学(a1b2c3)");
+  assert.equal(personLabel("  阿宁同学  ", id), "阿宁同学(a1b2c3)");
+  assert.equal(personLabel("阿宁同学", id).includes("\n"), false);
 });
 
-test("a set nickname wins and short ids stay whole", () => {
-  assert.equal(personLabel("  阿宁  ", "usr_abc"), "阿宁");
-  assert.equal(personLabel("", "usr_publisher"), "usr_publisher");
+test("a missing nickname is the last 6 characters, on one line", () => {
+  const id = "usr_" + "ab12cd34ef56ab12cd34ef56";
+  assert.equal(personLabel("", id), "34ef56");
+  assert.equal(personLabel("   ", id), "34ef56");
+  assert.equal(personLabel(undefined, id), "34ef56");
+  assert.equal(personLabel("", "usr_publisher"), "lisher");
+  assert.equal(personLabel("阿宁", "ab"), "阿宁(ab)");
+  assert.equal(personLabel("", ""), "未命名");
 });
 
 test("nickname validation is visible in Chinese", () => {

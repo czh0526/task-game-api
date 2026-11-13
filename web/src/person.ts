@@ -1,19 +1,20 @@
-/** Visible label when a user has not set a nickname. Long ids stay recognizable and short. */
-export function shortUserId(userId: string): string {
-  if (!userId) return "未命名";
-  if (userId.length <= 18) return userId;
-  if (userId.startsWith("usr_") && userId.length > 12) {
-    const rest = userId.slice(4);
-    return `usr_${rest.slice(0, 4)}…${rest.slice(-4)}`;
-  }
-  return `${userId.slice(0, 6)}…${userId.slice(-4)}`;
+/** Last 6 characters of the user id. Shorter ids are kept whole. */
+export function idSuffix(userId: string): string {
+  if (!userId) return "";
+  return userId.length <= 6 ? userId : userId.slice(-6);
 }
 
-/** Prefer a trimmed nickname. Otherwise show a short form of the id, never a blank. */
+/**
+ * One line: `昵称(后6位)`, for example `阿宁同学(a1b2c3)`.
+ * A missing nickname is just those 6 characters, never a blank and never a second line.
+ */
 export function personLabel(nickname: string | null | undefined, userId: string): string {
   const name = nickname?.trim();
+  const suffix = idSuffix(userId);
+  if (name && suffix) return `${name}(${suffix})`;
   if (name) return name;
-  return shortUserId(userId);
+  if (suffix) return suffix;
+  return "未命名";
 }
 
 /** Client-side check matching the server: trimmed, 1–32 characters, no control characters. */

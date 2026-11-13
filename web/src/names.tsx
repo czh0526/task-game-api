@@ -27,12 +27,9 @@ export function notifyProfile(userId: string, nickname: string): void {
 }
 
 export function PersonName({ nickname, userId }: { nickname?: string | null; userId: string }) {
-  const label = personLabel(nickname, userId);
-  const showId = Boolean(userId) && label !== userId;
   return (
     <span className="person" title={userId || undefined}>
-      <span className="person-name">{label}</span>
-      {showId ? <code className="mono person-id">{userId}</code> : null}
+      {personLabel(nickname, userId)}
     </span>
   );
 }

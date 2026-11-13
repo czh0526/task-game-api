@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createIdempotencyKey, type Chat, type Message } from "taskgame-client";
 import { useApp } from "../context";
 import { formatError, formatTime, isAbort } from "../format";
-import { PersonName, UserRef, useNickname } from "../names";
+import { UserRef, useNickname } from "../names";
 import { personLabel } from "../person";
 import { notifyDirectRead } from "../readSync";
 import { href } from "../route";
@@ -135,12 +135,6 @@ export function Conversation({ id }: { id: string }) {
                 {" "}
                 <a href={href.task(chat.task_id)}>打开任务</a>
               </>
-            ) : null}
-            {chat.type === "direct" && peer ? (
-              <span>
-                {" "}
-                对方 <PersonName nickname={peerNick} userId={peer} />
-              </span>
             ) : null}
             {chat.type !== "direct" ? (
               <span className="person-list">
