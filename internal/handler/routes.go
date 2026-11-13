@@ -188,6 +188,11 @@ func RegisterHandlers(server *rest.Server, serverCtx *svc.ServiceContext) {
 					Handler: user.GetMeHandler(serverCtx),
 				},
 				{
+					Method:  http.MethodPatch,
+					Path:    "/me",
+					Handler: user.UpdateMeHandler(serverCtx),
+				},
+				{
 					Method:  http.MethodGet,
 					Path:    "/me/invites",
 					Handler: user.ListMyInvitesHandler(serverCtx),

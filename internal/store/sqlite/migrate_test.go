@@ -51,8 +51,18 @@ func TestOpenMigratesExistingUsersTable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if old.Email != "" || old.Balance != 10 || old.PasswordHash != "" {
+	if old.Email != "" || old.Nickname != "" || old.Balance != 10 || old.PasswordHash != "" {
 		t.Fatalf("migrated dev user %+v", old)
+	}
+	if err := st.Users().SetNickname(ctx, "usr_publisher", "老用户"); err != nil {
+		t.Fatal(err)
+	}
+	named, err := st.Users().Get(ctx, "usr_publisher")
+	if err != nil || named.Nickname != "老用户" || named.Balance != 10 {
+		t.Fatalf("nickname after migrate %+v %v", named, err)
+	}
+	if err := st.Users().SetNickname(ctx, "usr_missing", "x"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("missing nickname update %v", err)
 	}
 	if _, err := st.Users().Ensure(ctx, "usr_executor", now); err != nil {
 		t.Fatal(err)
@@ -62,7 +72,7 @@ func TestOpenMigratesExistingUsersTable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.Email != "a@example.com" || created.Balance != 1000 || created.PasswordHash != "" {
+	if created.Email != "a@example.com" || created.Nickname != "" || created.Balance != 1000 || created.PasswordHash != "" {
 		t.Fatalf("registered %+v", created)
 	}
 	again, err := st.Users().Ensure(ctx, "usr_newuser", now)

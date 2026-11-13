@@ -32,9 +32,9 @@ func (r *userRepo) Get(ctx context.Context, id string) (model.User, error) {
 	var u model.User
 	var created string
 	err := r.q.QueryRowContext(ctx, `
-		SELECT id, balance, integrity, ability, created_at, COALESCE(email, '')
+		SELECT id, balance, integrity, ability, created_at, COALESCE(email, ''), COALESCE(nickname, '')
 		FROM users WHERE id = ?`, id).
-		Scan(&u.ID, &u.Balance, &u.Integrity, &u.Ability, &created, &u.Email)
+		Scan(&u.ID, &u.Balance, &u.Integrity, &u.Ability, &created, &u.Email, &u.Nickname)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.User{}, store.ErrNotFound
 	}
@@ -67,9 +67,9 @@ func (r *userRepo) GetByEmail(ctx context.Context, email string) (model.User, er
 	var created string
 	var hash sql.NullString
 	err := r.q.QueryRowContext(ctx, `
-		SELECT id, balance, integrity, ability, created_at, COALESCE(email, ''), password_hash
+		SELECT id, balance, integrity, ability, created_at, COALESCE(email, ''), COALESCE(nickname, ''), password_hash
 		FROM users WHERE email = ?`, email).
-		Scan(&u.ID, &u.Balance, &u.Integrity, &u.Ability, &created, &u.Email, &hash)
+		Scan(&u.ID, &u.Balance, &u.Integrity, &u.Ability, &created, &u.Email, &u.Nickname, &hash)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.User{}, store.ErrNotFound
 	}
@@ -84,6 +84,21 @@ func (r *userRepo) GetByEmail(ctx context.Context, email string) (model.User, er
 		return model.User{}, err
 	}
 	return u, nil
+}
+
+func (r *userRepo) SetNickname(ctx context.Context, id, nickname string) error {
+	res, err := r.q.ExecContext(ctx, `UPDATE users SET nickname = ? WHERE id = ?`, nickname, id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return store.ErrNotFound
+	}
+	return nil
 }
 
 func isEmailConflict(err error) bool {

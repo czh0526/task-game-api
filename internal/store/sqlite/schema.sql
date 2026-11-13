@@ -12,7 +12,9 @@ CREATE TABLE IF NOT EXISTS users (
     -- password_hash is bcrypt. Never store the plaintext password.
     -- Uniqueness is a partial index created in Open, so older files can ADD COLUMN first.
     email TEXT,
-    password_hash TEXT
+    password_hash TEXT,
+    -- Display name. Empty means unset. Not unique, and not a login handle.
+    nickname TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS tasks (

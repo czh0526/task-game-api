@@ -78,7 +78,7 @@ CGO_ENABLED=0 go run ./cmd/token -f etc/taskgame.yaml -user usr_executor
 
 请求头写成 `Authorization: Bearer <token>`。冒烟脚本会自己为每轮新的执行者签发 JWT，所以正在跑的进程必须使用同一份 `Auth.JwtSecret`。
 
-邮箱注册是同一套 JWT（仍是 v0.1 的附加接口）。`POST /v1/register` 和 `POST /v1/login` 不需要鉴权，密码以 bcrypt 保存，不会回明文。`GET /v1/me` 需要 Bearer 或 `X-Api-Key`。`usr_publisher` / `usr_executor` 的开发密钥保持可用。令牌有效期是 `Auth.TokenTTL`（缺省 24h）。
+邮箱注册是同一套 JWT（仍是 v0.1 的附加接口）。`POST /v1/register` 和 `POST /v1/login` 不需要鉴权，密码以 bcrypt 保存，不会回明文。`GET /v1/me` 需要 Bearer 或 `X-Api-Key`，返回 `id`、`email`、`nickname`、`is_arbiter`。`nickname` 是显示名，不是登录名，也不要求唯一；可以不填，已有用户为空字符串。`PATCH /v1/me` 的 body 是 `{ "nickname": "…" }`，去掉首尾空白后 1–32 个字符，空值和纯空白是 400。它不改邮箱、密码，也不刷新 token。注册 body 可以带可选的 `nickname`。`usr_publisher` / `usr_executor` 的开发密钥保持可用。令牌有效期是 `Auth.TokenTTL`（缺省 24h）。
 
 ```bash
 curl -s -X POST http://127.0.0.1:8891/v1/register \
@@ -169,7 +169,7 @@ CGO_ENABLED=0 go run ./cmd/token -f etc/taskgame.yaml -user usr_executor
 
 Send `Authorization: Bearer <token>`. The smoke script mints a fresh JWT per extra executor, so the running process must be using that same `Auth.JwtSecret`.
 
-Email registration is the same JWT, added without a version bump. `POST /v1/register` and `POST /v1/login` are public. Passwords are stored as bcrypt and are not returned. `GET /v1/me` requires Bearer or `X-Api-Key`. The `usr_publisher` / `usr_executor` development keys keep working. Token lifetime is `Auth.TokenTTL` (default 24h).
+Email registration is the same JWT, added without a version bump. `POST /v1/register` and `POST /v1/login` are public. Passwords are stored as bcrypt and are not returned. `GET /v1/me` requires Bearer or `X-Api-Key` and returns `id`, `email`, `nickname`, and `is_arbiter`. `nickname` is a display name, not a unique login handle. Omit it and the field stays an empty string. `PATCH /v1/me` body is `{ "nickname": "…" }`, 1–32 characters after trim. Empty or whitespace-only is 400. It does not change email, password, or the access token. Register may include an optional `nickname`. The `usr_publisher` / `usr_executor` development keys keep working. Token lifetime is `Auth.TokenTTL` (default 24h).
 
 ```bash
 curl -s -X POST http://127.0.0.1:8891/v1/register \
@@ -361,6 +361,8 @@ The OpenAPI server URL is `https://api.example.com/v1`, so the paths below inclu
 | POST | `/v1/chats` | `createChat` | `handler/chat.CreateChatHandler` | `logic/chat.CreateChat` |
 | POST | `/v1/chats/:chatId/messages` | `postMessage` | `handler/chat.PostMessageHandler` | `logic/chat.PostMessage` |
 | GET | `/v1/users/:userId/scores` | `getUserScores` | `handler/user.GetUserScoresHandler` | `logic/user.GetUserScores` |
+| GET | `/v1/me` | `me` | `handler/user.GetMeHandler` | `logic/user.GetMe` |
+| PATCH | `/v1/me` | `updateMe` | `handler/user.UpdateMeHandler` | `logic/user.UpdateMe` |
 
 创建类接口（task、webhook、chat、message、新建好友分组）返回 201。新建好友申请在状态为 `pending` 时返回 201；如果直接接受了对方已有的申请，返回 200。其余成功返回 200。除 `/health`、`POST /v1/register`、`POST /v1/login` 外都要 Bearer JWT 或 `X-Api-Key`。
 
@@ -372,7 +374,7 @@ Creates (task, webhook, chat, message, friend group) return 201. A new friend re
 
 重复申请：已经是好友，或自己已经发出待处理申请，返回 409，不插入第二行。如果对方已经有一条指向自己的待处理申请，`POST /friends/requests` 会接受那一条并返回 200 `status=accepted`，而不是再开一条。拒绝、撤回、解除好友之后可以重新申请。删除分组不会解除好友。解除好友会清掉双方对这一对的分组成员。
 
-好友卡片有 `user_id`、`integrity`、`ability`、`since`、`unread_count`、`direct_chat_id`，不含邮箱、余额和密码。`unread_count` 是对方在这一对的一对一会话里发来、调用者还没标已读的条数。自己发的消息不算。还没有一对一会话时 `unread_count` 是 0，`direct_chat_id` 是 null。任务会话和多人会话不计入。`POST /v1/chats/{chatId}/read` 只推进调用者自己的已读位置，不发 webhook。`GET` 消息历史不会标已读。省略 `message_id` 会标到当前最新一条；带上 `message_id` 就停在那一条，不会往后。同一个 `Idempotency-Key` 会重放第一次的响应，不会把之后新到的消息标成已读。Webhook `friend.requested`（发给接收方）、`friend.accepted` 和 `friend.declined`（发给申请方）、`friend.removed`（发给被解除的一方，`data.user_id` 是操作者）走现有的用户订阅和 HMAC 投递，不按任务过滤。撤回申请不发 webhook。
+好友卡片有 `user_id`、`nickname`、`integrity`、`ability`、`since`、`unread_count`、`direct_chat_id`，不含邮箱、余额和密码。`nickname` 可以和别人相同，没设置时是空字符串。申请上的 `from_nickname` / `to_nickname` 也是这样。`unread_count` 是对方在这一对的一对一会话里发来、调用者还没标已读的条数。自己发的消息不算。还没有一对一会话时 `unread_count` 是 0，`direct_chat_id` 是 null。任务会话和多人会话不计入。`POST /v1/chats/{chatId}/read` 只推进调用者自己的已读位置，不发 webhook。`GET` 消息历史不会标已读。省略 `message_id` 会标到当前最新一条；带上 `message_id` 就停在那一条，不会往后。同一个 `Idempotency-Key` 会重放第一次的响应，不会把之后新到的消息标成已读。Webhook `friend.requested`（发给接收方）、`friend.accepted` 和 `friend.declined`（发给申请方）、`friend.removed`（发给被解除的一方，`data.user_id` 是操作者）走现有的用户订阅和 HMAC 投递，不按任务过滤。撤回申请不发 webhook。
 
 一对一会话：`POST /v1/chats`，body 是 `{ "type": "direct", "user_id": "usr_…" }`。双方必须已经是好友，待处理申请不行。同一对用户只存一行，两边再调都返回同一个 `id`，HTTP 仍是 201，不会再插入。第一次创建时给双方发 `chat.created`。响应里的 `type` 用来区分：`task` 是任务会话（`GET /chats?task_id=` 里全是这种），`direct` 是好友一对一，`group` 是原来的 `member_ids` 自由会话（每次调用新开一行）。解除好友不会把人移出已有会话，历史还能读，也还能发消息。解除之后再调 `POST` 会 403；重新成为好友后再调，还是原来那条。任务会话仍由注资创建，从任务详情进入。
 
@@ -393,4 +395,4 @@ Friendship is one row per pair (`user_low < user_high`). Groups are personal fol
 
 Duplicate rule: already friends, or a pending request you already sent, is 409 with no second row. If the other user already has a pending request toward you, `POST /friends/requests` accepts that request and returns 200 `status=accepted`. Decline, cancel, and unfriend all allow a later request. Deleting a group leaves the friends in place, ungrouped. Unfriend clears both users' membership for that pair.
 
-A friend card is `user_id`, `integrity`, `ability`, `since`, `unread_count`, and `direct_chat_id`. No email, balance, or password. `unread_count` is how many messages the other person sent in that pair's direct chat after the caller's read cursor. The caller's own messages are not counted. Before a direct chat exists, `unread_count` is 0 and `direct_chat_id` is null. Task chats and group chats are not included. `POST /v1/chats/{chatId}/read` moves only the caller's cursor and does not emit a webhook. Listing messages does not mark them read. Omit `message_id` to cover the newest message; set it to stop there. The same `Idempotency-Key` replays the first response and does not cover messages that arrived later. `friend.requested` goes to the recipient. `friend.accepted` and `friend.declined` go to the requester. `friend.removed` goes to the other person (`data.user_id` is the actor). Delivery is the existing owner-scoped HMAC webhook, not task-scoped. Cancel does not emit an event.
+A friend card is `user_id`, `nickname`, `integrity`, `ability`, `since`, `unread_count`, and `direct_chat_id`. No email, balance, or password. `nickname` may be shared and is an empty string when unset. Friend requests expose the same names as `from_nickname` and `to_nickname`. `unread_count` is how many messages the other person sent in that pair's direct chat after the caller's read cursor. The caller's own messages are not counted. Before a direct chat exists, `unread_count` is 0 and `direct_chat_id` is null. Task chats and group chats are not included. `POST /v1/chats/{chatId}/read` moves only the caller's cursor and does not emit a webhook. Listing messages does not mark them read. Omit `message_id` to cover the newest message; set it to stop there. The same `Idempotency-Key` replays the first response and does not cover messages that arrived later. `friend.requested` goes to the recipient. `friend.accepted` and `friend.declined` go to the requester. `friend.removed` goes to the other person (`data.user_id` is the actor). Delivery is the existing owner-scoped HMAC webhook, not task-scoped. Cancel does not emit an event.

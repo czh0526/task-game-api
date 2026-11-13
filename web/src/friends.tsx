@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { FriendList } from "taskgame-client";
 import { useApp } from "./context";
 import { formatError, isAbort } from "./format";
+import { PersonName } from "./names";
 
 export function appendUserId(current: string, id: string): string {
   const parts = current
@@ -47,7 +48,7 @@ export function FriendPicker({ onPick, disabled }: { onPick: (userId: string) =>
           <div className="pick-list">
             {row.friends.map((friend) => (
               <button key={friend.user_id} type="button" className="btn ghost" disabled={disabled} onClick={() => onPick(friend.user_id)}>
-                <code className="mono">{friend.user_id}</code>
+                <PersonName nickname={friend.nickname} userId={friend.user_id} />
               </button>
             ))}
           </div>

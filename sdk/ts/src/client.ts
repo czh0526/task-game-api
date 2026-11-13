@@ -26,6 +26,8 @@ import type {
   Task,
   TaskCreate,
   PasswordCredentials,
+  ProfileUpdate,
+  RegisterBody,
   TaskList,
   UserScores,
   UserSummary,
@@ -130,7 +132,7 @@ export class TaskGameClient {
    * `POST /v1/register` → 201. No auth header.
    * Stores a bcrypt hash and returns an HS256 JWT (`sub` is the new user id).
    */
-  register(body: PasswordCredentials, options?: Pick<CallOptions, "signal">): Promise<AuthSession> {
+  register(body: RegisterBody, options?: Pick<CallOptions, "signal">): Promise<AuthSession> {
     return this.send("POST", `${this.apiBase}/register`, options, body, true, "forbidden", false);
   }
 
@@ -142,6 +144,14 @@ export class TaskGameClient {
   /** `GET /v1/me`. Requires the client auth (Bearer or X-Api-Key). */
   me(options?: CallOptions): Promise<UserSummary> {
     return this.send("GET", `${this.apiBase}/me`, options, undefined, false, "forbidden");
+  }
+
+  /**
+   * `PATCH /v1/me`. Sets the caller's display name.
+   * Does not change email or password, and does not take an Idempotency-Key.
+   */
+  updateMe(body: ProfileUpdate, options?: CallOptions): Promise<UserSummary> {
+    return this.send("PATCH", `${this.apiBase}/me`, options, body, true, "forbidden");
   }
 
   /** `GET /v1/tasks` */

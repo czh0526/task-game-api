@@ -284,13 +284,15 @@ type (
 	}
 	UserScores {
 		UserId    string        `json:"user_id"`
+		Nickname  string        `json:"nickname"`
 		Integrity int64         `json:"integrity"`
 		Ability   int64         `json:"ability"`
 		Recent    []ScoreChange `json:"recent"`
 	}
 	RegisterReq {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Email    string  `json:"email"`
+		Password string  `json:"password"`
+		Nickname *string `json:"nickname,optional"`
 	}
 	LoginReq {
 		Email    string `json:"email"`
@@ -299,7 +301,11 @@ type (
 	UserSummary {
 		Id        string `json:"id"`
 		Email     string `json:"email"`
+		Nickname  string `json:"nickname"`
 		IsArbiter bool   `json:"is_arbiter"`
+	}
+	PatchMeReq {
+		Nickname string `json:"nickname,optional"`
 	}
 	AuthSession {
 		AccessToken string      `json:"access_token"`
@@ -308,6 +314,7 @@ type (
 	}
 	Friend {
 		UserId       string  `json:"user_id"`
+		Nickname     string  `json:"nickname"`
 		Integrity    int64   `json:"integrity"`
 		Ability      int64   `json:"ability"`
 		Since        string  `json:"since"`
@@ -330,12 +337,14 @@ type (
 		Ungrouped []Friend                 `json:"ungrouped"`
 	}
 	FriendRequest {
-		Id         string `json:"id"`
-		FromUserId string `json:"from_user_id"`
-		ToUserId   string `json:"to_user_id"`
-		Status     string `json:"status"`
-		CreatedAt  string `json:"created_at"`
-		UpdatedAt  string `json:"updated_at"`
+		Id           string `json:"id"`
+		FromUserId   string `json:"from_user_id"`
+		ToUserId     string `json:"to_user_id"`
+		FromNickname string `json:"from_nickname"`
+		ToNickname   string `json:"to_nickname"`
+		Status       string `json:"status"`
+		CreatedAt    string `json:"created_at"`
+		UpdatedAt    string `json:"updated_at"`
 	}
 	FriendRequestList {
 		Items []FriendRequest `json:"items"`
@@ -504,6 +513,9 @@ service taskgame {
 service taskgame {
 	@handler getMe
 	get /me returns (UserSummary)
+
+	@handler updateMe
+	patch /me (PatchMeReq) returns (UserSummary)
 
 	@handler listMyInvites
 	get /me/invites (ListMyInvitesReq) returns (InviteList)

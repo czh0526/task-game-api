@@ -421,6 +421,8 @@ export interface ScoreChange {
 
 export interface UserScores {
   user_id: string;
+  /** Display name. Empty or omitted when unset. No email. */
+  nickname?: string;
   integrity: number;
   ability: number;
   recent?: ScoreChange[];
@@ -431,16 +433,30 @@ export interface HealthStatus {
   status: string;
 }
 
-/** Body of `POST /v1/register` and `POST /v1/login`. Password is 8 to 72 bytes. */
+/** Body of `POST /v1/login`, and the email plus password of `POST /v1/register`. Password is 8 to 72 bytes. */
 export interface PasswordCredentials {
   email: string;
   password: string;
+}
+
+/** Body of `POST /v1/register`. `nickname` is an optional display name, not a login handle. */
+export interface RegisterBody extends PasswordCredentials {
+  /** Omit to leave the display name unset. 1–32 characters after trim. Not unique. */
+  nickname?: string;
+}
+
+/** Body of `PATCH /v1/me`. Does not change email or password. */
+export interface ProfileUpdate {
+  /** Display name. Trimmed. 1–32 characters. Not unique. */
+  nickname: string;
 }
 
 /** Caller summary from register, login, and `GET /v1/me`. Email is empty for API-key users. */
 export interface UserSummary {
   id: string;
   email: string;
+  /** Display name. Empty or omitted until the user sets one. Not unique. */
+  nickname?: string;
   is_arbiter?: boolean;
 }
 
@@ -464,6 +480,8 @@ export type FriendRequestDirection = "incoming" | "outgoing";
  */
 export interface Friend {
   user_id: string;
+  /** Display name. Empty or omitted when unset. Not unique. No email. */
+  nickname?: string;
   integrity: number;
   ability: number;
   /** When the friendship was accepted. */
@@ -498,6 +516,10 @@ export interface FriendRequest {
   id: string;
   from_user_id: string;
   to_user_id: string;
+  /** Display name of `from_user_id`. Empty or omitted when unset. */
+  from_nickname?: string;
+  /** Display name of `to_user_id`. Empty or omitted when unset. */
+  to_nickname?: string;
   status: FriendRequestStatus;
   created_at: string;
   updated_at: string;

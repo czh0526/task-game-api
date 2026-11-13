@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createIdempotencyKey, type Chat, type Message } from "taskgame-client";
 import { useApp } from "../context";
 import { formatError, formatTime, isAbort } from "../format";
+import { PersonName, UserRef, useNickname } from "../names";
+import { personLabel } from "../person";
 import { notifyDirectRead } from "../readSync";
 import { href } from "../route";
 import { Button, ErrorNote, IdText, Screen } from "../ui";
@@ -106,6 +108,10 @@ export function Conversation({ id }: { id: string }) {
     }
   }
 
+  const peer = chat ? otherMember(chat, settings.userId) : "";
+  const peerNick = useNickname(peer);
+  const peerLabel = personLabel(peerNick, peer);
+
   if (!client) {
     return (
       <Screen title="会话">
@@ -113,9 +119,7 @@ export function Conversation({ id }: { id: string }) {
       </Screen>
     );
   }
-
-  const peer = chat ? otherMember(chat, settings.userId) : "";
-  const title = !chat ? "会话" : chat.type === "direct" ? `与 ${peer} 的会话` : chat.type === "task" ? "任务会话" : "会话";
+  const title = !chat ? "会话" : chat.type === "direct" ? `与 ${peerLabel} 的会话` : chat.type === "task" ? "任务会话" : "会话";
   const lede = ledeFor(chat);
 
   return (
@@ -132,7 +136,21 @@ export function Conversation({ id }: { id: string }) {
                 <a href={href.task(chat.task_id)}>打开任务</a>
               </>
             ) : null}
-            {chat.type !== "direct" ? <span> 成员 {chat.member_ids.join("、")}</span> : null}
+            {chat.type === "direct" && peer ? (
+              <span>
+                {" "}
+                对方 <PersonName nickname={peerNick} userId={peer} />
+              </span>
+            ) : null}
+            {chat.type !== "direct" ? (
+              <span className="person-list">
+                {" "}
+                成员{" "}
+                {chat.member_ids.map((member) => (
+                  <UserRef key={member} userId={member} />
+                ))}
+              </span>
+            ) : null}
           </p>
           <div className="toolbar">
             <Button
@@ -151,7 +169,7 @@ export function Conversation({ id }: { id: string }) {
             {messages.map((message) => (
               <article key={message.id} className={message.sender_id === settings.userId ? "bubble mine" : "bubble"}>
                 <header>
-                  <IdText value={message.sender_id} />
+                  <UserRef userId={message.sender_id} />
                   <time dateTime={message.created_at}>{formatTime(message.created_at)}</time>
                 </header>
                 <p>{message.text || message.attachment_ref}</p>

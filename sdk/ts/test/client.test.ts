@@ -171,6 +171,26 @@ describe("TaskGameClient URLs and auth", () => {
       () => meClient.me({ idempotencyKey: "nope" }),
       (error: unknown) => error instanceof TypeError,
     );
+
+    calls.length = 0;
+    const updated = { ...session.user, nickname: "阿宁" };
+    const patchFetch = captureFetch(200, updated, calls);
+    const patchClient = new TaskGameClient({
+      baseUrl: "http://127.0.0.1:8891",
+      auth: bearer(session.access_token),
+      fetch: patchFetch,
+    });
+    const saved = await patchClient.updateMe({ nickname: "阿宁" });
+    assert.equal(saved.nickname, "阿宁");
+    assert.equal(calls[0]?.method, "PATCH");
+    assert.equal(calls[0]?.url, "http://127.0.0.1:8891/v1/me");
+    assert.equal(calls[0]?.headers.Authorization, "Bearer header.payload.sig");
+    assert.equal(calls[0]?.body, JSON.stringify({ nickname: "阿宁" }));
+    assert.equal(calls[0]?.headers["Idempotency-Key"], undefined);
+    await assert.rejects(
+      () => patchClient.updateMe({ nickname: "阿宁" }, { idempotencyKey: "nope" }),
+      (error: unknown) => error instanceof TypeError,
+    );
   });
 
   it("maps register and login error codes", async () => {

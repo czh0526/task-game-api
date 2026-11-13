@@ -33,7 +33,7 @@ Auth is one header. `apiKey(...)` sends `X-Api-Key`. `bearer(...)` sends `Author
 | `X-Api-Key: dev-executor-key` | `usr_executor` |
 | `X-Api-Key: dev-arbiter-key` | `usr_arbiter` |
 
-Mint a JWT with `make token` (`sub` is the user id) and pass the raw token to `bearer`. `register` and `login` are public and return that same HS256 token (`access_token`, `sub` is `user.id`). They do not send credentials already set on the client. `me()` reads the caller, including `is_arbiter` when the user is in `Escrow.ArbiterUserIds`. Passwords are 8 to 72 bytes; the server stores bcrypt.
+Mint a JWT with `make token` (`sub` is the user id) and pass the raw token to `bearer`. `register` and `login` are public and return that same HS256 token (`access_token`, `sub` is `user.id`). They do not send credentials already set on the client. `me()` reads the caller, including `nickname` and `is_arbiter` when the user is in `Escrow.ArbiterUserIds`. `updateMe({ nickname })` sets that display name. Passwords are 8 to 72 bytes; the server stores bcrypt.
 
 ```ts
 import { TaskGameClient, bearer } from "taskgame-client";
@@ -115,7 +115,7 @@ npm run build
 | `X-Api-Key: dev-publisher-key` | `usr_publisher` |
 | `X-Api-Key: dev-executor-key` | `usr_executor` |
 
-`make token` 签发 JWT（`sub` 是用户 id），把原始 token 交给 `bearer`。`register` 和 `login` 是公开接口，返回同样的 HS256 token（`access_token`，`sub` 为 `user.id`），不会带上客户端里已经配置的凭证。`me()` 读取当前调用方。密码 8 到 72 字节，服务端只存 bcrypt。
+`make token` 签发 JWT（`sub` 是用户 id），把原始 token 交给 `bearer`。`register` 和 `login` 是公开接口，返回同样的 HS256 token（`access_token`，`sub` 为 `user.id`），不会带上客户端里已经配置的凭证。`me()` 读取当前调用方，包括昵称。`updateMe({ nickname })` 保存昵称。密码 8 到 72 字节，服务端只存 bcrypt。
 
 ```ts
 import { TaskGameClient, bearer } from "taskgame-client";

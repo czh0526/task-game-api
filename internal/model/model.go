@@ -279,6 +279,8 @@ type User struct {
 	Integrity int64
 	Ability   int64
 	Email     string
+	// Nickname is a display name. Empty means unset. It is not unique.
+	Nickname string
 	// PasswordHash is bcrypt and is filled only by GetByEmail. It is not an API field.
 	PasswordHash string
 	CreatedAt    time.Time
@@ -443,6 +445,7 @@ type FriendEdge struct {
 	UserID    string
 	Integrity int64
 	Ability   int64
+	Nickname  string
 	Since     time.Time
 	GroupID   string
 }

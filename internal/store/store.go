@@ -49,6 +49,8 @@ type UserRepo interface {
 	InsertRegistered(ctx context.Context, id, email, passwordHash string, now time.Time) (model.User, error)
 	// GetByEmail returns the user and its password hash. ErrNotFound when the email is absent.
 	GetByEmail(ctx context.Context, email string) (model.User, error)
+	// SetNickname stores a display name. Empty is allowed and means unset. ErrNotFound when the user row is missing.
+	SetNickname(ctx context.Context, id, nickname string) error
 	AddBalance(ctx context.Context, id string, delta int64) error
 	ApplyScore(ctx context.Context, id string, deltaIntegrity, deltaAbility int64) error
 	AddScoreEvent(ctx context.Context, ev model.ScoreEvent) error

@@ -138,7 +138,7 @@ func (e *Engine) CreateFriendRequest(ctx context.Context, userID string, req *ty
 		if err := e.emit(ctx, r, []string{target}, model.EventFriendRequested, friendRequestData(row)); err != nil {
 			return nil, err
 		}
-		out := toFriendRequest(row)
+		out := presentRequest(ctx, r.Users(), row)
 		return &out, nil
 	})
 }
@@ -156,7 +156,7 @@ func (e *Engine) ListFriendRequests(ctx context.Context, userID, direction strin
 	}
 	items := make([]types.FriendRequest, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, toFriendRequest(row))
+		items = append(items, presentRequest(ctx, e.store.Users(), row))
 	}
 	return &types.FriendRequestList{Items: items}, nil
 }
@@ -193,7 +193,7 @@ func (e *Engine) DeclineFriendRequest(ctx context.Context, userID string, req *t
 		if err := e.emit(ctx, r, []string{row.FromUserID}, model.EventFriendDeclined, friendRequestData(row)); err != nil {
 			return nil, err
 		}
-		out := toFriendRequest(row)
+		out := presentRequest(ctx, r.Users(), row)
 		return &out, nil
 	})
 }
@@ -217,7 +217,7 @@ func (e *Engine) CancelFriendRequest(ctx context.Context, userID string, req *ty
 		if err := r.Friends().UpdateRequest(ctx, row); err != nil {
 			return nil, err
 		}
-		out := toFriendRequest(row)
+		out := presentRequest(ctx, r.Users(), row)
 		return &out, nil
 	})
 }
@@ -416,7 +416,7 @@ func (e *Engine) acceptRequest(ctx context.Context, r store.Repos, userID string
 	if err := e.emit(ctx, r, []string{row.FromUserID}, model.EventFriendAccepted, friendRequestData(row)); err != nil {
 		return nil, err
 	}
-	out := toFriendRequest(row)
+	out := presentRequest(ctx, r.Users(), row)
 	return &out, nil
 }
 
@@ -485,9 +485,25 @@ func toFriendRequest(row model.FriendRequest) types.FriendRequest {
 	}
 }
 
+func presentRequest(ctx context.Context, users store.UserRepo, row model.FriendRequest) types.FriendRequest {
+	out := toFriendRequest(row)
+	out.FromNickname = nicknameOf(ctx, users, row.FromUserID)
+	out.ToNickname = nicknameOf(ctx, users, row.ToUserID)
+	return out
+}
+
+func nicknameOf(ctx context.Context, users store.UserRepo, userID string) string {
+	user, err := users.Get(ctx, userID)
+	if err != nil {
+		return ""
+	}
+	return user.Nickname
+}
+
 func toFriend(edge model.FriendEdge, unread model.DirectUnread) types.Friend {
 	card := types.Friend{
 		UserId:      edge.UserID,
+		Nickname:    edge.Nickname,
 		Integrity:   edge.Integrity,
 		Ability:     edge.Ability,
 		Since:       model.FormatTime(edge.Since),
