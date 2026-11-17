@@ -69,15 +69,20 @@ func (e *Engine) ListTasks(ctx context.Context, userID string, req *types.ListTa
 	default:
 		return nil, biz.Invalid("assignable must be me")
 	}
-	if trim(req.Assignable) == "me" {
-		return e.listAssignable(ctx, userID, req, limit, offset)
+	filter, err := taskFilterFromReq(req)
+	if err != nil {
+		return nil, err
 	}
-	rows, err := e.store.Tasks().List(ctx, model.TaskFilter{
-		Status: req.Status,
-		Kind:   req.Kind,
-		Limit:  limit + 1,
-		Offset: offset,
-	})
+	if trim(req.Assignable) == "me" {
+		return e.listAssignableWith(ctx, userID, filter, limit, offset)
+	}
+	filter.Limit = limit + 1
+	filter.Offset = offset
+	total, err := e.store.Tasks().Count(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := e.store.Tasks().List(ctx, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -94,10 +99,50 @@ func (e *Engine) ListTasks(ctx context.Context, userID string, req *types.ListTa
 		}
 		items = append(items, *dto)
 	}
-	return &types.TaskList{Items: items, NextCursor: next}, nil
+	return &types.TaskList{Items: items, Total: total, NextCursor: next}, nil
 }
 
-func (e *Engine) listAssignable(ctx context.Context, userID string, req *types.ListTasksReq, limit, offset int) (*types.TaskList, error) {
+// taskFilterFromReq validates the search parameters carried by a list request
+// and maps them onto a store filter. Distance filtering requires both a center
+// coordinate and a positive radius.
+func taskFilterFromReq(req *types.ListTasksReq) (model.TaskFilter, error) {
+	f := model.TaskFilter{
+		Status:              trim(req.Status),
+		Kind:                trim(req.Kind),
+		Keyword:             trim(req.Keyword),
+		Urgency:             trim(req.Urgency),
+		Recurrence:          trim(req.Recurrence),
+		ExecutorRequirement: trim(req.ExecutorRequirement),
+		MinAmount:           req.MinAmount,
+		MaxAmount:           req.MaxAmount,
+		Sort:                trim(req.Sort),
+		Latitude:            req.Latitude,
+		Longitude:           req.Longitude,
+		RadiusKm:            req.RadiusKm,
+	}
+	if f.MinAmount < 0 || f.MaxAmount < 0 || (f.MaxAmount > 0 && f.MinAmount > f.MaxAmount) {
+		return model.TaskFilter{}, biz.Invalid("invalid amount range")
+	}
+	switch f.Sort {
+	case "", "recent", "amount_asc", "amount_desc", "deadline_asc", "distance_asc":
+	default:
+		return model.TaskFilter{}, biz.Invalid("unknown sort")
+	}
+	if (req.Latitude == nil) != (req.Longitude == nil) {
+		return model.TaskFilter{}, biz.Invalid("latitude and longitude must be set together")
+	}
+	if req.Latitude != nil {
+		if *req.Latitude < -90 || *req.Latitude > 90 || *req.Longitude < -180 || *req.Longitude > 180 {
+			return model.TaskFilter{}, biz.Invalid("invalid coordinates")
+		}
+		if req.RadiusKm <= 0 || req.RadiusKm > 20015 {
+			return model.TaskFilter{}, biz.Invalid("radius_km must be between 0 and 20015")
+		}
+	}
+	return f, nil
+}
+
+func (e *Engine) listAssignableWith(ctx context.Context, userID string, base model.TaskFilter, limit, offset int) (*types.TaskList, error) {
 	ability, err := e.abilityOf(ctx, e.store, userID)
 	if err != nil {
 		return nil, err
@@ -110,16 +155,17 @@ func (e *Engine) listAssignable(ctx context.Context, userID string, req *types.L
 	for _, inv := range invites {
 		byTask[inv.TaskID] = inv
 	}
+	// Search filters run in SQL; canAcceptNow is the remaining per-user check.
+	f := base
+	f.Status = ""
+	f.Statuses = []string{model.StatusOpen, model.StatusActive}
+	f.Limit = 100
 	var hits []model.Task
 	var rawAt []int
-	raw := offset
-	for len(hits) <= limit {
-		rows, err := e.store.Tasks().List(ctx, model.TaskFilter{
-			Statuses: []string{model.StatusOpen, model.StatusActive},
-			Kind:     req.Kind,
-			Limit:    100,
-			Offset:   raw,
-		})
+	raw := 0
+	for {
+		f.Offset = raw
+		rows, err := e.store.Tasks().List(ctx, f)
 		if err != nil {
 			return nil, err
 		}
@@ -127,7 +173,7 @@ func (e *Engine) listAssignable(ctx context.Context, userID string, req *types.L
 			break
 		}
 		for i, row := range rows {
-			if req.Status != "" && row.Status != req.Status {
+			if base.Status != "" && row.Status != base.Status {
 				continue
 			}
 			if !e.canAcceptNow(ctx, row, userID, ability, byTask) {
@@ -135,27 +181,34 @@ func (e *Engine) listAssignable(ctx context.Context, userID string, req *types.L
 			}
 			hits = append(hits, row)
 			rawAt = append(rawAt, raw+i)
-			if len(hits) > limit {
-				break
-			}
 		}
 		raw += len(rows)
-		if len(hits) > limit || len(rows) < 100 {
+		if len(rows) < 100 {
 			break
 		}
 	}
-	var next *string
-	if len(hits) > limit {
-		hits = hits[:limit]
-		next = encodeCursor(rawAt[limit])
+	total := int64(len(hits))
+	// Slice the page that starts at the requested offset.
+	start := 0
+	for start < len(hits) && rawAt[start] < offset {
+		start++
 	}
-	items := make([]types.Task, 0, len(hits))
-	for _, t := range hits {
+	end := start + limit
+	if end > len(hits) {
+		end = len(hits)
+	}
+	page := hits[start:end]
+	var next *string
+	if end < len(hits) {
+		next = encodeCursor(rawAt[end])
+	}
+	items := make([]types.Task, 0, len(page))
+	for _, t := range page {
 		dto, err := e.dto(ctx, e.store, t)
 		if err != nil {
 			return nil, err
 		}
 		items = append(items, *dto)
 	}
-	return &types.TaskList{Items: items, NextCursor: next}, nil
+	return &types.TaskList{Items: items, Total: total, NextCursor: next}, nil
 }

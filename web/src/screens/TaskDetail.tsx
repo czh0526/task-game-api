@@ -217,6 +217,12 @@ export function TaskDetail({ id }: { id: string }) {
         {task.attributes ? (
           <>
             <Fact label="位置 location" value={task.attributes.location || "—"} />
+            {task.attributes.latitude != null && task.attributes.longitude != null ? (
+              <Fact
+                label="坐标 coordinates"
+                value={`${task.attributes.latitude}, ${task.attributes.longitude}`}
+              />
+            ) : null}
             <Fact label="时限 urgency" value={URGENCY_LABEL[task.attributes.urgency ?? "other"] ?? "—"} />
             <Fact label="周期 recurrence" value={RECURRENCE_LABEL[task.attributes.recurrence ?? "one_time"] ?? "—"} />
             {(task.attributes.executor_requirements ?? []).length > 0 ? (

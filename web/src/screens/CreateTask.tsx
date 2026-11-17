@@ -44,6 +44,8 @@ interface FormState {
   description: string;
   keywords: string;
   location: string;
+  latitude: string;
+  longitude: string;
   urgency: TaskUrgency;
   recurrence: TaskRecurrence;
   executorRequirements: string;
@@ -78,6 +80,8 @@ export function CreateTask() {
     description: "",
     keywords: "",
     location: "",
+    latitude: "",
+    longitude: "",
     urgency: "other",
     recurrence: "one_time",
     executorRequirements: "",
@@ -319,6 +323,43 @@ export function CreateTask() {
           <div className="form-grid">
             <Field label="位置 location" hint="例如「远程」「北京」，最多 128 字节">
               <input value={form.location} placeholder="远程" onChange={(event) => patch({ location: event.target.value })} />
+            </Field>
+            <Field label="纬度 latitude" hint="经度纬度要一起填，首页才能按距离筛选">
+              <input
+                type="number"
+                step="any"
+                min={-90}
+                max={90}
+                placeholder="39.9042"
+                value={form.latitude}
+                onChange={(event) => patch({ latitude: event.target.value })}
+              />
+            </Field>
+            <Field label="经度 longitude">
+              <input
+                type="number"
+                step="any"
+                min={-180}
+                max={180}
+                placeholder="116.4074"
+                value={form.longitude}
+                onChange={(event) => patch({ longitude: event.target.value })}
+              />
+            </Field>
+            <Field label="坐标定位">
+              <button
+                type="button"
+                className="btn secondary"
+                onClick={() => {
+                  if (!navigator.geolocation) return;
+                  navigator.geolocation.getCurrentPosition(
+                    (pos) => patch({ latitude: pos.coords.latitude.toFixed(4), longitude: pos.coords.longitude.toFixed(4) }),
+                    () => {},
+                  );
+                }}
+              >
+                使用我的当前位置
+              </button>
             </Field>
             <Field label="完成时限 urgency">
               <select value={form.urgency} onChange={(event) => patch({ urgency: event.target.value as TaskUrgency })}>
@@ -761,8 +802,20 @@ function buildTask(form: FormState): TaskCreate | string {
   if (executorRequirements.length > 20) return "完成者条件最多 20 个";
   if (executorRequirements.some((item) => new TextEncoder().encode(item).length > 64)) return "每个完成者条件不超过 64 字节";
   if (new TextEncoder().encode(form.location.trim()).length > 128) return "位置不超过 128 字节";
+  const hasLat = form.latitude.trim() !== "";
+  const hasLng = form.longitude.trim() !== "";
+  if (hasLat !== hasLng) return "经纬度需要一起填写";
+  let latitude: number | undefined;
+  let longitude: number | undefined;
+  if (hasLat) {
+    latitude = Number(form.latitude);
+    longitude = Number(form.longitude);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return "经纬度格式不正确";
+    if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return "经纬度超出范围";
+  }
   const attributes = {
     location: form.location.trim(),
+    ...(latitude !== undefined ? { latitude, longitude } : {}),
     urgency: form.urgency,
     recurrence: form.recurrence,
     executor_requirements: executorRequirements,

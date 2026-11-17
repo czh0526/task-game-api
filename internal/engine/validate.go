@@ -168,6 +168,19 @@ func cleanAttributes(in types.TaskAttributes) (model.TaskAttributes, error) {
 	if len(out.Location) > 128 {
 		return model.TaskAttributes{}, biz.Invalid("attributes.location is too long")
 	}
+	if (in.Latitude == nil) != (in.Longitude == nil) {
+		return model.TaskAttributes{}, biz.Invalid("attributes.latitude and longitude must be set together")
+	}
+	if in.Latitude != nil {
+		if *in.Latitude < -90 || *in.Latitude > 90 {
+			return model.TaskAttributes{}, biz.Invalid("attributes.latitude must be between -90 and 90")
+		}
+		if *in.Longitude < -180 || *in.Longitude > 180 {
+			return model.TaskAttributes{}, biz.Invalid("attributes.longitude must be between -180 and 180")
+		}
+		lat, lng := *in.Latitude, *in.Longitude
+		out.Latitude, out.Longitude = &lat, &lng
+	}
 	urgency := trim(in.Urgency)
 	if urgency == "" {
 		urgency = model.UrgencyOther

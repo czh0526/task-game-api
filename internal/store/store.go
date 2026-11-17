@@ -62,6 +62,7 @@ type TaskRepo interface {
 	Update(ctx context.Context, t model.Task) error
 	Get(ctx context.Context, id string) (model.Task, error)
 	List(ctx context.Context, f model.TaskFilter) ([]model.Task, error)
+	Count(ctx context.Context, f model.TaskFilter) (int64, error)
 	ListDueReview(ctx context.Context, now time.Time, limit int) ([]string, error)
 }
 

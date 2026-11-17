@@ -114,6 +114,8 @@ func (e *Engine) toTask(t model.Task, acc *model.EscrowAccount, subs []model.Sub
 func toAttributes(a model.TaskAttributes) types.TaskAttributes {
 	return types.TaskAttributes{
 		Location:             a.Location,
+		Latitude:             a.Latitude,
+		Longitude:            a.Longitude,
 		Urgency:              a.Urgency,
 		Recurrence:           a.Recurrence,
 		ExecutorRequirements: append([]string{}, nonNil(a.ExecutorRequirements)...),

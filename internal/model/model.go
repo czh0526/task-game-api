@@ -226,6 +226,8 @@ type Collaborative struct {
 // the homepage surfaces it alongside these attributes without duplicating it.
 type TaskAttributes struct {
 	Location             string   `json:"location,omitempty"`
+	Latitude             *float64 `json:"latitude,omitempty"`
+	Longitude            *float64 `json:"longitude,omitempty"`
 	Urgency              string   `json:"urgency,omitempty"`
 	Recurrence           string   `json:"recurrence,omitempty"`
 	ExecutorRequirements []string `json:"executor_requirements,omitempty"`
@@ -289,11 +291,21 @@ type ResolveState struct {
 }
 
 type TaskFilter struct {
-	Status   string
-	Statuses []string
-	Kind     string
-	Limit    int
-	Offset   int
+	Status              string
+	Statuses            []string
+	Kind                string
+	Keyword             string
+	Urgency             string
+	Recurrence          string
+	ExecutorRequirement string
+	MinAmount           int64
+	MaxAmount           int64
+	Latitude            *float64
+	Longitude           *float64
+	RadiusKm            float64
+	Sort                string
+	Limit               int
+	Offset              int
 }
 
 type User struct {

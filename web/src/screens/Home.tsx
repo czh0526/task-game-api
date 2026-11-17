@@ -53,10 +53,16 @@ export function Home() {
   const signedIn = isSignedIn(settings);
   const [scope, setScope] = useState<Scope>("all");
   const [items, setItems] = useState<Task[]>([]);
+  const [facetItems, setFacetItems] = useState<Task[]>([]);
   const [activeKeyword, setActiveKeyword] = useState<string | null>(null);
   const [activeUrgency, setActiveUrgency] = useState<string | null>(null);
   const [activeRecurrence, setActiveRecurrence] = useState<string | null>(null);
   const [activeRequirement, setActiveRequirement] = useState<string | null>(null);
+  const [lat, setLat] = useState("");
+  const [lng, setLng] = useState("");
+  const [radiusKm, setRadiusKm] = useState("10");
+  const [sort, setSort] = useState<"recent" | "amount_desc" | "deadline_asc" | "distance_asc">("recent");
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
@@ -66,12 +72,45 @@ export function Home() {
     if (!signedIn && scope === "available") setScope("all");
   }, [signedIn, scope]);
 
+  // Build the query from all active filters. Filtering happens in SQL across
+  // every task, not in the browser over a single 100-row page.
+  const query = useMemo<ListTasksQuery>(() => {
+    const q: ListTasksQuery = { limit: 100, sort };
+    if (scope === "available") q.assignable = "me";
+    if (activeKeyword) q.keyword = activeKeyword;
+    if (activeUrgency) q.urgency = activeUrgency as ListTasksQuery["urgency"];
+    if (activeRecurrence) q.recurrence = activeRecurrence as ListTasksQuery["recurrence"];
+    if (activeRequirement) q.executor_requirement = activeRequirement;
+    const latitude = Number(lat);
+    const longitude = Number(lng);
+    const radius = Number(radiusKm);
+    if (lat.trim() && lng.trim() && Number.isFinite(latitude) && Number.isFinite(longitude) && latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180 && radius > 0) {
+      q.latitude = latitude;
+      q.longitude = longitude;
+      q.radius_km = radius;
+      if (sort === "recent") q.sort = "distance_asc";
+    }
+    return q;
+  }, [scope, activeKeyword, activeUrgency, activeRecurrence, activeRequirement, lat, lng, radiusKm, sort]);
+
+  // Unfiltered baseline used only to build the filter option lists, so options
+  // don't disappear while a filter is active.
+  useEffect(() => {
+    if (!client) return;
+    const ac = new AbortController();
+    client
+      .listTasks({ limit: 100 }, { signal: ac.signal })
+      .then((page) => {
+        if (!ac.signal.aborted) setFacetItems(page.items);
+      })
+      .catch(() => {});
+    return () => ac.abort();
+  }, [client, reloadToken]);
+
   useEffect(() => {
     if (!client) return;
     const seq = ++requestSeq.current;
     const ac = new AbortController();
-    const query: ListTasksQuery = { limit: 100 };
-    if (scope === "available") query.assignable = "me";
     setLoading(true);
     setError(null);
     client
@@ -79,6 +118,7 @@ export function Home() {
       .then((page) => {
         if (ac.signal.aborted || seq !== requestSeq.current) return;
         setItems(page.items);
+        setTotal(page.total ?? page.items.length);
       })
       .catch((err: unknown) => {
         if (isAbort(err) || seq !== requestSeq.current) return;
@@ -88,11 +128,11 @@ export function Home() {
         if (!ac.signal.aborted && seq === requestSeq.current) setLoading(false);
       });
     return () => ac.abort();
-  }, [client, scope, reloadToken]);
+  }, [client, query, reloadToken]);
 
   const keywordCounts = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const task of items) {
+    for (const task of facetItems) {
       for (const keyword of task.keywords ?? []) {
         counts.set(keyword, (counts.get(keyword) ?? 0) + 1);
       }
@@ -100,11 +140,11 @@ export function Home() {
     return Array.from(counts.entries())
       .map(([name, count]) => ({ name, count }))
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
-  }, [items]);
+  }, [facetItems]);
 
   const requirementCounts = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const task of items) {
+    for (const task of facetItems) {
       for (const requirement of task.attributes?.executor_requirements ?? []) {
         counts.set(requirement, (counts.get(requirement) ?? 0) + 1);
       }
@@ -112,47 +152,32 @@ export function Home() {
     return Array.from(counts.entries())
       .map(([name, count]) => ({ name, count }))
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
-  }, [items]);
+  }, [facetItems]);
 
-  // Drop selections that no longer exist after a refresh.
-  useEffect(() => {
-    if (activeKeyword && !keywordCounts.some((item) => item.name === activeKeyword)) setActiveKeyword(null);
-    if (activeRequirement && !requirementCounts.some((item) => item.name === activeRequirement)) setActiveRequirement(null);
-  }, [activeKeyword, keywordCounts, activeRequirement, requirementCounts]);
-
-  const visibleItems = useMemo(
-    () =>
-      items.filter((task) => {
-        if (activeKeyword && !(task.keywords ?? []).includes(activeKeyword)) return false;
-        if (activeRequirement && !(task.attributes?.executor_requirements ?? []).includes(activeRequirement)) return false;
-        if (activeUrgency && (task.attributes?.urgency ?? "other") !== activeUrgency) return false;
-        if (activeRecurrence && (task.attributes?.recurrence ?? "one_time") !== activeRecurrence) return false;
-        return true;
-      }),
-    [items, activeKeyword, activeRequirement, activeUrgency, activeRecurrence],
-  );
-
+  // The server returns only tasks matching the active filters.
   const grouped = useMemo(() => {
     const groups: Record<TaskKind, Task[]> = {
       exclusive: [],
       competitive: [],
       collaborative: [],
     };
-    for (const task of visibleItems) groups[task.kind]?.push(task);
+    for (const task of items) groups[task.kind]?.push(task);
     for (const category of CATEGORIES) {
       groups[category.kind].sort((a, b) => b.created_at.localeCompare(a.created_at));
     }
     return groups;
-  }, [visibleItems]);
+  }, [items]);
 
   const stats = useMemo(
     () => ({
-      total: items.length,
+      total: total,
       open: items.filter((task) => task.status === "open").length,
       mine: items.filter((task) => isMine(task, settings.userId)).length,
     }),
-    [items, settings.userId],
+    [total, items, settings.userId],
   );
+
+  const anyFilter = Boolean(activeKeyword || activeUrgency || activeRecurrence || activeRequirement || (lat.trim() && lng.trim()));
 
   return (
     <Screen
@@ -223,6 +248,15 @@ export function Home() {
             </a>
           )}
         </div>
+        <label className="home-sort">
+          排序
+          <select value={sort} onChange={(event) => setSort(event.target.value as typeof sort)}>
+            <option value="recent">最新发布</option>
+            <option value="amount_desc">报酬最高</option>
+            <option value="deadline_asc">截止最近</option>
+            <option value="distance_asc">距离最近</option>
+          </select>
+        </label>
         <button type="button" className="btn ghost" onClick={() => setReloadToken((value) => value + 1)}>
           刷新
         </button>
@@ -245,7 +279,7 @@ export function Home() {
               className={activeKeyword === null ? "keyword-chip on" : "keyword-chip"}
               onClick={() => setActiveKeyword(null)}
             >
-              全部 <span>{items.length}</span>
+              全部 <span>{total}</span>
             </button>
             {keywordCounts.map((item) => (
               <button
@@ -343,6 +377,102 @@ export function Home() {
         ) : null}
       </section>
 
+      <section className="keyword-bar" aria-label="按距离筛选">
+        <div className="keyword-bar-head">
+          <h2>按距离筛选</h2>
+          {(lat.trim() && lng.trim()) || anyFilter ? (
+            <button
+              type="button"
+              className="btn ghost"
+              onClick={() => {
+                setLat("");
+                setLng("");
+                setRadiusKm("10");
+              }}
+            >
+              清除位置
+            </button>
+          ) : null}
+        </div>
+        <p className="hint">填入中心点经纬度与半径，只显示该范围内的任务；任务需在创建时标记坐标。</p>
+        <div className="distance-row">
+          <label>
+            纬度
+            <input
+              type="number"
+              step="any"
+              min={-90}
+              max={90}
+              placeholder="39.9042"
+              value={lat}
+              onChange={(event) => setLat(event.target.value)}
+            />
+          </label>
+          <label>
+            经度
+            <input
+              type="number"
+              step="any"
+              min={-180}
+              max={180}
+              placeholder="116.4074"
+              value={lng}
+              onChange={(event) => setLng(event.target.value)}
+            />
+          </label>
+          <label>
+            半径（公里）
+            <input
+              type="number"
+              step="any"
+              min={0}
+              placeholder="10"
+              value={radiusKm}
+              onChange={(event) => setRadiusKm(event.target.value)}
+            />
+          </label>
+          <button type="button" className="btn secondary" onClick={() => setReloadToken((value) => value + 1)}>
+            按此位置查找
+          </button>
+        </div>
+        <button
+          type="button"
+          className="btn ghost"
+          onClick={() => {
+            if (!navigator.geolocation) return;
+            navigator.geolocation.getCurrentPosition(
+              (pos) => {
+                setLat(pos.coords.latitude.toFixed(4));
+                setLng(pos.coords.longitude.toFixed(4));
+              },
+              () => {},
+            );
+          }}
+        >
+          使用我的当前位置
+        </button>
+        {lat.trim() && lng.trim() ? (
+          <p className="hint">正在按「{lat}, {lng}」周围 {radiusKm || "10"} 公里筛选，共 {total} 个任务匹配。</p>
+        ) : null}
+      </section>
+
+      {anyFilter ? (
+        <button
+          type="button"
+          className="btn ghost home-clear-all"
+          onClick={() => {
+            setActiveKeyword(null);
+            setActiveUrgency(null);
+            setActiveRecurrence(null);
+            setActiveRequirement(null);
+            setLat("");
+            setLng("");
+          }}
+        >
+          清除全部筛选
+        </button>
+      ) : null}
+
       <div className="home-categories">
         {CATEGORIES.map((category) => {
           const tasks = grouped[category.kind] ?? [];
@@ -399,7 +529,11 @@ export function Home() {
                       </p>
                       {task.attributes ? (
                         <p className="home-task-attrs">
-                          {task.attributes.location ? <span>位置 {task.attributes.location}</span> : null}
+                          {task.attributes.latitude != null && task.attributes.longitude != null ? (
+                            <span>坐标 {task.attributes.latitude.toFixed(2)}, {task.attributes.longitude.toFixed(2)}</span>
+                          ) : task.attributes.location ? (
+                            <span>位置 {task.attributes.location}</span>
+                          ) : null}
                           <span>时限 {URGENCY_LABEL[task.attributes.urgency ?? "other"] ?? task.attributes.urgency}</span>
                           <span>周期 {RECURRENCE_LABEL[task.attributes.recurrence ?? "one_time"] ?? task.attributes.recurrence}</span>
                         </p>

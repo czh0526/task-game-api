@@ -313,6 +313,12 @@ code.mono, .mono { font-family: var(--mono); font-size: 0.86em; }
 
 .attr-filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
 .attr-filter-label { width: 3em; color: var(--ink-soft); font-size: 0.85rem; }
+.home-sort { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-soft); font-size: 0.85rem; }
+.home-sort select { padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); }
+.distance-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; margin-top: 10px; }
+.distance-row label { display: flex; flex-direction: column; gap: 4px; color: var(--ink-soft); font-size: 0.82rem; }
+.distance-row input { width: 130px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); }
+.home-clear-all { margin-top: 4px; }
 .preset-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .preset-chip {
   padding: 5px 12px;
