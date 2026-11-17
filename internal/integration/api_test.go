@@ -104,8 +104,14 @@ AutoSettle:
 	waitHealthy(t, base)
 	assertLocalDevCORS(t, base)
 
-	if status, _ := do(t, http.MethodGet, base+"/v1/tasks", "", nil); status != http.StatusUnauthorized {
-		t.Fatalf("unauthenticated status %d", status)
+	if status, raw := do(t, http.MethodGet, base+"/v1/tasks", "", nil); status != http.StatusOK {
+		t.Fatalf("anonymous market listing %d %s", status, raw)
+	}
+	if status, _ := do(t, http.MethodPost, base+"/v1/tasks", "", nil); status != http.StatusUnauthorized {
+		t.Fatalf("anonymous create status %d", status)
+	}
+	if status, _ := do(t, http.MethodGet, base+"/v1/tasks?assignable=me", "", nil); status != http.StatusUnauthorized {
+		t.Fatalf("anonymous assignable status %d", status)
 	}
 
 	deadline := time.Now().Add(48 * time.Hour).UTC().Format(time.RFC3339)

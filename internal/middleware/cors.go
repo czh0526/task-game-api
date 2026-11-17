@@ -7,12 +7,14 @@ import (
 	"github.com/zeromicro/go-zero/rest"
 )
 
-// Local Vite dev servers. 5173 is the default dev port; Vite walks forward
-// when it is taken. 4173 is `vite preview`.
+// Local Vite dev servers. 5173 is the original dev port and Vite walks
+// forward when it is taken; 5137 is the public landing page port.
+// 4173 is `vite preview`.
 const (
-	viteDevPortMin = 5173
-	viteDevPortMax = 5185
-	vitePreview    = 4173
+	publicLandingPort = 5137
+	viteDevPortMin    = 5173
+	viteDevPortMax    = 5185
+	vitePreview       = 4173
 )
 
 // Headers the browser preflights. The client sends JSON plus X-Api-Key or
@@ -34,7 +36,7 @@ func setLocalDevCORSHeaders(header http.Header) {
 
 func localDevOrigins() []string {
 	hosts := []string{"http://localhost", "http://127.0.0.1", "http://[::1]"}
-	ports := []int{vitePreview}
+	ports := []int{vitePreview, publicLandingPort}
 	for port := viteDevPortMin; port <= viteDevPortMax; port++ {
 		ports = append(ports, port)
 	}

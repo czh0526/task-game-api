@@ -34,7 +34,7 @@ Development keys (`etc/taskgame.yaml`):
 - `http://127.0.0.1:8891` — 进程 origin
 - `http://127.0.0.1:8891/v1` — OpenAPI server URL
 
-客户端会把末尾的 `/v1` 当成协议前缀。`health()` 请求 `{origin}/health`。其余方法请求 `{origin}/v1/...`。注册、创建任务、webhook、会话、消息成功时是 **201**，其他成功是 **200**。除 `/health`、`POST /v1/register`、`POST /v1/login` 外都要鉴权。
+客户端会把末尾的 `/v1` 当成协议前缀。`health()` 请求 `{origin}/health`。其余方法请求 `{origin}/v1/...`。注册、创建任务、webhook、会话、消息成功时是 **201**，其他成功是 **200**。除 `/health`、`GET /v1/tasks`、`POST /v1/register`、`POST /v1/login` 外都要鉴权；`GET /v1/tasks?assignable=me` 仍需鉴权。
 
 ### 鉴权
 
@@ -362,7 +362,7 @@ The dev process origin is `http://127.0.0.1:8891`. Protocol routes live under `/
 - `http://127.0.0.1:8891` — process origin
 - `http://127.0.0.1:8891/v1` — OpenAPI server URL
 
-A trailing `/v1` is the protocol prefix. `health()` calls `{origin}/health`. Every other method calls `{origin}/v1/...`. Register, task, webhook, chat, and message creates return **201**. Other successes return **200**. Every route except `/health`, `POST /v1/register`, and `POST /v1/login` requires auth.
+A trailing `/v1` is the protocol prefix. `health()` calls `{origin}/health`. Every other method calls `{origin}/v1/...`. Register, task, webhook, chat, and message creates return **201**. Other successes return **200**. Every route except `/health`, `GET /v1/tasks`, `POST /v1/register`, and `POST /v1/login` requires auth; `GET /v1/tasks?assignable=me` still requires auth.
 
 ### Auth
 
