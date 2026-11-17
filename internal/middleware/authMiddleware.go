@@ -28,8 +28,14 @@ func NewAuthMiddleware(cfg config.AuthConf) *AuthMiddleware {
 }
 
 // Handle rejects unauthenticated calls before the handler runs.
+// The task market listing is public so the web landing page can show tasks
+// before sign-in; credentials, when supplied, are still validated.
 func (m *AuthMiddleware) Handle(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if isPublicTaskList(r) && !hasCredentials(r) {
+			next(w, r)
+			return
+		}
 		userID, err := m.authenticate(r)
 		if err != nil {
 			httpx.ErrorCtx(r.Context(), w, err)
@@ -37,6 +43,15 @@ func (m *AuthMiddleware) Handle(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r.WithContext(auth.WithUserID(r.Context(), userID)))
 	}
+}
+
+func isPublicTaskList(r *http.Request) bool {
+	return r.Method == http.MethodGet && r.URL.Path == "/v1/tasks"
+}
+
+func hasCredentials(r *http.Request) bool {
+	return strings.TrimSpace(r.Header.Get("X-Api-Key")) != "" ||
+		strings.TrimSpace(r.Header.Get("Authorization")) != ""
 }
 
 func (m *AuthMiddleware) authenticate(r *http.Request) (string, error) {

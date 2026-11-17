@@ -3,6 +3,7 @@ import type { TaskKind } from "taskgame-client";
 
 export type Route =
   | { name: "home" }
+  | { name: "auth" }
   | { name: "tasks"; kind?: TaskKind }
   | { name: "new" }
   | { name: "task"; id: string }
@@ -16,6 +17,7 @@ const KINDS: TaskKind[] = ["exclusive", "competitive", "collaborative"];
 
 export const href = {
   home: "#/home",
+  login: "#/login",
   tasks: "#/tasks",
   tasksByKind: (kind: TaskKind) => `#/tasks?kind=${encodeURIComponent(kind)}`,
   newTask: "#/tasks/new",
@@ -37,6 +39,7 @@ export function parseRoute(hash: string): Route {
   const head = parts[0];
   if (!head) return { name: "home" };
   if (head === "home") return { name: "home" };
+  if (head === "login") return { name: "auth" };
   if (head === "tasks" && parts[1] === "new") return { name: "new" };
   if (head === "tasks" && parts[1]) return { name: "task", id: safeDecode(parts[1]) };
   if (head === "tasks") return { name: "tasks", kind: parseKind(query?.get("kind")) };

@@ -286,7 +286,7 @@ npm run example:exclusive
 cd web && npm install && npm run dev
 ```
 
-打开 `http://localhost:5173`。用法、localStorage 键和三种任务的点法见 [`web/README.md`](web/README.md)。进程为本地 Vite 源（`localhost` / `127.0.0.1` / `[::1]` 的 4173 与 5173–5185）加了 CORS 预检，业务路由不变。
+打开 `http://localhost:5137` 即可看到公开首页（未登录也能按独占、竞争、协作浏览任务）；注册/登录后可进入完整界面。用法、localStorage 键和三种任务的点法见 [`web/README.md`](web/README.md)。进程为本地 Vite 源（`localhost` / `127.0.0.1` / `[::1]` 的 5137、4173 与 5173–5185）加了 CORS 预检，业务路由不变。
 
 ## TypeScript client
 
@@ -311,7 +311,7 @@ The publisher / executor demo is [`web`](web) (Vite + React, Chinese UI, local `
 cd web && npm install && npm run dev
 ```
 
-Open `http://localhost:5173`. Keys, localStorage, and the three task flows are in [`web/README.md`](web/README.md). The process adds a CORS preflight for local Vite origins (`localhost`, `127.0.0.1`, `[::1]` on 4173 and 5173–5185). Handlers stay the same.
+Open `http://localhost:5137` for the public homepage: visitors can browse exclusive, competitive, and collaborative tasks before signing in. Keys, localStorage, and the three task flows are in [`web/README.md`](web/README.md). The process adds a CORS preflight for local Vite origins (`localhost`, `127.0.0.1`, `[::1]` on 5137, 4173 and 5173–5185). Handlers stay the same.
 
 ## 布局 / Layout
 
@@ -364,9 +364,9 @@ The OpenAPI server URL is `https://api.example.com/v1`, so the paths below inclu
 | GET | `/v1/me` | `me` | `handler/user.GetMeHandler` | `logic/user.GetMe` |
 | PATCH | `/v1/me` | `updateMe` | `handler/user.UpdateMeHandler` | `logic/user.UpdateMe` |
 
-创建类接口（task、webhook、chat、message、新建好友分组）返回 201。新建好友申请在状态为 `pending` 时返回 201；如果直接接受了对方已有的申请，返回 200。其余成功返回 200。除 `/health`、`POST /v1/register`、`POST /v1/login` 外都要 Bearer JWT 或 `X-Api-Key`。
+创建类接口（task、webhook、chat、message、新建好友分组）返回 201。新建好友申请在状态为 `pending` 时返回 201；如果直接接受了对方已有的申请，返回 200。其余成功返回 200。除 `/health`、`GET /v1/tasks`、`POST /v1/register`、`POST /v1/login` 外都要 Bearer JWT 或 `X-Api-Key`；`GET /v1/tasks?assignable=me` 仍需鉴权。
 
-Creates (task, webhook, chat, message, friend group) return 201. A new friend request returns 201 while `pending`. Accepting the other side's existing request on that same route returns 200. Other successes return 200. Every route except `/health`, `POST /v1/register`, and `POST /v1/login` requires a bearer JWT or `X-Api-Key`.
+Creates (task, webhook, chat, message, friend group) return 201. A new friend request returns 201 while `pending`. Accepting the other side's existing request on that same route returns 200. Other successes return 200. Every route except `/health`, `GET /v1/tasks`, `POST /v1/register`, and `POST /v1/login` requires a bearer JWT or `X-Api-Key`; `GET /v1/tasks?assignable=me` still requires auth.
 
 ### 好友 / Friends
 

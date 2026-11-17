@@ -6,6 +6,8 @@ test("empty hash lands on the homepage", () => {
   assert.deepEqual(parseRoute(""), { name: "home" });
   assert.deepEqual(parseRoute("#/"), { name: "home" });
   assert.equal(href.home, "#/home");
+  assert.deepEqual(parseRoute("#/login"), { name: "auth" });
+  assert.equal(href.login, "#/login");
 });
 
 test("kind query preselects the task list filter", () => {
