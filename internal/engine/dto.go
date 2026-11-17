@@ -13,6 +13,7 @@ func (e *Engine) toTask(t model.Task, acc *model.EscrowAccount, subs []model.Sub
 		Kind:           t.Kind,
 		Title:          t.Title,
 		Description:    t.Description,
+		Keywords:       append([]string{}, nonNil(t.Keywords)...),
 		Payment:        toPayment(t.Payment),
 		Acceptance:     toAcceptance(t.Acceptance),
 		AssigneePolicy: toPolicy(t.AssigneePolicy),

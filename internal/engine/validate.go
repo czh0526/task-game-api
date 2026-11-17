@@ -13,6 +13,9 @@ import (
 // maxCollaborativeSeats is the cap on both role templates and materialized seats.
 const maxCollaborativeSeats = 20
 
+// maxKeywords bounds how many keywords a task can declare and how long each one is.
+const maxKeywords = 20
+
 func (e *Engine) buildTask(publisherID string, req *types.CreateTaskReq) (model.Task, error) {
 	if req == nil {
 		return model.Task{}, biz.Invalid("request body is required")
@@ -62,6 +65,10 @@ func (e *Engine) buildTask(publisherID string, req *types.CreateTaskReq) (model.
 	}
 	if maxRev < 1 || maxRev > 20 {
 		return model.Task{}, biz.Invalid("max_revisions must be between 1 and 20")
+	}
+	keywords, err := cleanKeywords(req.Keywords)
+	if err != nil {
+		return model.Task{}, err
 	}
 	conditions, err := cleanConditions(req.Payment.Conditions)
 	if err != nil {
@@ -119,6 +126,7 @@ func (e *Engine) buildTask(publisherID string, req *types.CreateTaskReq) (model.
 		Kind:           req.Kind,
 		Title:          title,
 		Description:    description,
+		Keywords:       keywords,
 		Status:         model.StatusDraft,
 		PublisherID:    publisherID,
 		Payment:        model.Payment{Mode: req.Payment.Mode, Amount: req.Payment.Amount, Milestones: milestones, Conditions: conditions},
@@ -130,6 +138,20 @@ func (e *Engine) buildTask(publisherID string, req *types.CreateTaskReq) (model.
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}, nil
+}
+
+// cleanKeywords trims, validates and dedupes keywords. Each keyword is at most
+// 64 bytes; an empty list is allowed and stored as [].
+func cleanKeywords(in []string) ([]string, error) {
+	out, err := cleanStrings(in, maxKeywords, 64, "keywords")
+	if err != nil {
+		return nil, err
+	}
+	out = dedupe(out)
+	if out == nil {
+		out = []string{}
+	}
+	return out, nil
 }
 
 func cleanConditions(in []string) ([]string, error) {

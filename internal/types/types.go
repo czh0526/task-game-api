@@ -78,6 +78,7 @@ type CreateTaskReq struct {
 	Kind           string         `json:"kind,options=exclusive|competitive|collaborative"`
 	Title          string         `json:"title"`
 	Description    string         `json:"description"`
+	Keywords       []string       `json:"keywords,optional,omitempty"`
 	Payment        Payment        `json:"payment"`
 	Acceptance     Acceptance     `json:"acceptance"`
 	AssigneePolicy AssigneePolicy `json:"assignee_policy"`
@@ -198,6 +199,7 @@ type Task struct {
 	Kind                 string            `json:"kind"`
 	Title                string            `json:"title"`
 	Description          string            `json:"description"`
+	Keywords             []string          `json:"keywords,omitempty"`
 	Payment              Payment           `json:"payment"`
 	Acceptance           Acceptance        `json:"acceptance"`
 	AssigneePolicy       AssigneePolicy    `json:"assignee_policy"`

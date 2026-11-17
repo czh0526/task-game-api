@@ -44,6 +44,7 @@ export function Home() {
   const signedIn = isSignedIn(settings);
   const [scope, setScope] = useState<Scope>("all");
   const [items, setItems] = useState<Task[]>([]);
+  const [activeKeyword, setActiveKeyword] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
@@ -77,18 +78,42 @@ export function Home() {
     return () => ac.abort();
   }, [client, scope, reloadToken]);
 
+  const keywordCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const task of items) {
+      for (const keyword of task.keywords ?? []) {
+        counts.set(keyword, (counts.get(keyword) ?? 0) + 1);
+      }
+    }
+    return Array.from(counts.entries())
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  }, [items]);
+
+  // Drop a selection that no longer exists after a refresh.
+  useEffect(() => {
+    if (activeKeyword && !keywordCounts.some((item) => item.name === activeKeyword)) {
+      setActiveKeyword(null);
+    }
+  }, [activeKeyword, keywordCounts]);
+
+  const visibleItems = useMemo(
+    () => (activeKeyword ? items.filter((task) => (task.keywords ?? []).includes(activeKeyword)) : items),
+    [items, activeKeyword],
+  );
+
   const grouped = useMemo(() => {
     const groups: Record<TaskKind, Task[]> = {
       exclusive: [],
       competitive: [],
       collaborative: [],
     };
-    for (const task of items) groups[task.kind]?.push(task);
+    for (const task of visibleItems) groups[task.kind]?.push(task);
     for (const category of CATEGORIES) {
       groups[category.kind].sort((a, b) => b.created_at.localeCompare(a.created_at));
     }
     return groups;
-  }, [items]);
+  }, [visibleItems]);
 
   const stats = useMemo(
     () => ({
@@ -174,6 +199,39 @@ export function Home() {
         {loading ? <span className="hint">正在加载任务…</span> : null}
       </div>
 
+      {keywordCounts.length > 0 ? (
+        <section className="keyword-bar" aria-label="按关键字分类">
+          <div className="keyword-bar-head">
+            <h2>按关键字分类</h2>
+            {activeKeyword ? (
+              <button type="button" className="btn ghost" onClick={() => setActiveKeyword(null)}>
+                清除筛选
+              </button>
+            ) : null}
+          </div>
+          <div className="keyword-chips">
+            <button
+              type="button"
+              className={activeKeyword === null ? "keyword-chip on" : "keyword-chip"}
+              onClick={() => setActiveKeyword(null)}
+            >
+              全部 <span>{items.length}</span>
+            </button>
+            {keywordCounts.map((item) => (
+              <button
+                type="button"
+                key={item.name}
+                className={activeKeyword === item.name ? "keyword-chip on" : "keyword-chip"}
+                onClick={() => setActiveKeyword(item.name)}
+              >
+                {item.name} <span>{item.count}</span>
+              </button>
+            ))}
+          </div>
+          {activeKeyword ? <p className="hint">当前按「{activeKeyword}」筛选，下面三类任务只显示带这个关键字的任务。</p> : null}
+        </section>
+      ) : null}
+
       <div className="home-categories">
         {CATEGORIES.map((category) => {
           const tasks = grouped[category.kind] ?? [];
@@ -208,6 +266,22 @@ export function Home() {
                         ) : null}
                       </div>
                       <h3>{task.title}</h3>
+                      {(task.keywords ?? []).length > 0 ? (
+                        <span className="card-keywords">
+                          {(task.keywords ?? []).map((keyword) => (
+                            <span
+                              key={keyword}
+                              className={activeKeyword === keyword ? "card-keyword on" : "card-keyword"}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                setActiveKeyword(keyword);
+                              }}
+                            >
+                              #{keyword}
+                            </span>
+                          ))}
+                        </span>
+                      ) : null}
                       <p className="meta">
                         <strong>{formatCredits(task.payment.amount)}</strong>
                         <span>{PAYMENT_MODE_LABEL[task.payment.mode] ?? task.payment.mode}</span>

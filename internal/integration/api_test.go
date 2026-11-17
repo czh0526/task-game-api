@@ -119,6 +119,7 @@ AutoSettle:
 		"kind":        "exclusive",
 		"title":       "Translate release notes",
 		"description": "Translate the v0.1 notes from Chinese to English.",
+		"keywords":    []string{"translation", "docs", "docs"},
 		"payment":     map[string]any{"mode": "one_shot", "amount": 500},
 		"acceptance": map[string]any{
 			"deadline": deadline, "quality": "Complete translation", "review_hours": 72,
@@ -130,11 +131,15 @@ AutoSettle:
 		t.Fatalf("create %d %s", status, raw)
 	}
 	var created struct {
-		ID     string `json:"id"`
-		Status string `json:"status"`
+		ID       string   `json:"id"`
+		Status   string   `json:"status"`
+		Keywords []string `json:"keywords"`
 	}
 	if err := json.Unmarshal(raw, &created); err != nil || created.ID == "" || created.Status != "draft" {
 		t.Fatalf("create body %s", raw)
+	}
+	if len(created.Keywords) != 2 || created.Keywords[0] != "translation" || created.Keywords[1] != "docs" {
+		t.Fatalf("keywords round-trip / dedupe: %v", created.Keywords)
 	}
 	status, raw = do(t, http.MethodPost, base+"/v1/tasks/"+created.ID+"/fund", "dev-publisher-key", nil)
 	if status != http.StatusOK {
