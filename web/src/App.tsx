@@ -18,6 +18,7 @@ import { cx, ErrorNote } from "./ui";
 
 const TITLES: Record<string, string> = {
   home: "首页",
+  auth: "登录",
   tasks: "任务列表",
   new: "创建任务",
   task: "任务详情",
@@ -48,9 +49,13 @@ export function App() {
   }, [route]);
 
   useEffect(() => {
-    const page = signedIn ? (TITLES[route.name] ?? "任务游戏") : "登录";
+    const page = TITLES[route.name] ?? (signedIn ? "任务游戏" : "登录");
     document.title = `${page} · 任务游戏`;
   }, [route, signedIn]);
+
+  useEffect(() => {
+    if (signedIn && route.name === "auth") window.location.replace(href.home);
+  }, [signedIn, route.name]);
 
   return (
     <div className={cx("app", !signedIn && "auth-app")}>
@@ -67,6 +72,11 @@ export function App() {
         <p className={cx("health", health === "ok" && "ok", health === "down" && "down")}>
           {health === "checking" ? "正在连接…" : health === "ok" ? "服务已连接" : "服务未连接"}
         </p>
+        {!signedIn ? (
+          <a className="btn compact secondary" href={href.login}>
+            登录 / 注册
+          </a>
+        ) : null}
       </header>
 
       {signedIn ? (
@@ -99,11 +109,12 @@ export function App() {
         </aside>
       ) : null}
 
-      <main className={cx("main", !signedIn && "auth-main")}>
+      <main className={cx("main", !signedIn && route.name === "auth" && "auth-main")}>
         {signedIn ? (
           <>
             <ErrorNote message={chatError} />
             {route.name === "home" ? <Home /> : null}
+            {route.name === "auth" ? <Home /> : null}
             {route.name === "tasks" ? <TaskList /> : null}
             {route.name === "new" ? <CreateTask /> : null}
             {route.name === "task" ? <TaskDetail key={route.id} id={route.id} /> : null}
@@ -112,6 +123,10 @@ export function App() {
             {route.name === "friends" ? <Friends /> : null}
             {route.name === "settings" ? <Settings /> : null}
             {route.name === "conversation" ? <Conversation key={route.id} id={route.id} /> : null}
+          </>
+        ) : route.name === "home" || route.name === "tasks" ? (
+          <>
+            {route.name === "home" ? <Home /> : <TaskList />}
           </>
         ) : (
           <AuthScreen />

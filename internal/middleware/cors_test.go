@@ -13,6 +13,8 @@ func TestLocalDevOriginsCoverVite(t *testing.T) {
 		set[origin] = struct{}{}
 	}
 	for _, origin := range []string{
+		"http://localhost:5137",
+		"http://127.0.0.1:5137",
 		"http://localhost:5173",
 		"http://127.0.0.1:5173",
 		"http://[::1]:5173",
@@ -27,7 +29,7 @@ func TestLocalDevOriginsCoverVite(t *testing.T) {
 		t.Fatal("non-local origin was allowed")
 	}
 	if _, ok := set["http://localhost:5172"]; ok {
-		t.Fatal("port below the vite range was allowed")
+		t.Fatal("unlisted port was allowed")
 	}
 	if _, ok := set["http://localhost:5186"]; ok {
 		t.Fatal("port above the vite range was allowed")

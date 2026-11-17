@@ -2,6 +2,7 @@ package task
 
 import (
 	"context"
+	"strings"
 
 	"taskgame/internal/auth"
 	"taskgame/internal/svc"
@@ -25,9 +26,15 @@ func NewListTasksLogic(ctx context.Context, svcCtx *svc.ServiceContext) *ListTas
 }
 
 func (l *ListTasksLogic) ListTasks(req *types.ListTasksReq) (*types.TaskList, error) {
-	userID, err := auth.Require(l.ctx)
-	if err != nil {
-		return nil, err
+	// The market listing is public; only the personal "assignable=me" view
+	// needs a caller id.
+	userID, _ := auth.UserID(l.ctx)
+	if strings.TrimSpace(req.Assignable) == "me" {
+		uid, err := auth.Require(l.ctx)
+		if err != nil {
+			return nil, err
+		}
+		userID = uid
 	}
 	return l.svcCtx.Engine.ListTasks(l.ctx, userID, req)
 }

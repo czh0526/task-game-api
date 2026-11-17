@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ListTasksQuery, Task, TaskKind } from "taskgame-client";
+import { isSignedIn } from "../client";
 import { useApp } from "../context";
 import { formatCredits, formatError, formatTime, isAbort, PAYMENT_MODE_LABEL } from "../format";
 import { href } from "../route";
-import { ErrorNote, Screen, StatusPill } from "../ui";
+import { ErrorNote, cx, Screen, StatusPill } from "../ui";
 
 const CATEGORIES: Array<{
   kind: TaskKind;
@@ -40,12 +41,17 @@ type Scope = "all" | "available";
 
 export function Home() {
   const { client, clientError, settings } = useApp();
+  const signedIn = isSignedIn(settings);
   const [scope, setScope] = useState<Scope>("all");
   const [items, setItems] = useState<Task[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
   const requestSeq = useRef(0);
+
+  useEffect(() => {
+    if (!signedIn && scope === "available") setScope("all");
+  }, [signedIn, scope]);
 
   useEffect(() => {
     if (!client) return;
@@ -96,7 +102,7 @@ export function Home() {
   return (
     <Screen
       title="首页"
-      lede="任务按玩法分成三类。这里展示最近的任务，点开卡片进入详情；「查看全部」会带着类型筛选进入任务列表。"
+      lede="不用登录也能浏览任务市场。任务按玩法分成三类；登录后可查看「可接任务」并参与承接。"
     >
       <ErrorNote message={client ? error : clientError} />
 
@@ -105,18 +111,31 @@ export function Home() {
           <p className="eyebrow">任务市场</p>
           <h2>找到适合你的任务</h2>
           <p className="home-hero-copy">
-            独占、竞争、协作三种玩法，托管与结算都是模拟积分。注册后即可承接，也可以发布自己的任务。
+            独占、竞争、协作三种玩法，托管与结算都是模拟积分。未登录可浏览，登录后即可承接或发布任务。
           </p>
           <div className="home-hero-actions">
-            <a className="btn primary" href={href.tasks}>
-              浏览任务
-            </a>
-            <a className="btn secondary" href={href.newTask}>
-              创建任务
-            </a>
+            {signedIn ? (
+              <>
+                <a className="btn primary" href={href.tasks}>
+                  浏览任务
+                </a>
+                <a className="btn secondary" href={href.newTask}>
+                  创建任务
+                </a>
+              </>
+            ) : (
+              <>
+                <a className="btn primary" href={href.login}>
+                  登录 / 注册
+                </a>
+                <a className="btn secondary" href={href.tasks}>
+                  浏览任务列表
+                </a>
+              </>
+            )}
           </div>
         </div>
-        <div className="home-stats" aria-label="任务概览">
+        <div className={cx("home-stats", !signedIn && "two")} aria-label="任务概览">
           <div className="stat">
             <strong>{stats.total}</strong>
             <span>任务总数</span>
@@ -125,10 +144,12 @@ export function Home() {
             <strong>{stats.open}</strong>
             <span>招募中</span>
           </div>
-          <div className="stat">
-            <strong>{stats.mine}</strong>
-            <span>与我相关</span>
-          </div>
+          {signedIn ? (
+            <div className="stat">
+              <strong>{stats.mine}</strong>
+              <span>与我相关</span>
+            </div>
+          ) : null}
         </div>
       </section>
 
@@ -137,9 +158,15 @@ export function Home() {
           <button type="button" className={scope === "all" ? "tab on" : "tab"} onClick={() => setScope("all")}>
             全部任务
           </button>
-          <button type="button" className={scope === "available" ? "tab on" : "tab"} onClick={() => setScope("available")}>
-            只看可接
-          </button>
+          {signedIn ? (
+            <button type="button" className={scope === "available" ? "tab on" : "tab"} onClick={() => setScope("available")}>
+              只看可接
+            </button>
+          ) : (
+            <a className="tab" href={href.login}>
+              登录后看可接任务
+            </a>
+          )}
         </div>
         <button type="button" className="btn ghost" onClick={() => setReloadToken((value) => value + 1)}>
           刷新

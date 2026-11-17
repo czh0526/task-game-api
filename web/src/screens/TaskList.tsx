@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ListTasksQuery, Task, TaskKind, TaskStatus } from "taskgame-client";
+import { isSignedIn } from "../client";
 import { useApp } from "../context";
 import { KIND_LABEL, PAYMENT_MODE_LABEL, STATUS_LABEL, formatCredits, formatError, isAbort } from "../format";
 import { href, useRoute } from "../route";
@@ -21,6 +22,7 @@ function listQuery(status: "" | TaskStatus, kind: "" | TaskKind, tab: Tab, curso
 
 export function TaskList() {
   const { client, clientError, settings } = useApp();
+  const signedIn = isSignedIn(settings);
   const route = useRoute();
   const routeKind = route.name === "tasks" ? route.kind ?? "" : "";
   const [items, setItems] = useState<Task[]>([]);
@@ -84,18 +86,23 @@ export function TaskList() {
   return (
     <Screen
       title="任务列表"
-      lede="「可接任务」向服务端要 assignable=me。其他页签仍加载市场，再按发布者和参与关系在本地过滤。状态和类型会传给 listTasks。"
+      lede={
+        signedIn
+          ? "「可接任务」向服务端要 assignable=me。其他页签仍加载市场，再按发布者和参与关系在本地过滤。状态和类型会传给 listTasks。"
+          : "公开浏览任务市场；状态和类型筛选会传给 listTasks。登录后可查看可接任务、我发布的和我参与的任务。"
+      }
     >
       <ErrorNote message={client ? error : clientError} />
       <div className="toolbar">
         <div className="tabs" role="tablist">
-          {(
-            [
-              ["all", "全部"],
-              ["published", "我发布的"],
-              ["open", "可接任务"],
-              ["mine", "我参与的"],
-            ] as const
+          {(signedIn
+            ? ([
+                ["all", "全部"],
+                ["published", "我发布的"],
+                ["open", "可接任务"],
+                ["mine", "我参与的"],
+              ] as const)
+            : ([["all", "全部"]] as const)
           ).map(([value, label]) => (
             <button key={value} type="button" className={tab === value ? "tab on" : "tab"} onClick={() => setTab(value)}>
               {label}
@@ -166,8 +173,8 @@ export function TaskList() {
         <button type="button" className="btn secondary" disabled={!nextCursor || loading} onClick={() => void loadMore()}>
           {loading ? "加载中…" : nextCursor ? "加载更多" : "没有更多"}
         </button>
-        <a className="btn primary" href={href.newTask}>
-          创建任务
+        <a className="btn primary" href={signedIn ? href.newTask : href.login}>
+          {signedIn ? "创建任务" : "登录后创建"}
         </a>
       </div>
     </Screen>
