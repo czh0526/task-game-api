@@ -107,3 +107,66 @@ func TestTaskListFilters(t *testing.T) {
 		t.Fatalf("count design: %d %v", n, err)
 	}
 }
+
+func TestTaskFullTextSearch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "q.db")
+	st, err := Open("file:"+path+"?mode=rwc", 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
+
+	now := time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC)
+	tasks := []model.Task{
+		{ID: "tsk_title", Kind: model.KindExclusive, Title: "Deliver a website", Description: "Build a landing page",
+			Status: model.StatusOpen, PublisherID: "usr_publisher", Keywords: []string{"design"},
+			Payment: model.Payment{Mode: model.PayOneShot, Amount: 100}, CreatedAt: now, UpdatedAt: now},
+		{ID: "tsk_desc", Kind: model.KindExclusive, Title: "Write docs", Description: "Translate the manual to French",
+			Status: model.StatusOpen, PublisherID: "usr_publisher", Keywords: []string{"writing"},
+			Payment: model.Payment{Mode: model.PayOneShot, Amount: 100}, CreatedAt: now, UpdatedAt: now},
+		{ID: "tsk_kw", Kind: model.KindExclusive, Title: "Fix bug", Description: "d",
+			Status: model.StatusOpen, PublisherID: "usr_publisher", Keywords: []string{"french"},
+			Payment: model.Payment{Mode: model.PayOneShot, Amount: 100}, CreatedAt: now, UpdatedAt: now},
+	}
+	for _, task := range tasks {
+		if err := st.Tasks().Insert(ctx, task); err != nil {
+			t.Fatalf("insert %s: %v", task.ID, err)
+		}
+	}
+
+	ids := func(q string) []string {
+		f := model.TaskFilter{Q: q, Limit: 100}
+		rows, err := st.Tasks().List(ctx, f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := make([]string, 0, len(rows))
+		for _, r := range rows {
+			out = append(out, r.ID)
+		}
+		return out
+	}
+
+	// Case-insensitive match in title.
+	if got := ids("WEBSITE"); len(got) != 1 || got[0] != "tsk_title" {
+		t.Fatalf("q title: %v", got)
+	}
+	// Match in description.
+	if got := ids("translate"); len(got) != 1 || got[0] != "tsk_desc" {
+		t.Fatalf("q description: %v", got)
+	}
+	// Match in keywords.
+	if got := ids("French"); len(got) != 2 {
+		t.Fatalf("q keywords (desc + kw): %v", got)
+	}
+	// LIKE metacharacters are treated literally.
+	if got := ids("%"); len(got) != 0 {
+		t.Fatalf("q literal percent: %v", got)
+	}
+	// Count applies the full-text filter too.
+	n, err := st.Tasks().Count(ctx, model.TaskFilter{Q: "French"})
+	if err != nil || n != 2 {
+		t.Fatalf("count q: %d %v", n, err)
+	}
+}

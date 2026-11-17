@@ -36,6 +36,8 @@ Development keys (`etc/taskgame.yaml`):
 
 客户端会把末尾的 `/v1` 当成协议前缀。`health()` 请求 `{origin}/health`。其余方法请求 `{origin}/v1/...`。注册、创建任务、webhook、会话、消息成功时是 **201**，其他成功是 **200**。除 `/health`、`GET /v1/tasks`、`POST /v1/register`、`POST /v1/login` 外都要鉴权；`GET /v1/tasks?assignable=me` 仍需鉴权。
 
+`GET /v1/tasks` 支持 `q`（对标题、描述、关键字做不区分大小写的全文检索），并可组合 `keyword`、`urgency`、`recurrence`、`executor_requirement`、`min_amount`/`max_amount`、`latitude`/`longitude`/`radius_km`、`sort`。所有筛选都在服务端分页前完成，返回的 `total` 是过滤后的命中总数（忽略分页），因此上万条任务也不会被单页截断。
+
 ### 鉴权
 
 只配置一种。服务端如果同时收到两个头，会只认 `X-Api-Key`。客户端在构造时拒绝同时传入两套凭证，避免打到意外的用户。
@@ -692,7 +694,20 @@ if (chatId) {
   await client.listMessages(chatId, { limit: 50 });
 }
 await client.listTasks({ assignable: "me" });
+// q is a case-insensitive full-text search over title, description and keywords.
+// Combine it with any facet; all filters run in SQL before pagination.
+await client.listTasks({
+  q: "website design",
+  urgency: "within_3_days",
+  min_amount: 100,
+  latitude: 39.9042,
+  longitude: 116.4074,
+  radius_km: 50,
+  sort: "distance_asc",
+});
 await client.listMyInvites({ status: "pending" });
 ```
+
+`GET /v1/tasks` also accepts `q` (literal full-text match over title, description and keywords), plus `keyword`, `urgency`, `recurrence`, `executor_requirement`, `min_amount`/`max_amount`, `latitude`/`longitude`/`radius_km` and `sort`. Every filter runs on the server before pagination; the returned `total` is the filtered match count ignoring pagination, so tens of thousands of tasks are never truncated by a single page.
 
 `me().is_arbiter` is true for `usr_arbiter` in the dev config (`X-Api-Key: dev-arbiter-key` or `make token USER_ID=usr_arbiter`). Per-seat disputes freeze only that seat (`role_id`). A task-level refund closes as `cancelled`. A payout closes as `settled`. Message pages are oldest-first. New webhook events: `task.revision_requested`, `task.resolve_proposed`, `task.arbitrated`, `task.invited`, `task.invite_declined`, `escrow.unfreeze`. Timeouts reuse `task.cancelled` with `data.reason` of `open_timeout`, `start_timeout`, or `winner_select_timeout`. A per-seat open-seat refund emits `escrow.refund` with `reason` `seat_timeout`.

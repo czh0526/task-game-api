@@ -286,7 +286,7 @@ npm run example:exclusive
 cd web && npm install && npm run dev
 ```
 
-打开 `http://localhost:5137` 即可看到公开首页（未登录也能按独占、竞争、协作浏览任务，并可点关键字分类筛选）；注册/登录后可进入完整界面。创建任务时可设置 `keywords` 数组，用于首页按关键字分类；还可设置 `attributes`（位置、坐标 latitude/longitude、时限紧急度、重复周期、完成者条件标签），首页据此展示与筛选。`GET /v1/tasks` 支持服务端筛选：`keyword`、`urgency`、`recurrence`、`executor_requirement`、`min_amount`/`max_amount`、`latitude`/`longitude`+`radius_km`（Haversine 距离，作用于全部任务）以及 `sort`（recent/amount_asc/amount_desc/deadline_asc/distance_asc），并返回 `total` 命中数——筛选在 SQL 里完成，不受 100 条分页上限影响。报酬额始终取 `payment.amount`。用法、localStorage 键和三种任务的点法见 [`web/README.md`](web/README.md)。进程为本地 Vite 源（`localhost` / `127.0.0.1` / `[::1]` 的 5137、4173 与 5173–5185）加了 CORS 预检，业务路由不变。
+打开 `http://localhost:5137` 即可看到公开首页（未登录也能按独占、竞争、协作浏览任务，并可点关键字分类筛选）；注册/登录后可进入完整界面。创建任务时可设置 `keywords` 数组，用于首页按关键字分类；还可设置 `attributes`（位置、坐标 latitude/longitude、时限紧急度、重复周期、完成者条件标签），首页据此展示与筛选。`GET /v1/tasks` 支持服务端筛选：`q`（标题/描述/关键字全文检索）、`keyword`、`urgency`、`recurrence`、`executor_requirement`、`min_amount`/`max_amount`、`latitude`/`longitude`+`radius_km`（Haversine 距离，作用于全部任务）以及 `sort`（recent/amount_asc/amount_desc/deadline_asc/distance_asc），并返回 `total` 命中数——筛选在 SQL 里完成，不受 100 条分页上限影响。首页顶部有全文搜索框，所有筛选条件写入 URL（`#/home?q=...&keyword=...`），刷新和分享链接都能还原。报酬额始终取 `payment.amount`。用法、localStorage 键和三种任务的点法见 [`web/README.md`](web/README.md)。进程为本地 Vite 源（`localhost` / `127.0.0.1` / `[::1]` 的 5137、4173 与 5173–5185）加了 CORS 预检，业务路由不变。
 
 ## TypeScript client
 

@@ -264,6 +264,42 @@ describe("protocol calls", () => {
     assert.equal(calls[6]?.method, "GET");
   });
 
+  it("sends every listTasks search parameter including q and distance", async () => {
+    const calls: Captured[] = [];
+    const client = new TaskGameClient({
+      baseUrl: "http://127.0.0.1:8891",
+      fetch: captureFetch(200, { items: [], total: 0 }, calls),
+    });
+    await client.listTasks({
+      q: "website design",
+      keyword: "design",
+      urgency: "within_3_days",
+      recurrence: "weekly",
+      executor_requirement: "human",
+      min_amount: 100,
+      max_amount: 900,
+      latitude: 39.9042,
+      longitude: 116.4074,
+      radius_km: 50,
+      sort: "distance_asc",
+      limit: 30,
+    });
+
+    const params = new URL(calls[0]?.url ?? "").searchParams;
+    assert.equal(params.get("q"), "website design");
+    assert.equal(params.get("keyword"), "design");
+    assert.equal(params.get("urgency"), "within_3_days");
+    assert.equal(params.get("recurrence"), "weekly");
+    assert.equal(params.get("executor_requirement"), "human");
+    assert.equal(params.get("min_amount"), "100");
+    assert.equal(params.get("max_amount"), "900");
+    assert.equal(params.get("latitude"), "39.9042");
+    assert.equal(params.get("longitude"), "116.4074");
+    assert.equal(params.get("radius_km"), "50");
+    assert.equal(params.get("sort"), "distance_asc");
+    assert.equal(params.get("limit"), "30");
+  });
+
   it("sends submission_id, dispute reason, dropout, webhook, chat, and message", async () => {
     const calls: Captured[] = [];
     const client = new TaskGameClient({

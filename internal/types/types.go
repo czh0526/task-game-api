@@ -149,6 +149,7 @@ type HealthResp struct {
 }
 
 type ListTasksReq struct {
+	Q                   string   `form:"q,optional"`
 	Status              string   `form:"status,optional,options=draft|open|active|in_review|disputed|settled|cancelled"`
 	Kind                string   `form:"kind,optional,options=exclusive|competitive|collaborative"`
 	Keyword             string   `form:"keyword,optional"`

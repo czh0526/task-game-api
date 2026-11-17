@@ -48,20 +48,76 @@ const CATEGORIES: Array<{
 const PREVIEW_LIMIT = 3;
 type Scope = "all" | "available";
 
+// Filters live in the URL hash after "#/home?" so a refresh or a shared link
+// restores the exact same search. parseRoute ignores the query for /home.
+type FilterParams = {
+  q: string;
+  scope: Scope;
+  keyword: string | null;
+  urgency: string | null;
+  recurrence: string | null;
+  requirement: string | null;
+  lat: string;
+  lng: string;
+  radiusKm: string;
+  sort: "recent" | "amount_desc" | "deadline_asc" | "distance_asc";
+};
+
+const SORTS = ["recent", "amount_desc", "deadline_asc", "distance_asc"] as const;
+
+function readFilters(): FilterParams {
+  const raw = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : window.location.hash;
+  const question = raw.indexOf("?");
+  const params = question >= 0 ? new URLSearchParams(raw.slice(question + 1)) : new URLSearchParams();
+  const sort = params.get("sort");
+  return {
+    q: params.get("q") ?? "",
+    scope: params.get("scope") === "available" ? "available" : "all",
+    keyword: params.get("keyword"),
+    urgency: params.get("urgency"),
+    recurrence: params.get("recurrence"),
+    requirement: params.get("requirement"),
+    lat: params.get("lat") ?? "",
+    lng: params.get("lng") ?? "",
+    radiusKm: params.get("radius") ?? "10",
+    sort: SORTS.find((item) => item === sort) ?? "recent",
+  };
+}
+
+function writeFilters(f: FilterParams): void {
+  const params = new URLSearchParams();
+  if (f.q.trim()) params.set("q", f.q.trim());
+  if (f.scope === "available") params.set("scope", "available");
+  if (f.keyword) params.set("keyword", f.keyword);
+  if (f.urgency) params.set("urgency", f.urgency);
+  if (f.recurrence) params.set("recurrence", f.recurrence);
+  if (f.requirement) params.set("requirement", f.requirement);
+  if (f.lat.trim()) params.set("lat", f.lat.trim());
+  if (f.lng.trim()) params.set("lng", f.lng.trim());
+  if (f.lat.trim() && f.lng.trim() && f.radiusKm.trim()) params.set("radius", f.radiusKm.trim());
+  if (f.sort !== "recent") params.set("sort", f.sort);
+  const text = params.toString();
+  const next = `#/home${text ? `?${text}` : ""}`;
+  if (window.location.hash !== next) window.history.replaceState(null, "", next);
+}
+
 export function Home() {
   const { client, clientError, settings } = useApp();
   const signedIn = isSignedIn(settings);
-  const [scope, setScope] = useState<Scope>("all");
+  const [initial] = useState(readFilters);
+  const [searchText, setSearchText] = useState(initial.q);
+  const [searchDraft, setSearchDraft] = useState(initial.q);
+  const [scope, setScope] = useState<Scope>(initial.scope);
   const [items, setItems] = useState<Task[]>([]);
   const [facetItems, setFacetItems] = useState<Task[]>([]);
-  const [activeKeyword, setActiveKeyword] = useState<string | null>(null);
-  const [activeUrgency, setActiveUrgency] = useState<string | null>(null);
-  const [activeRecurrence, setActiveRecurrence] = useState<string | null>(null);
-  const [activeRequirement, setActiveRequirement] = useState<string | null>(null);
-  const [lat, setLat] = useState("");
-  const [lng, setLng] = useState("");
-  const [radiusKm, setRadiusKm] = useState("10");
-  const [sort, setSort] = useState<"recent" | "amount_desc" | "deadline_asc" | "distance_asc">("recent");
+  const [activeKeyword, setActiveKeyword] = useState<string | null>(initial.keyword);
+  const [activeUrgency, setActiveUrgency] = useState<string | null>(initial.urgency);
+  const [activeRecurrence, setActiveRecurrence] = useState<string | null>(initial.recurrence);
+  const [activeRequirement, setActiveRequirement] = useState<string | null>(initial.requirement);
+  const [lat, setLat] = useState(initial.lat);
+  const [lng, setLng] = useState(initial.lng);
+  const [radiusKm, setRadiusKm] = useState(initial.radiusKm);
+  const [sort, setSort] = useState<typeof initial.sort>(initial.sort);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -76,6 +132,7 @@ export function Home() {
   // every task, not in the browser over a single 100-row page.
   const query = useMemo<ListTasksQuery>(() => {
     const q: ListTasksQuery = { limit: 100, sort };
+    if (searchText.trim()) q.q = searchText.trim();
     if (scope === "available") q.assignable = "me";
     if (activeKeyword) q.keyword = activeKeyword;
     if (activeUrgency) q.urgency = activeUrgency as ListTasksQuery["urgency"];
@@ -91,7 +148,23 @@ export function Home() {
       if (sort === "recent") q.sort = "distance_asc";
     }
     return q;
-  }, [scope, activeKeyword, activeUrgency, activeRecurrence, activeRequirement, lat, lng, radiusKm, sort]);
+  }, [searchText, scope, activeKeyword, activeUrgency, activeRecurrence, activeRequirement, lat, lng, radiusKm, sort]);
+
+  // Persist the active filters to the URL so refresh/back and shared links work.
+  useEffect(() => {
+    writeFilters({
+      q: searchText,
+      scope,
+      keyword: activeKeyword,
+      urgency: activeUrgency,
+      recurrence: activeRecurrence,
+      requirement: activeRequirement,
+      lat,
+      lng,
+      radiusKm,
+      sort,
+    });
+  }, [searchText, scope, activeKeyword, activeUrgency, activeRecurrence, activeRequirement, lat, lng, radiusKm, sort]);
 
   // Unfiltered baseline used only to build the filter option lists, so options
   // don't disappear while a filter is active.
@@ -177,7 +250,7 @@ export function Home() {
     [total, items, settings.userId],
   );
 
-  const anyFilter = Boolean(activeKeyword || activeUrgency || activeRecurrence || activeRequirement || (lat.trim() && lng.trim()));
+  const anyFilter = Boolean(searchText.trim() || activeKeyword || activeUrgency || activeRecurrence || activeRequirement || (lat.trim() && lng.trim()));
 
   return (
     <Screen
@@ -232,6 +305,39 @@ export function Home() {
           ) : null}
         </div>
       </section>
+
+      <form
+        className="home-search"
+        role="search"
+        onSubmit={(event) => {
+          event.preventDefault();
+          setSearchText(searchDraft);
+        }}
+      >
+        <input
+          type="search"
+          value={searchDraft}
+          onChange={(event) => setSearchDraft(event.target.value)}
+          placeholder="搜索任务的标题、描述或关键字，回车搜索"
+          aria-label="全文搜索任务"
+        />
+        <button type="submit" className="btn primary">
+          搜索
+        </button>
+        {searchText.trim() ? (
+          <button
+            type="button"
+            className="btn ghost"
+            onClick={() => {
+              setSearchText("");
+              setSearchDraft("");
+            }}
+          >
+            清除搜索
+          </button>
+        ) : null}
+      </form>
+      {searchText.trim() ? <p className="hint">正在全文搜索「{searchText.trim()}」，下面的筛选会在结果中继续收窄。</p> : null}
 
       <div className="toolbar home-toolbar">
         <div className="tabs" role="tablist" aria-label="任务范围">
@@ -461,6 +567,8 @@ export function Home() {
           type="button"
           className="btn ghost home-clear-all"
           onClick={() => {
+            setSearchText("");
+            setSearchDraft("");
             setActiveKeyword(null);
             setActiveUrgency(null);
             setActiveRecurrence(null);

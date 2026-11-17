@@ -107,6 +107,7 @@ func (e *Engine) ListTasks(ctx context.Context, userID string, req *types.ListTa
 // coordinate and a positive radius.
 func taskFilterFromReq(req *types.ListTasksReq) (model.TaskFilter, error) {
 	f := model.TaskFilter{
+		Q:                   trim(req.Q),
 		Status:              trim(req.Status),
 		Kind:                trim(req.Kind),
 		Keyword:             trim(req.Keyword),

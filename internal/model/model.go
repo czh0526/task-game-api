@@ -291,6 +291,7 @@ type ResolveState struct {
 }
 
 type TaskFilter struct {
+	Q                   string
 	Status              string
 	Statuses            []string
 	Kind                string

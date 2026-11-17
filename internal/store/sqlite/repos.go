@@ -246,6 +246,14 @@ func taskWhere(f model.TaskFilter) (string, []any) {
 		q += ` AND kind = ?`
 		args = append(args, f.Kind)
 	}
+	if f.Q != "" {
+		// Full-text across title, description and keywords. instr() treats the
+		// needle literally, so %, _ and \ in user input need no escaping.
+		q += ` AND (instr(lower(tasks.title), lower(?)) > 0` +
+			` OR instr(lower(tasks.description), lower(?)) > 0` +
+			` OR EXISTS (SELECT 1 FROM json_each(tasks.keywords) WHERE instr(lower(value), lower(?)) > 0))`
+		args = append(args, f.Q, f.Q, f.Q)
+	}
 	if f.Keyword != "" {
 		q += ` AND EXISTS (SELECT 1 FROM json_each(tasks.keywords) WHERE value = ?)`
 		args = append(args, f.Keyword)

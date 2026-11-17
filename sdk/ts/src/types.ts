@@ -265,6 +265,8 @@ export interface TaskList {
 }
 
 export interface ListTasksQuery {
+  /** Full-text search over title, description and keywords. */
+  q?: string;
   status?: TaskStatus;
   kind?: TaskKind;
   /** Return tasks carrying this exact keyword. */

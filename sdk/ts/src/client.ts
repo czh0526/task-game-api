@@ -684,8 +684,19 @@ export function resolveServiceUrls(baseUrl: string): ServiceUrls {
 function listQuery(query: ListTasksQuery | undefined): string {
   if (!query) return "";
   const params = new URLSearchParams();
+  if (query.q !== undefined) params.set("q", query.q);
   if (query.status !== undefined) params.set("status", query.status);
   if (query.kind !== undefined) params.set("kind", query.kind);
+  if (query.keyword !== undefined) params.set("keyword", query.keyword);
+  if (query.urgency !== undefined) params.set("urgency", query.urgency);
+  if (query.recurrence !== undefined) params.set("recurrence", query.recurrence);
+  if (query.executor_requirement !== undefined) params.set("executor_requirement", query.executor_requirement);
+  if (query.min_amount !== undefined) params.set("min_amount", String(query.min_amount));
+  if (query.max_amount !== undefined) params.set("max_amount", String(query.max_amount));
+  if (query.latitude !== undefined) params.set("latitude", String(query.latitude));
+  if (query.longitude !== undefined) params.set("longitude", String(query.longitude));
+  if (query.radius_km !== undefined) params.set("radius_km", String(query.radius_km));
+  if (query.sort !== undefined) params.set("sort", query.sort);
   if (query.limit !== undefined) params.set("limit", String(query.limit));
   if (query.cursor !== undefined) params.set("cursor", query.cursor);
   if (query.assignable !== undefined) params.set("assignable", query.assignable);

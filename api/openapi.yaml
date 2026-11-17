@@ -177,6 +177,10 @@ paths:
         a Bearer JWT or X-Api-Key and returns 401 without one.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
+        - name: q
+          in: query
+          schema: { type: string }
+          description: Full-text search over task title, description and keywords (case-insensitive literal match).
         - name: status
           in: query
           schema:
