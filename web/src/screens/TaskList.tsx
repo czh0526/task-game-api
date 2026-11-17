@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ListTasksQuery, Task, TaskKind, TaskStatus } from "taskgame-client";
 import { useApp } from "../context";
 import { KIND_LABEL, PAYMENT_MODE_LABEL, STATUS_LABEL, formatCredits, formatError, isAbort } from "../format";
-import { href } from "../route";
+import { href, useRoute } from "../route";
 import { ErrorNote, KindPill, Screen, StatusPill } from "../ui";
 
 const STATUSES: TaskStatus[] = ["draft", "open", "active", "in_review", "disputed", "settled", "cancelled"];
@@ -21,15 +21,21 @@ function listQuery(status: "" | TaskStatus, kind: "" | TaskKind, tab: Tab, curso
 
 export function TaskList() {
   const { client, clientError, settings } = useApp();
+  const route = useRoute();
+  const routeKind = route.name === "tasks" ? route.kind ?? "" : "";
   const [items, setItems] = useState<Task[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [status, setStatus] = useState<"" | TaskStatus>("");
-  const [kind, setKind] = useState<"" | TaskKind>("");
+  const [kind, setKind] = useState<"" | TaskKind>(routeKind);
   const [tab, setTab] = useState<Tab>("all");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
   const requestSeq = useRef(0);
+
+  useEffect(() => {
+    setKind(routeKind);
+  }, [routeKind]);
 
   useEffect(() => {
     if (!client) return;
