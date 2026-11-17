@@ -8,6 +8,7 @@ import { AuthScreen } from "./screens/AuthScreen";
 import { Conversation } from "./screens/Conversation";
 import { CreateTask } from "./screens/CreateTask";
 import { Friends } from "./screens/Friends";
+import { Home } from "./screens/Home";
 import { Invites } from "./screens/Invites";
 import { Scores } from "./screens/Scores";
 import { Settings } from "./screens/Settings";
@@ -16,6 +17,7 @@ import { TaskList } from "./screens/TaskList";
 import { cx, ErrorNote } from "./ui";
 
 const TITLES: Record<string, string> = {
+  home: "首页",
   tasks: "任务列表",
   new: "创建任务",
   task: "任务详情",
@@ -72,6 +74,9 @@ export function App() {
           <SessionCard />
           <DevIdentity />
           <nav className="nav">
+          <a href={href.home} aria-current={route.name === "home" ? "page" : undefined}>
+            首页
+          </a>
           <a href={href.tasks} aria-current={route.name === "tasks" || route.name === "task" ? "page" : undefined}>
             任务
           </a>
@@ -98,6 +103,7 @@ export function App() {
         {signedIn ? (
           <>
             <ErrorNote message={chatError} />
+            {route.name === "home" ? <Home /> : null}
             {route.name === "tasks" ? <TaskList /> : null}
             {route.name === "new" ? <CreateTask /> : null}
             {route.name === "task" ? <TaskDetail key={route.id} id={route.id} /> : null}

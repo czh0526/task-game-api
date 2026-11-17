@@ -19,7 +19,7 @@ npm install
 npm run dev
 ```
 
-浏览器打开 `http://localhost:5173`。未登录时停在注册/登录页。注册或登录成功后，Bearer JWT 和用户 id 写进 `localStorage`，之后的任务请求带 `Authorization: Bearer`。Vite 如果 5173 被占用，会顺延到 5185 以内；`npm run preview` 使用 4173。服务只给这些本机源回 CORS 头：`localhost`、`127.0.0.1`、`[::1]` 的端口 4173 和 5173–5185。允许的方法包括 GET、POST、PUT、PATCH 和 DELETE。`POST /v1/register`、`POST /v1/login` 和 `GET /v1/me` 走同一套 CORS。
+浏览器打开 `http://localhost:5173`。未登录时停在注册/登录页。注册或登录成功后，Bearer JWT 和用户 id 写进 `localStorage`，之后的任务请求带 `Authorization: Bearer`。登录后默认进入 `#/home`：首页按独占、竞争、协作三类展示最近任务，可切换「全部任务 / 只看可接」，每类的「查看全部」会带 `?kind=` 跳到任务列表并预选类型。Vite 如果 5173 被占用，会顺延到 5185 以内；`npm run preview` 使用 4173。服务只给这些本机源回 CORS 头：`localhost`、`127.0.0.1`、`[::1]` 的端口 4173 和 5173–5185。允许的方法包括 GET、POST、PUT、PATCH 和 DELETE。`POST /v1/register`、`POST /v1/login` 和 `GET /v1/me` 走同一套 CORS。
 
 ```bash
 cd web
