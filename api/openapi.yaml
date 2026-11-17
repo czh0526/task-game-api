@@ -1386,6 +1386,12 @@ components:
         kind: { $ref: '#/components/schemas/TaskKind' }
         title: { type: string }
         description: { type: string }
+        keywords:
+          type: array
+          description: |
+            Free-form tags used to categorize tasks on the homepage. At most 20
+            keywords, each at most 64 bytes, trimmed and deduplicated by the server.
+          items: { type: string }
         payment:
           type: object
           required: [mode, amount]

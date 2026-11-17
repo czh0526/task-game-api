@@ -198,6 +198,18 @@ export function TaskDetail({ id }: { id: string }) {
       <ErrorNote message={error} />
 
       <div className="facts">
+        {(task.keywords ?? []).length > 0 ? (
+          <Fact
+            label="关键字 keywords"
+            value={
+              <span className="person-list">
+                {(task.keywords ?? []).map((keyword) => (
+                  <span key={keyword} className="card-keyword">#{keyword}</span>
+                ))}
+              </span>
+            }
+          />
+        ) : null}
         <Fact label="发布者 publisher_id" value={<UserRef userId={task.publisher_id} />} />
         <Fact
           label="执行者 executor_ids"

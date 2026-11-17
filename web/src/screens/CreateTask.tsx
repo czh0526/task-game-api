@@ -31,6 +31,7 @@ interface FormState {
   kind: TaskKind;
   title: string;
   description: string;
+  keywords: string;
   amount: string;
   deadline: string;
   quality: string;
@@ -60,6 +61,7 @@ export function CreateTask() {
     kind: "exclusive",
     title: "",
     description: "",
+    keywords: "",
     amount: "500",
     deadline: defaultDeadlineLocal(),
     quality: "达到书面验收标准",
@@ -262,6 +264,16 @@ export function CreateTask() {
         </Field>
         <Field label="说明 description">
           <textarea value={form.description} rows={4} maxLength={20000} onChange={(event) => patch({ description: event.target.value })} required />
+        </Field>
+        <Field
+          label="关键字 keywords"
+          hint="用逗号或空格分隔，用于首页按关键字分类。最多 20 个，每个不超过 64 字节，自动去重。"
+        >
+          <input
+            value={form.keywords}
+            placeholder="设计, 文案, 前端"
+            onChange={(event) => patch({ keywords: event.target.value })}
+          />
         </Field>
         <div className="form-grid">
           <Field
@@ -635,6 +647,16 @@ function buildTask(form: FormState): TaskCreate | string {
   if (!title) return "请填写标题";
   if (!description) return "请填写说明";
   if (!quality) return "请填写验收标准";
+  const keywords = Array.from(
+    new Set(
+      form.keywords
+        .split(/[\s,，、]+/)
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  );
+  if (keywords.length > 20) return "关键字最多 20 个";
+  if (keywords.some((item) => new TextEncoder().encode(item).length > 64)) return "每个关键字不超过 64 字节";
   const payment = buildPayment({
     kind: form.kind,
     mode: form.paymentMode,
@@ -667,7 +689,7 @@ function buildTask(form: FormState): TaskCreate | string {
   } else {
     assignee_policy = { type: "open" };
   }
-  const common = { title, description, payment, acceptance, assignee_policy };
+  const common = { title, description, keywords, payment, acceptance, assignee_policy };
   if (form.kind === "exclusive") return { kind: "exclusive", ...common };
   if (form.kind === "competitive") {
     const slots = parseIntStrict(form.slots);

@@ -215,6 +215,7 @@ type Task struct {
 	Kind                 string
 	Title                string
 	Description          string
+	Keywords             []string
 	Status               string
 	PublisherID          string
 	Payment              Payment

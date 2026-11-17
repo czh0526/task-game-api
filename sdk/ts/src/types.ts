@@ -162,6 +162,8 @@ export interface TaskCreate {
   kind: TaskKind;
   title: string;
   description: string;
+  /** Free-form tags used to categorize tasks on the homepage. */
+  keywords?: string[];
   payment: Payment;
   acceptance: Acceptance;
   assignee_policy: AssigneePolicy;
