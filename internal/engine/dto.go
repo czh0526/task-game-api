@@ -14,6 +14,7 @@ func (e *Engine) toTask(t model.Task, acc *model.EscrowAccount, subs []model.Sub
 		Title:          t.Title,
 		Description:    t.Description,
 		Keywords:       append([]string{}, nonNil(t.Keywords)...),
+		Attributes:     toAttributes(t.Attributes),
 		Payment:        toPayment(t.Payment),
 		Acceptance:     toAcceptance(t.Acceptance),
 		AssigneePolicy: toPolicy(t.AssigneePolicy),
@@ -108,6 +109,15 @@ func (e *Engine) toTask(t model.Task, acc *model.EscrowAccount, subs []model.Sub
 		out.Escrow = toEscrow(*acc)
 	}
 	return out
+}
+
+func toAttributes(a model.TaskAttributes) types.TaskAttributes {
+	return types.TaskAttributes{
+		Location:             a.Location,
+		Urgency:              a.Urgency,
+		Recurrence:           a.Recurrence,
+		ExecutorRequirements: append([]string{}, nonNil(a.ExecutorRequirements)...),
+	}
 }
 
 func toPayment(p model.Payment) types.Payment {

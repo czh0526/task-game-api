@@ -1392,6 +1392,30 @@ components:
             Free-form tags used to categorize tasks on the homepage. At most 20
             keywords, each at most 64 bytes, trimmed and deduplicated by the server.
           items: { type: string }
+        attributes:
+          type: object
+          description: Descriptive facets used to classify a task. Reward amount stays in payment.amount.
+          properties:
+            location:
+              type: string
+              description: Where the task happens, e.g. remote or a city. At most 128 bytes.
+            urgency:
+              type: string
+              enum: [within_3_days, within_week, other]
+              default: other
+              description: Deadline urgency bucket. Omitted means other.
+            recurrence:
+              type: string
+              enum: [one_time, daily, weekly, monthly]
+              default: one_time
+              description: One-off task or a repeating schedule. Omitted means one_time.
+            executor_requirements:
+              type: array
+              description: |
+                Tags describing who should complete the task, e.g. human, agent,
+                young, female, strong_male, experienced. Free-form; at most 20,
+                each at most 64 bytes, trimmed and deduplicated by the server.
+              items: { type: string }
         payment:
           type: object
           required: [mode, amount]

@@ -2,7 +2,16 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ListTasksQuery, Task, TaskKind } from "taskgame-client";
 import { isSignedIn } from "../client";
 import { useApp } from "../context";
-import { formatCredits, formatError, formatTime, isAbort, PAYMENT_MODE_LABEL } from "../format";
+import {
+  executorRequirementLabel,
+  formatCredits,
+  formatError,
+  formatTime,
+  isAbort,
+  PAYMENT_MODE_LABEL,
+  RECURRENCE_LABEL,
+  URGENCY_LABEL,
+} from "../format";
 import { href } from "../route";
 import { ErrorNote, cx, Screen, StatusPill } from "../ui";
 
@@ -45,6 +54,9 @@ export function Home() {
   const [scope, setScope] = useState<Scope>("all");
   const [items, setItems] = useState<Task[]>([]);
   const [activeKeyword, setActiveKeyword] = useState<string | null>(null);
+  const [activeUrgency, setActiveUrgency] = useState<string | null>(null);
+  const [activeRecurrence, setActiveRecurrence] = useState<string | null>(null);
+  const [activeRequirement, setActiveRequirement] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
@@ -90,16 +102,34 @@ export function Home() {
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
   }, [items]);
 
-  // Drop a selection that no longer exists after a refresh.
-  useEffect(() => {
-    if (activeKeyword && !keywordCounts.some((item) => item.name === activeKeyword)) {
-      setActiveKeyword(null);
+  const requirementCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const task of items) {
+      for (const requirement of task.attributes?.executor_requirements ?? []) {
+        counts.set(requirement, (counts.get(requirement) ?? 0) + 1);
+      }
     }
-  }, [activeKeyword, keywordCounts]);
+    return Array.from(counts.entries())
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  }, [items]);
+
+  // Drop selections that no longer exist after a refresh.
+  useEffect(() => {
+    if (activeKeyword && !keywordCounts.some((item) => item.name === activeKeyword)) setActiveKeyword(null);
+    if (activeRequirement && !requirementCounts.some((item) => item.name === activeRequirement)) setActiveRequirement(null);
+  }, [activeKeyword, keywordCounts, activeRequirement, requirementCounts]);
 
   const visibleItems = useMemo(
-    () => (activeKeyword ? items.filter((task) => (task.keywords ?? []).includes(activeKeyword)) : items),
-    [items, activeKeyword],
+    () =>
+      items.filter((task) => {
+        if (activeKeyword && !(task.keywords ?? []).includes(activeKeyword)) return false;
+        if (activeRequirement && !(task.attributes?.executor_requirements ?? []).includes(activeRequirement)) return false;
+        if (activeUrgency && (task.attributes?.urgency ?? "other") !== activeUrgency) return false;
+        if (activeRecurrence && (task.attributes?.recurrence ?? "one_time") !== activeRecurrence) return false;
+        return true;
+      }),
+    [items, activeKeyword, activeRequirement, activeUrgency, activeRecurrence],
   );
 
   const grouped = useMemo(() => {
@@ -232,6 +262,87 @@ export function Home() {
         </section>
       ) : null}
 
+      <section className="keyword-bar" aria-label="按任务属性分类">
+        <div className="keyword-bar-head">
+          <h2>按任务属性分类</h2>
+          {activeUrgency || activeRecurrence || activeRequirement ? (
+            <button
+              type="button"
+              className="btn ghost"
+              onClick={() => {
+                setActiveUrgency(null);
+                setActiveRecurrence(null);
+                setActiveRequirement(null);
+              }}
+            >
+              清除属性筛选
+            </button>
+          ) : null}
+        </div>
+        <div className="attr-filter-row">
+          <span className="attr-filter-label">时限</span>
+          <button
+            type="button"
+            className={activeUrgency === null ? "keyword-chip on" : "keyword-chip"}
+            onClick={() => setActiveUrgency(null)}
+          >
+            全部
+          </button>
+          {Object.entries(URGENCY_LABEL).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              className={activeUrgency === value ? "keyword-chip on" : "keyword-chip"}
+              onClick={() => setActiveUrgency(value)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="attr-filter-row">
+          <span className="attr-filter-label">周期</span>
+          <button
+            type="button"
+            className={activeRecurrence === null ? "keyword-chip on" : "keyword-chip"}
+            onClick={() => setActiveRecurrence(null)}
+          >
+            全部
+          </button>
+          {Object.entries(RECURRENCE_LABEL).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              className={activeRecurrence === value ? "keyword-chip on" : "keyword-chip"}
+              onClick={() => setActiveRecurrence(value)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {requirementCounts.length > 0 ? (
+          <div className="attr-filter-row">
+            <span className="attr-filter-label">完成者</span>
+            <button
+              type="button"
+              className={activeRequirement === null ? "keyword-chip on" : "keyword-chip"}
+              onClick={() => setActiveRequirement(null)}
+            >
+              全部
+            </button>
+            {requirementCounts.map((item) => (
+              <button
+                key={item.name}
+                type="button"
+                className={activeRequirement === item.name ? "keyword-chip on" : "keyword-chip"}
+                onClick={() => setActiveRequirement(item.name)}
+              >
+                {executorRequirementLabel(item.name)} <span>{item.count}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </section>
+
       <div className="home-categories">
         {CATEGORIES.map((category) => {
           const tasks = grouped[category.kind] ?? [];
@@ -286,6 +397,18 @@ export function Home() {
                         <strong>{formatCredits(task.payment.amount)}</strong>
                         <span>{PAYMENT_MODE_LABEL[task.payment.mode] ?? task.payment.mode}</span>
                       </p>
+                      {task.attributes ? (
+                        <p className="home-task-attrs">
+                          {task.attributes.location ? <span>位置 {task.attributes.location}</span> : null}
+                          <span>时限 {URGENCY_LABEL[task.attributes.urgency ?? "other"] ?? task.attributes.urgency}</span>
+                          <span>周期 {RECURRENCE_LABEL[task.attributes.recurrence ?? "one_time"] ?? task.attributes.recurrence}</span>
+                        </p>
+                      ) : null}
+                      {(task.attributes?.executor_requirements ?? []).length > 0 ? (
+                        <p className="home-task-requires">
+                          需要：{(task.attributes?.executor_requirements ?? []).map(executorRequirementLabel).join("、")}
+                        </p>
+                      ) : null}
                       <p className="home-task-deadline">接受截止 {formatTime(task.acceptance.deadline)}</p>
                     </a>
                   </li>

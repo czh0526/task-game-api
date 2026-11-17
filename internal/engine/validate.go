@@ -70,6 +70,10 @@ func (e *Engine) buildTask(publisherID string, req *types.CreateTaskReq) (model.
 	if err != nil {
 		return model.Task{}, err
 	}
+	attributes, err := cleanAttributes(req.Attributes)
+	if err != nil {
+		return model.Task{}, err
+	}
 	conditions, err := cleanConditions(req.Payment.Conditions)
 	if err != nil {
 		return model.Task{}, err
@@ -127,6 +131,7 @@ func (e *Engine) buildTask(publisherID string, req *types.CreateTaskReq) (model.
 		Title:          title,
 		Description:    description,
 		Keywords:       keywords,
+		Attributes:     attributes,
 		Status:         model.StatusDraft,
 		PublisherID:    publisherID,
 		Payment:        model.Payment{Mode: req.Payment.Mode, Amount: req.Payment.Amount, Milestones: milestones, Conditions: conditions},
@@ -150,6 +155,46 @@ func cleanKeywords(in []string) ([]string, error) {
 	out = dedupe(out)
 	if out == nil {
 		out = []string{}
+	}
+	return out, nil
+}
+
+// cleanAttributes validates the descriptive task attributes. Urgency and
+// recurrence default to "other" / "one_time" when omitted. Executor
+// requirements are free-form tags (human, agent, experienced, ...) capped and
+// deduped like keywords.
+func cleanAttributes(in types.TaskAttributes) (model.TaskAttributes, error) {
+	out := model.TaskAttributes{Location: trim(in.Location)}
+	if len(out.Location) > 128 {
+		return model.TaskAttributes{}, biz.Invalid("attributes.location is too long")
+	}
+	urgency := trim(in.Urgency)
+	if urgency == "" {
+		urgency = model.UrgencyOther
+	}
+	switch urgency {
+	case model.UrgencyWithin3Days, model.UrgencyWithinWeek, model.UrgencyOther:
+	default:
+		return model.TaskAttributes{}, biz.Invalid("attributes.urgency must be within_3_days, within_week, or other")
+	}
+	out.Urgency = urgency
+	recurrence := trim(in.Recurrence)
+	if recurrence == "" {
+		recurrence = model.RecurrenceOneTime
+	}
+	switch recurrence {
+	case model.RecurrenceOneTime, model.RecurrenceDaily, model.RecurrenceWeekly, model.RecurrenceMonthly:
+	default:
+		return model.TaskAttributes{}, biz.Invalid("attributes.recurrence must be one_time, daily, weekly, or monthly")
+	}
+	out.Recurrence = recurrence
+	requirements, err := cleanStrings(in.ExecutorRequirements, maxKeywords, 64, "attributes.executor_requirements")
+	if err != nil {
+		return model.TaskAttributes{}, err
+	}
+	out.ExecutorRequirements = dedupe(requirements)
+	if out.ExecutorRequirements == nil {
+		out.ExecutorRequirements = []string{}
 	}
 	return out, nil
 }

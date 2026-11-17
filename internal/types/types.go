@@ -73,12 +73,20 @@ type CreateChatReq struct {
 	TaskId         string   `json:"task_id,optional"`
 }
 
+type TaskAttributes struct {
+	Location             string   `json:"location,optional,omitempty"`
+	Urgency              string   `json:"urgency,optional,omitempty,options=within_3_days|within_week|other"`
+	Recurrence           string   `json:"recurrence,optional,omitempty,options=one_time|daily|weekly|monthly"`
+	ExecutorRequirements []string `json:"executor_requirements,optional,omitempty"`
+}
+
 type CreateTaskReq struct {
 	IdempotencyKey string         `header:"Idempotency-Key,optional" json:"-"`
 	Kind           string         `json:"kind,options=exclusive|competitive|collaborative"`
 	Title          string         `json:"title"`
 	Description    string         `json:"description"`
 	Keywords       []string       `json:"keywords,optional,omitempty"`
+	Attributes     TaskAttributes `json:"attributes,optional,omitempty"`
 	Payment        Payment        `json:"payment"`
 	Acceptance     Acceptance     `json:"acceptance"`
 	AssigneePolicy AssigneePolicy `json:"assignee_policy"`
@@ -200,6 +208,7 @@ type Task struct {
 	Title                string            `json:"title"`
 	Description          string            `json:"description"`
 	Keywords             []string          `json:"keywords,omitempty"`
+	Attributes           TaskAttributes    `json:"attributes,omitempty"`
 	Payment              Payment           `json:"payment"`
 	Acceptance           Acceptance        `json:"acceptance"`
 	AssigneePolicy       AssigneePolicy    `json:"assignee_policy"`

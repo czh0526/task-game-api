@@ -158,12 +158,28 @@ export interface CollaborativeSettings {
   settlement_mode?: SettlementMode;
 }
 
+export type TaskUrgency = "within_3_days" | "within_week" | "other";
+export type TaskRecurrence = "one_time" | "daily" | "weekly" | "monthly";
+
+export interface TaskAttributes {
+  /** Where the task happens, e.g. remote or a city. */
+  location?: string;
+  /** Deadline urgency bucket. Defaults to other. */
+  urgency?: TaskUrgency;
+  /** One-off task or a repeating schedule. Defaults to one_time. */
+  recurrence?: TaskRecurrence;
+  /** Tags describing the desired completer, e.g. human, agent, experienced. */
+  executor_requirements?: string[];
+}
+
 export interface TaskCreate {
   kind: TaskKind;
   title: string;
   description: string;
   /** Free-form tags used to categorize tasks on the homepage. */
   keywords?: string[];
+  /** Descriptive facets used to classify a task. */
+  attributes?: TaskAttributes;
   payment: Payment;
   acceptance: Acceptance;
   assignee_policy: AssigneePolicy;

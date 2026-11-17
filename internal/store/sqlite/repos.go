@@ -181,7 +181,7 @@ func (r *userRepo) ListScoreEvents(ctx context.Context, userID string, limit int
 
 type taskRepo struct{ q querier }
 
-const taskCols = `id, kind, title, description, keywords, status, publisher_id, payment_mode, payment_amount, payment_conditions, milestones, acceptance_deadline, acceptance_quality, acceptance_constraints, review_hours, assignee_policy, competitive, collaborative, executor_ids, winning_submission_id, review_deadline, escrow_id, dispute_reason, cancel_reason, cancel_code, cancelled_at, chat_id, funded_at, start_deadline, winner_select_deadline, dispute_role_id, resolve_json, max_revisions, created_at, updated_at`
+const taskCols = `id, kind, title, description, keywords, attributes, status, publisher_id, payment_mode, payment_amount, payment_conditions, milestones, acceptance_deadline, acceptance_quality, acceptance_constraints, review_hours, assignee_policy, competitive, collaborative, executor_ids, winning_submission_id, review_deadline, escrow_id, dispute_reason, cancel_reason, cancel_code, cancelled_at, chat_id, funded_at, start_deadline, winner_select_deadline, dispute_role_id, resolve_json, max_revisions, created_at, updated_at`
 
 func (r *taskRepo) Insert(ctx context.Context, t model.Task) error {
 	args, err := taskArgs(t)
@@ -291,11 +291,11 @@ type scanner interface {
 func scanTask(s scanner) (model.Task, error) {
 	var t model.Task
 	var conditions, milestones, constraints, policy, executors, created, updated, deadline string
-	var keywordsJSON, resolveJSON string
+	var keywordsJSON, attributesJSON, resolveJSON string
 	var competitive, collaborative, winning, review, cancelled, funded, startBy, winnerBy sql.NullString
 	var reviewHours, maxRevisions int
 	err := s.Scan(
-		&t.ID, &t.Kind, &t.Title, &t.Description, &keywordsJSON, &t.Status, &t.PublisherID,
+		&t.ID, &t.Kind, &t.Title, &t.Description, &keywordsJSON, &attributesJSON, &t.Status, &t.PublisherID,
 		&t.Payment.Mode, &t.Payment.Amount, &conditions, &milestones,
 		&deadline, &t.Acceptance.Quality, &constraints, &reviewHours,
 		&policy, &competitive, &collaborative, &executors,
@@ -311,6 +311,14 @@ func scanTask(s scanner) (model.Task, error) {
 	t.Keywords, err = unmarshalSlice[string](keywordsJSON)
 	if err != nil {
 		return model.Task{}, err
+	}
+	if attributesJSON != "" && attributesJSON != "null" && attributesJSON != "{}" {
+		if err := json.Unmarshal([]byte(attributesJSON), &t.Attributes); err != nil {
+			return model.Task{}, err
+		}
+	}
+	if t.Attributes.ExecutorRequirements == nil {
+		t.Attributes.ExecutorRequirements = []string{}
 	}
 	t.Payment.Conditions, err = unmarshalSlice[string](conditions)
 	if err != nil {
@@ -403,6 +411,13 @@ func taskArgs(t model.Task) ([]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	attributesJSON, err := json.Marshal(t.Attributes)
+	if err != nil {
+		return nil, err
+	}
+	if string(attributesJSON) == "null" {
+		attributesJSON = []byte("{}")
+	}
 	conditions, err := jsonText(nilSlice(t.Payment.Conditions))
 	if err != nil {
 		return nil, err
@@ -450,7 +465,7 @@ func taskArgs(t model.Task) ([]any, error) {
 		resolveJSON = []byte("{}")
 	}
 	return []any{
-		t.ID, t.Kind, t.Title, t.Description, keywordsJSON, t.Status, t.PublisherID,
+		t.ID, t.Kind, t.Title, t.Description, keywordsJSON, string(attributesJSON), t.Status, t.PublisherID,
 		t.Payment.Mode, t.Payment.Amount, conditions, milestones,
 		model.FormatTime(t.Acceptance.Deadline), t.Acceptance.Quality, constraints, t.Acceptance.ReviewHours,
 		string(policy), competitive, collaborative, executors,

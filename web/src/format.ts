@@ -44,6 +44,33 @@ export const PAYMENT_MODE_LABEL: Record<string, string> = {
   milestone: "分阶段",
 };
 
+export const URGENCY_LABEL: Record<string, string> = {
+  within_3_days: "三天内",
+  within_week: "一周内",
+  other: "其它时限",
+};
+
+export const RECURRENCE_LABEL: Record<string, string> = {
+  one_time: "一次性",
+  daily: "每天",
+  weekly: "每周",
+  monthly: "每月",
+};
+
+// Common presets for executor requirements; the field itself is free-form.
+export const EXECUTOR_REQUIREMENT_PRESETS: Array<{ value: string; label: string }> = [
+  { value: "human", label: "真人" },
+  { value: "agent", label: "Agent" },
+  { value: "young", label: "年轻人" },
+  { value: "female", label: "女孩" },
+  { value: "strong_male", label: "强壮的男士" },
+  { value: "experienced", label: "有经验" },
+];
+
+export function executorRequirementLabel(value: string): string {
+  return EXECUTOR_REQUIREMENT_PRESETS.find((item) => item.value === value)?.label ?? value;
+}
+
 export const MILESTONE_STATUS_LABEL: Record<string, string> = {
   pending: "待提交",
   submitted: "待确认",
