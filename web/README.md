@@ -19,7 +19,7 @@ npm install
 npm run dev
 ```
 
-浏览器打开 `http://localhost:5137`。未登录也能看到 `#/home` 公开首页：按独占、竞争、协作三类展示最近任务，可切换「全部任务」，每类的「查看全部」会带 `?kind=` 跳到任务列表并预选类型。「只看可接」和参与操作需要登录。点右上角「登录 / 注册」进入 `#/login`；注册或登录成功后，Bearer JWT 和用户 id 写进 `localStorage`，之后的任务请求带 `Authorization: Bearer`。Vite 在该端口使用严格模式，端口被占用时直接报错；`npm run preview` 使用 4173。服务只给这些本机源回 CORS 头：`localhost`、`127.0.0.1`、`[::1]` 的端口 5137、4173 和 5173–5185。允许的方法包括 GET、POST、PUT、PATCH 和 DELETE。`POST /v1/register`、`POST /v1/login`、`GET /v1/tasks` 和 `GET /v1/me` 走同一套 CORS。
+浏览器打开 `http://localhost:5137`。未登录也能看到 `#/home` 公开首页：按独占、竞争、协作三类展示最近任务，并提供「按关键字分类」筛选栏——点击关键字后三类任务只显示带该关键字的任务，任务卡片上的 `#关键字` 也可点选。创建任务时在「关键字 keywords」里用逗号或空格分隔即可设置（最多 20 个，每个不超过 64 字节，自动去重）。可切换「全部任务」，每类的「查看全部」会带 `?kind=` 跳到任务列表并预选类型。「只看可接」和参与操作需要登录。点右上角「登录 / 注册」进入 `#/login`；注册或登录成功后，Bearer JWT 和用户 id 写进 `localStorage`，之后的任务请求带 `Authorization: Bearer`。Vite 在该端口使用严格模式，端口被占用时直接报错；`npm run preview` 使用 4173。服务只给这些本机源回 CORS 头：`localhost`、`127.0.0.1`、`[::1]` 的端口 5137、4173 和 5173–5185。允许的方法包括 GET、POST、PUT、PATCH 和 DELETE。`POST /v1/register`、`POST /v1/login`、`GET /v1/tasks` 和 `GET /v1/me` 走同一套 CORS。
 
 ```bash
 cd web

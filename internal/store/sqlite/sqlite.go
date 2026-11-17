@@ -152,6 +152,7 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("migrate users email index: %w", err)
 	}
 	if err := addColumns(ctx, db, "tasks", map[string]string{
+		"keywords":               "TEXT NOT NULL DEFAULT '[]'",
 		"cancel_reason":          "TEXT NOT NULL DEFAULT ''",
 		"cancel_code":            "TEXT NOT NULL DEFAULT ''",
 		"cancelled_at":           "TEXT",

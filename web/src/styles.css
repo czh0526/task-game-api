@@ -271,6 +271,46 @@ code.mono, .mono { font-family: var(--mono); font-size: 0.86em; }
 .home-task-deadline { margin: 8px 0 0; color: var(--ink-soft); font-size: 0.8rem; }
 .home-more { margin-top: 8px; }
 
+.keyword-bar {
+  margin: 0 0 14px;
+  padding: 16px;
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+}
+.keyword-bar-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.keyword-bar-head h2 { margin: 0; font-size: 1.05rem; }
+.keyword-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; }
+.keyword-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.keyword-chip span { color: var(--ink-soft); font-size: 0.8rem; }
+.keyword-chip:hover { border-color: var(--accent); }
+.keyword-chip.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.keyword-chip.on span { color: var(--accent-ink); }
+.card-keywords { display: flex; flex-wrap: wrap; gap: 5px; margin: 0 0 6px; }
+.card-keyword {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+.card-keyword:hover, .card-keyword.on { border-color: var(--accent); color: var(--accent); }
+
 .form, .form-grid { display: grid; gap: 12px; }
 .form-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .role-row { display: grid; grid-template-columns: 1.3fr 1fr 0.7fr auto; gap: 8px; align-items: end; }
