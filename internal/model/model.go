@@ -95,6 +95,17 @@ const (
 	DropoutReplace          = "replace"
 	CurrencyCredits         = "credits"
 
+	// Deadline urgency buckets.
+	UrgencyWithin3Days = "within_3_days"
+	UrgencyWithinWeek  = "within_week"
+	UrgencyOther       = "other"
+
+	// Recurrence schedule for a task.
+	RecurrenceOneTime  = "one_time"
+	RecurrenceDaily    = "daily"
+	RecurrenceWeekly   = "weekly"
+	RecurrenceMonthly  = "monthly"
+
 	DeliveryPending   = "pending"
 	DeliveryDelivered = "delivered"
 	DeliveryFailed    = "failed"
@@ -210,12 +221,25 @@ type Collaborative struct {
 	SettlementMode string `json:"settlement_mode,omitempty"`
 }
 
+// TaskAttributes groups the descriptive facets used to classify a task in the
+// marketplace. Payment amount stays in Payment as the single source of truth;
+// the homepage surfaces it alongside these attributes without duplicating it.
+type TaskAttributes struct {
+	Location             string   `json:"location,omitempty"`
+	Latitude             *float64 `json:"latitude,omitempty"`
+	Longitude            *float64 `json:"longitude,omitempty"`
+	Urgency              string   `json:"urgency,omitempty"`
+	Recurrence           string   `json:"recurrence,omitempty"`
+	ExecutorRequirements []string `json:"executor_requirements,omitempty"`
+}
+
 type Task struct {
 	ID                   string
 	Kind                 string
 	Title                string
 	Description          string
 	Keywords             []string
+	Attributes           TaskAttributes
 	Status               string
 	PublisherID          string
 	Payment              Payment
@@ -267,11 +291,22 @@ type ResolveState struct {
 }
 
 type TaskFilter struct {
-	Status   string
-	Statuses []string
-	Kind     string
-	Limit    int
-	Offset   int
+	Q                   string
+	Status              string
+	Statuses            []string
+	Kind                string
+	Keyword             string
+	Urgency             string
+	Recurrence          string
+	ExecutorRequirement string
+	MinAmount           int64
+	MaxAmount           int64
+	Latitude            *float64
+	Longitude           *float64
+	RadiusKm            float64
+	Sort                string
+	Limit               int
+	Offset              int
 }
 
 type User struct {

@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     description TEXT NOT NULL,
     -- JSON array of task keywords (strings), used for homepage categorization.
     keywords TEXT NOT NULL DEFAULT '[]',
+    -- JSON object of descriptive attributes (location, urgency, recurrence, executor_requirements).
+    attributes TEXT NOT NULL DEFAULT '{}',
     status TEXT NOT NULL,
     publisher_id TEXT NOT NULL,
     payment_mode TEXT NOT NULL,

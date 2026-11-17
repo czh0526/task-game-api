@@ -120,6 +120,12 @@ AutoSettle:
 		"title":       "Translate release notes",
 		"description": "Translate the v0.1 notes from Chinese to English.",
 		"keywords":    []string{"translation", "docs", "docs"},
+		"attributes": map[string]any{
+			"location":              "remote",
+			"urgency":               "within_3_days",
+			"recurrence":            "weekly",
+			"executor_requirements": []string{"human", "experienced", "human"},
+		},
 		"payment":     map[string]any{"mode": "one_shot", "amount": 500},
 		"acceptance": map[string]any{
 			"deadline": deadline, "quality": "Complete translation", "review_hours": 72,
@@ -131,15 +137,28 @@ AutoSettle:
 		t.Fatalf("create %d %s", status, raw)
 	}
 	var created struct {
-		ID       string   `json:"id"`
-		Status   string   `json:"status"`
-		Keywords []string `json:"keywords"`
+		ID         string   `json:"id"`
+		Status     string   `json:"status"`
+		Keywords   []string `json:"keywords"`
+		Attributes struct {
+			Location             string   `json:"location"`
+			Urgency              string   `json:"urgency"`
+			Recurrence           string   `json:"recurrence"`
+			ExecutorRequirements []string `json:"executor_requirements"`
+		} `json:"attributes"`
 	}
 	if err := json.Unmarshal(raw, &created); err != nil || created.ID == "" || created.Status != "draft" {
 		t.Fatalf("create body %s", raw)
 	}
 	if len(created.Keywords) != 2 || created.Keywords[0] != "translation" || created.Keywords[1] != "docs" {
 		t.Fatalf("keywords round-trip / dedupe: %v", created.Keywords)
+	}
+	a := created.Attributes
+	if a.Location != "remote" || a.Urgency != "within_3_days" || a.Recurrence != "weekly" {
+		t.Fatalf("attributes round-trip: %+v", a)
+	}
+	if len(a.ExecutorRequirements) != 2 || a.ExecutorRequirements[0] != "human" || a.ExecutorRequirements[1] != "experienced" {
+		t.Fatalf("executor_requirements round-trip / dedupe: %v", a.ExecutorRequirements)
 	}
 	status, raw = do(t, http.MethodPost, base+"/v1/tasks/"+created.ID+"/fund", "dev-publisher-key", nil)
 	if status != http.StatusOK {

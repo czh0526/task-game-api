@@ -229,6 +229,18 @@ code.mono, .mono { font-family: var(--mono); font-size: 0.86em; }
 .stat strong { display: block; font-size: 1.5rem; }
 .stat span { color: var(--ink-soft); font-size: 0.82rem; }
 .home-toolbar { justify-content: space-between; }
+.home-search { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; }
+.home-search input[type="search"] {
+  flex: 1 1 320px;
+  min-width: 0;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-raised);
+  color: var(--ink);
+  font: inherit;
+}
+.home-search input[type="search"]::placeholder { color: var(--ink-soft); }
 .home-categories { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; align-items: start; }
 .category-card {
   padding: 16px;
@@ -310,6 +322,30 @@ code.mono, .mono { font-family: var(--mono); font-size: 0.86em; }
   cursor: pointer;
 }
 .card-keyword:hover, .card-keyword.on { border-color: var(--accent); color: var(--accent); }
+
+.attr-filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.attr-filter-label { width: 3em; color: var(--ink-soft); font-size: 0.85rem; }
+.home-sort { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-soft); font-size: 0.85rem; }
+.home-sort select { padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); }
+.distance-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; margin-top: 10px; }
+.distance-row label { display: flex; flex-direction: column; gap: 4px; color: var(--ink-soft); font-size: 0.82rem; }
+.distance-row input { width: 130px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); }
+.home-clear-all { margin-top: 4px; }
+.preset-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.preset-chip {
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+.preset-chip:hover { border-color: var(--accent); }
+.preset-chip.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.home-task-attrs { display: flex; flex-wrap: wrap; gap: 8px 12px; margin: 6px 0 0; color: var(--ink-soft); font-size: 0.78rem; }
+.home-task-requires { margin: 6px 0 0; color: var(--ink-soft); font-size: 0.78rem; }
 
 .form, .form-grid { display: grid; gap: 12px; }
 .form-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }

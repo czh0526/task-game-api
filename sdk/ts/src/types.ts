@@ -158,12 +158,32 @@ export interface CollaborativeSettings {
   settlement_mode?: SettlementMode;
 }
 
+export type TaskUrgency = "within_3_days" | "within_week" | "other";
+export type TaskRecurrence = "one_time" | "daily" | "weekly" | "monthly";
+
+export interface TaskAttributes {
+  /** Where the task happens, e.g. remote or a city. */
+  location?: string;
+  /** Latitude of the task location. Must be set together with longitude. */
+  latitude?: number;
+  /** Longitude of the task location. Must be set together with latitude. */
+  longitude?: number;
+  /** Deadline urgency bucket. Defaults to other. */
+  urgency?: TaskUrgency;
+  /** One-off task or a repeating schedule. Defaults to one_time. */
+  recurrence?: TaskRecurrence;
+  /** Tags describing the desired completer, e.g. human, agent, experienced. */
+  executor_requirements?: string[];
+}
+
 export interface TaskCreate {
   kind: TaskKind;
   title: string;
   description: string;
   /** Free-form tags used to categorize tasks on the homepage. */
   keywords?: string[];
+  /** Descriptive facets used to classify a task. */
+  attributes?: TaskAttributes;
   payment: Payment;
   acceptance: Acceptance;
   assignee_policy: AssigneePolicy;
@@ -239,12 +259,31 @@ export interface Task extends TaskCreate {
 
 export interface TaskList {
   items: Task[];
+  /** Number of tasks matching the filters, ignoring pagination. */
+  total: number;
   next_cursor?: string | null;
 }
 
 export interface ListTasksQuery {
+  /** Full-text search over title, description and keywords. */
+  q?: string;
   status?: TaskStatus;
   kind?: TaskKind;
+  /** Return tasks carrying this exact keyword. */
+  keyword?: string;
+  urgency?: TaskUrgency;
+  recurrence?: TaskRecurrence;
+  /** Return tasks requiring this completer tag (e.g. agent, experienced). */
+  executor_requirement?: string;
+  min_amount?: number;
+  max_amount?: number;
+  /** Center latitude for distance filtering; set with longitude and radius_km. */
+  latitude?: number;
+  /** Center longitude for distance filtering. */
+  longitude?: number;
+  /** Only return tasks within this radius (km) of the center coordinate. */
+  radius_km?: number;
+  sort?: "recent" | "amount_asc" | "amount_desc" | "deadline_asc" | "distance_asc";
   /** Integer from 1 to 100. The server default is 20. */
   limit?: number;
   cursor?: string;

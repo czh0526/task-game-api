@@ -177,6 +177,10 @@ paths:
         a Bearer JWT or X-Api-Key and returns 401 without one.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
+        - name: q
+          in: query
+          schema: { type: string }
+          description: Full-text search over task title, description and keywords (case-insensitive literal match).
         - name: status
           in: query
           schema:
@@ -185,6 +189,43 @@ paths:
           in: query
           schema:
             $ref: '#/components/schemas/TaskKind'
+        - name: keyword
+          in: query
+          schema: { type: string }
+          description: Return tasks carrying this exact keyword.
+        - name: urgency
+          in: query
+          schema:
+            $ref: '#/components/schemas/TaskUrgency'
+        - name: recurrence
+          in: query
+          schema:
+            $ref: '#/components/schemas/TaskRecurrence'
+        - name: executor_requirement
+          in: query
+          schema: { type: string }
+          description: Return tasks requiring this completer tag (e.g. agent, experienced).
+        - name: min_amount
+          in: query
+          schema: { type: integer, minimum: 0 }
+        - name: max_amount
+          in: query
+          schema: { type: integer, minimum: 0 }
+        - name: latitude
+          in: query
+          schema: { type: number, format: double, minimum: -90, maximum: 90 }
+          description: Center latitude for distance filtering. Must be set with longitude and radius_km.
+        - name: longitude
+          in: query
+          schema: { type: number, format: double, minimum: -180, maximum: 180 }
+          description: Center longitude for distance filtering.
+        - name: radius_km
+          in: query
+          schema: { type: number, format: double, minimum: 0, maximum: 20015 }
+          description: Only return tasks within this radius (km) of the center coordinate.
+        - name: sort
+          in: query
+          schema: { type: string, enum: [recent, amount_asc, amount_desc, deadline_asc, distance_asc], default: recent }
         - name: limit
           in: query
           schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
@@ -1263,6 +1304,12 @@ components:
     TaskStatus:
       type: string
       enum: [draft, open, active, in_review, disputed, settled, cancelled]
+    TaskUrgency:
+      type: string
+      enum: [within_3_days, within_week, other]
+    TaskRecurrence:
+      type: string
+      enum: [one_time, daily, weekly, monthly]
     PaymentMode:
       type: string
       enum: [one_shot, milestone]
@@ -1392,6 +1439,42 @@ components:
             Free-form tags used to categorize tasks on the homepage. At most 20
             keywords, each at most 64 bytes, trimmed and deduplicated by the server.
           items: { type: string }
+        attributes:
+          type: object
+          description: Descriptive facets used to classify a task. Reward amount stays in payment.amount.
+          properties:
+            location:
+              type: string
+              description: Where the task happens, e.g. remote or a city. At most 128 bytes.
+            latitude:
+              type: number
+              format: double
+              minimum: -90
+              maximum: 90
+              description: Latitude of the task location. Must be set together with longitude.
+            longitude:
+              type: number
+              format: double
+              minimum: -180
+              maximum: 180
+              description: Longitude of the task location. Must be set together with latitude.
+            urgency:
+              type: string
+              enum: [within_3_days, within_week, other]
+              default: other
+              description: Deadline urgency bucket. Omitted means other.
+            recurrence:
+              type: string
+              enum: [one_time, daily, weekly, monthly]
+              default: one_time
+              description: One-off task or a repeating schedule. Omitted means one_time.
+            executor_requirements:
+              type: array
+              description: |
+                Tags describing who should complete the task, e.g. human, agent,
+                young, female, strong_male, experienced. Free-form; at most 20,
+                each at most 64 bytes, trimmed and deduplicated by the server.
+              items: { type: string }
         payment:
           type: object
           required: [mode, amount]
@@ -1509,11 +1592,14 @@ components:
             updated_at: { type: string, format: date-time }
     TaskList:
       type: object
-      required: [items]
+      required: [items, total]
       properties:
         items:
           type: array
           items: { $ref: '#/components/schemas/Task' }
+        total:
+          type: integer
+          description: Number of tasks matching the filters, ignoring pagination.
         next_cursor: { type: [string, 'null'] }
     SubmissionCreate:
       type: object

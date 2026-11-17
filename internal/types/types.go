@@ -73,12 +73,22 @@ type CreateChatReq struct {
 	TaskId         string   `json:"task_id,optional"`
 }
 
+type TaskAttributes struct {
+	Location             string   `json:"location,optional,omitempty"`
+	Latitude             *float64 `json:"latitude,optional,omitempty"`
+	Longitude            *float64 `json:"longitude,optional,omitempty"`
+	Urgency              string   `json:"urgency,optional,omitempty,options=within_3_days|within_week|other"`
+	Recurrence           string   `json:"recurrence,optional,omitempty,options=one_time|daily|weekly|monthly"`
+	ExecutorRequirements []string `json:"executor_requirements,optional,omitempty"`
+}
+
 type CreateTaskReq struct {
 	IdempotencyKey string         `header:"Idempotency-Key,optional" json:"-"`
 	Kind           string         `json:"kind,options=exclusive|competitive|collaborative"`
 	Title          string         `json:"title"`
 	Description    string         `json:"description"`
 	Keywords       []string       `json:"keywords,optional,omitempty"`
+	Attributes     TaskAttributes `json:"attributes,optional,omitempty"`
 	Payment        Payment        `json:"payment"`
 	Acceptance     Acceptance     `json:"acceptance"`
 	AssigneePolicy AssigneePolicy `json:"assignee_policy"`
@@ -139,12 +149,23 @@ type HealthResp struct {
 }
 
 type ListTasksReq struct {
-	Status         string `form:"status,optional,options=draft|open|active|in_review|disputed|settled|cancelled"`
-	Kind           string `form:"kind,optional,options=exclusive|competitive|collaborative"`
-	Limit          int64  `form:"limit,optional"`
-	Cursor         string `form:"cursor,optional"`
-	Assignable     string `form:"assignable,optional"`
-	IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
+	Q                   string   `form:"q,optional"`
+	Status              string   `form:"status,optional,options=draft|open|active|in_review|disputed|settled|cancelled"`
+	Kind                string   `form:"kind,optional,options=exclusive|competitive|collaborative"`
+	Keyword             string   `form:"keyword,optional"`
+	Urgency             string   `form:"urgency,optional,options=within_3_days|within_week|other"`
+	Recurrence          string   `form:"recurrence,optional,options=one_time|daily|weekly|monthly"`
+	ExecutorRequirement string   `form:"executor_requirement,optional"`
+	MinAmount           int64    `form:"min_amount,optional"`
+	MaxAmount           int64    `form:"max_amount,optional"`
+	Latitude            *float64 `form:"latitude,optional"`
+	Longitude           *float64 `form:"longitude,optional"`
+	RadiusKm            float64  `form:"radius_km,optional"`
+	Sort                string   `form:"sort,optional,options=recent|amount_asc|amount_desc|deadline_asc|distance_asc"`
+	Limit               int64    `form:"limit,optional"`
+	Cursor              string   `form:"cursor,optional"`
+	Assignable          string   `form:"assignable,optional"`
+	IdempotencyKey      string   `header:"Idempotency-Key,optional" json:"-"`
 }
 
 type Message struct {
@@ -200,6 +221,7 @@ type Task struct {
 	Title                string            `json:"title"`
 	Description          string            `json:"description"`
 	Keywords             []string          `json:"keywords,omitempty"`
+	Attributes           TaskAttributes    `json:"attributes,omitempty"`
 	Payment              Payment           `json:"payment"`
 	Acceptance           Acceptance        `json:"acceptance"`
 	AssigneePolicy       AssigneePolicy    `json:"assignee_policy"`
@@ -228,6 +250,7 @@ type Task struct {
 
 type TaskList struct {
 	Items      []Task  `json:"items"`
+	Total      int64   `json:"total"`
 	NextCursor *string `json:"next_cursor,optional"`
 }
 

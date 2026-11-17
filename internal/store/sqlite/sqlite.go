@@ -153,6 +153,7 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	}
 	if err := addColumns(ctx, db, "tasks", map[string]string{
 		"keywords":               "TEXT NOT NULL DEFAULT '[]'",
+		"attributes":             "TEXT NOT NULL DEFAULT '{}'",
 		"cancel_reason":          "TEXT NOT NULL DEFAULT ''",
 		"cancel_code":            "TEXT NOT NULL DEFAULT ''",
 		"cancelled_at":           "TEXT",

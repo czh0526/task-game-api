@@ -5,9 +5,12 @@ import {
   ENTRY_LABEL,
   MILESTONE_STATUS_LABEL,
   PAYMENT_MODE_LABEL,
+  RECURRENCE_LABEL,
   ROLE_STATUS_LABEL,
   SETTLEMENT_MODE_LABEL,
+  URGENCY_LABEL,
   confirmFailure,
+  executorRequirementLabel,
   formatCredits,
   formatError,
   formatTime,
@@ -209,6 +212,32 @@ export function TaskDetail({ id }: { id: string }) {
               </span>
             }
           />
+        ) : null}
+        <Fact label="报酬 payment.amount" value={formatCredits(task.payment.amount)} />
+        {task.attributes ? (
+          <>
+            <Fact label="位置 location" value={task.attributes.location || "—"} />
+            {task.attributes.latitude != null && task.attributes.longitude != null ? (
+              <Fact
+                label="坐标 coordinates"
+                value={`${task.attributes.latitude}, ${task.attributes.longitude}`}
+              />
+            ) : null}
+            <Fact label="时限 urgency" value={URGENCY_LABEL[task.attributes.urgency ?? "other"] ?? "—"} />
+            <Fact label="周期 recurrence" value={RECURRENCE_LABEL[task.attributes.recurrence ?? "one_time"] ?? "—"} />
+            {(task.attributes.executor_requirements ?? []).length > 0 ? (
+              <Fact
+                label="完成者条件"
+                value={
+                  <span className="person-list">
+                    {(task.attributes.executor_requirements ?? []).map((item) => (
+                      <span key={item} className="card-keyword">{executorRequirementLabel(item)}</span>
+                    ))}
+                  </span>
+                }
+              />
+            ) : null}
+          </>
         ) : null}
         <Fact label="发布者 publisher_id" value={<UserRef userId={task.publisher_id} />} />
         <Fact

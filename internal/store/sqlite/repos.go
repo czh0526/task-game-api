@@ -181,7 +181,7 @@ func (r *userRepo) ListScoreEvents(ctx context.Context, userID string, limit int
 
 type taskRepo struct{ q querier }
 
-const taskCols = `id, kind, title, description, keywords, status, publisher_id, payment_mode, payment_amount, payment_conditions, milestones, acceptance_deadline, acceptance_quality, acceptance_constraints, review_hours, assignee_policy, competitive, collaborative, executor_ids, winning_submission_id, review_deadline, escrow_id, dispute_reason, cancel_reason, cancel_code, cancelled_at, chat_id, funded_at, start_deadline, winner_select_deadline, dispute_role_id, resolve_json, max_revisions, created_at, updated_at`
+const taskCols = `id, kind, title, description, keywords, attributes, status, publisher_id, payment_mode, payment_amount, payment_conditions, milestones, acceptance_deadline, acceptance_quality, acceptance_constraints, review_hours, assignee_policy, competitive, collaborative, executor_ids, winning_submission_id, review_deadline, escrow_id, dispute_reason, cancel_reason, cancel_code, cancelled_at, chat_id, funded_at, start_deadline, winner_select_deadline, dispute_role_id, resolve_json, max_revisions, created_at, updated_at`
 
 func (r *taskRepo) Insert(ctx context.Context, t model.Task) error {
 	args, err := taskArgs(t)
@@ -226,8 +226,11 @@ func (r *taskRepo) Get(ctx context.Context, id string) (model.Task, error) {
 	return t, err
 }
 
-func (r *taskRepo) List(ctx context.Context, f model.TaskFilter) ([]model.Task, error) {
-	q := `SELECT ` + taskCols + ` FROM tasks WHERE 1 = 1`
+// taskWhere builds the shared WHERE clause and arguments for List and Count.
+// It uses SQLite JSON1 to filter keywords/attributes, and the Haversine
+// formula to filter by distance from a coordinate when one is supplied.
+func taskWhere(f model.TaskFilter) (string, []any) {
+	q := ` WHERE 1 = 1`
 	var args []any
 	if f.Status != "" {
 		q += ` AND status = ?`
@@ -243,7 +246,77 @@ func (r *taskRepo) List(ctx context.Context, f model.TaskFilter) ([]model.Task, 
 		q += ` AND kind = ?`
 		args = append(args, f.Kind)
 	}
-	q += ` ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
+	if f.Q != "" {
+		// Full-text across title, description and keywords. instr() treats the
+		// needle literally, so %, _ and \ in user input need no escaping.
+		q += ` AND (instr(lower(tasks.title), lower(?)) > 0` +
+			` OR instr(lower(tasks.description), lower(?)) > 0` +
+			` OR EXISTS (SELECT 1 FROM json_each(tasks.keywords) WHERE instr(lower(value), lower(?)) > 0))`
+		args = append(args, f.Q, f.Q, f.Q)
+	}
+	if f.Keyword != "" {
+		q += ` AND EXISTS (SELECT 1 FROM json_each(tasks.keywords) WHERE value = ?)`
+		args = append(args, f.Keyword)
+	}
+	if f.Urgency != "" {
+		q += ` AND json_extract(tasks.attributes, '$.urgency') = ?`
+		args = append(args, f.Urgency)
+	}
+	if f.Recurrence != "" {
+		q += ` AND json_extract(tasks.attributes, '$.recurrence') = ?`
+		args = append(args, f.Recurrence)
+	}
+	if f.ExecutorRequirement != "" {
+		q += ` AND EXISTS (SELECT 1 FROM json_each(tasks.attributes, '$.executor_requirements') WHERE value = ?)`
+		args = append(args, f.ExecutorRequirement)
+	}
+	if f.MinAmount > 0 {
+		q += ` AND payment_amount >= ?`
+		args = append(args, f.MinAmount)
+	}
+	if f.MaxAmount > 0 {
+		q += ` AND payment_amount <= ?`
+		args = append(args, f.MaxAmount)
+	}
+	if f.Latitude != nil && f.Longitude != nil {
+		q += ` AND json_extract(tasks.attributes, '$.latitude') IS NOT NULL`
+		q += ` AND json_extract(tasks.attributes, '$.longitude') IS NOT NULL`
+		q += ` AND (` + haversineExpr + `) <= ?`
+		args = append(args, *f.Latitude, *f.Latitude, *f.Longitude, f.RadiusKm)
+	}
+	return q, args
+}
+
+// haversineExpr is the great-circle distance (km) between a task's stored
+// coordinates and a query point. The three placeholders are: center latitude,
+// center latitude (again, for the cosine term), and center longitude.
+const haversineExpr = `6371.0088 * 2 * asin(min(1.0, sqrt(
+	pow(sin(radians(json_extract(tasks.attributes, '$.latitude') - ?) / 2), 2) +
+	cos(radians(?)) * cos(radians(json_extract(tasks.attributes, '$.latitude'))) *
+	pow(sin(radians(json_extract(tasks.attributes, '$.longitude') - ?) / 2), 2)
+)))`
+
+func taskOrderBy(f model.TaskFilter) (string, []any) {
+	switch f.Sort {
+	case "amount_asc":
+		return ` ORDER BY payment_amount ASC, created_at DESC, id DESC`, nil
+	case "amount_desc":
+		return ` ORDER BY payment_amount DESC, created_at DESC, id DESC`, nil
+	case "deadline_asc":
+		return ` ORDER BY acceptance_deadline ASC, created_at DESC, id DESC`, nil
+	case "distance_asc":
+		if f.Latitude != nil && f.Longitude != nil {
+			return ` ORDER BY (` + haversineExpr + `) ASC, created_at DESC`, []any{*f.Latitude, *f.Latitude, *f.Longitude}
+		}
+	}
+	return ` ORDER BY created_at DESC, id DESC`, nil
+}
+
+func (r *taskRepo) List(ctx context.Context, f model.TaskFilter) ([]model.Task, error) {
+	where, args := taskWhere(f)
+	order, orderArgs := taskOrderBy(f)
+	q := `SELECT ` + taskCols + ` FROM tasks` + where + order + ` LIMIT ? OFFSET ?`
+	args = append(args, orderArgs...)
 	args = append(args, f.Limit, f.Offset)
 	rows, err := r.q.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -262,6 +335,13 @@ func (r *taskRepo) List(ctx context.Context, f model.TaskFilter) ([]model.Task, 
 		out = []model.Task{}
 	}
 	return out, rows.Err()
+}
+
+func (r *taskRepo) Count(ctx context.Context, f model.TaskFilter) (int64, error) {
+	where, args := taskWhere(f)
+	var n int64
+	err := r.q.QueryRowContext(ctx, `SELECT COUNT(*) FROM tasks`+where, args...).Scan(&n)
+	return n, err
 }
 
 func (r *taskRepo) ListDueReview(ctx context.Context, now time.Time, limit int) ([]string, error) {
@@ -291,11 +371,11 @@ type scanner interface {
 func scanTask(s scanner) (model.Task, error) {
 	var t model.Task
 	var conditions, milestones, constraints, policy, executors, created, updated, deadline string
-	var keywordsJSON, resolveJSON string
+	var keywordsJSON, attributesJSON, resolveJSON string
 	var competitive, collaborative, winning, review, cancelled, funded, startBy, winnerBy sql.NullString
 	var reviewHours, maxRevisions int
 	err := s.Scan(
-		&t.ID, &t.Kind, &t.Title, &t.Description, &keywordsJSON, &t.Status, &t.PublisherID,
+		&t.ID, &t.Kind, &t.Title, &t.Description, &keywordsJSON, &attributesJSON, &t.Status, &t.PublisherID,
 		&t.Payment.Mode, &t.Payment.Amount, &conditions, &milestones,
 		&deadline, &t.Acceptance.Quality, &constraints, &reviewHours,
 		&policy, &competitive, &collaborative, &executors,
@@ -311,6 +391,14 @@ func scanTask(s scanner) (model.Task, error) {
 	t.Keywords, err = unmarshalSlice[string](keywordsJSON)
 	if err != nil {
 		return model.Task{}, err
+	}
+	if attributesJSON != "" && attributesJSON != "null" && attributesJSON != "{}" {
+		if err := json.Unmarshal([]byte(attributesJSON), &t.Attributes); err != nil {
+			return model.Task{}, err
+		}
+	}
+	if t.Attributes.ExecutorRequirements == nil {
+		t.Attributes.ExecutorRequirements = []string{}
 	}
 	t.Payment.Conditions, err = unmarshalSlice[string](conditions)
 	if err != nil {
@@ -403,6 +491,13 @@ func taskArgs(t model.Task) ([]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	attributesJSON, err := json.Marshal(t.Attributes)
+	if err != nil {
+		return nil, err
+	}
+	if string(attributesJSON) == "null" {
+		attributesJSON = []byte("{}")
+	}
 	conditions, err := jsonText(nilSlice(t.Payment.Conditions))
 	if err != nil {
 		return nil, err
@@ -450,7 +545,7 @@ func taskArgs(t model.Task) ([]any, error) {
 		resolveJSON = []byte("{}")
 	}
 	return []any{
-		t.ID, t.Kind, t.Title, t.Description, keywordsJSON, t.Status, t.PublisherID,
+		t.ID, t.Kind, t.Title, t.Description, keywordsJSON, string(attributesJSON), t.Status, t.PublisherID,
 		t.Payment.Mode, t.Payment.Amount, conditions, milestones,
 		model.FormatTime(t.Acceptance.Deadline), t.Acceptance.Quality, constraints, t.Acceptance.ReviewHours,
 		string(policy), competitive, collaborative, executors,
