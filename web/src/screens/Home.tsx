@@ -108,7 +108,8 @@ export function Home() {
   const [initial] = useState(readFilters);
   const [searchText, setSearchText] = useState(initial.q);
   const [searchDraft, setSearchDraft] = useState(initial.q);
-  const [scope, setScope] = useState<Scope>(initial.scope);
+  const scope = initial.scope;
+  const sort = initial.sort;
   const [items, setItems] = useState<Task[]>([]);
   const [facetItems, setFacetItems] = useState<Task[]>([]);
   const [activeKeyword, setActiveKeyword] = useState<string | null>(initial.keyword);
@@ -118,16 +119,11 @@ export function Home() {
   const [lat, setLat] = useState(initial.lat);
   const [lng, setLng] = useState(initial.lng);
   const [radiusKm, setRadiusKm] = useState(initial.radiusKm);
-  const [sort, setSort] = useState<typeof initial.sort>(initial.sort);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
   const requestSeq = useRef(0);
-
-  useEffect(() => {
-    if (!signedIn && scope === "available") setScope("all");
-  }, [signedIn, scope]);
 
   // Build the query from all active filters. Filtering happens in SQL across
   // every task, not in the browser over a single 100-row page.
@@ -431,29 +427,6 @@ export function Home() {
         {/* 6. 主体：左侧结果表 + 右侧工具（距离、排序、统计） */}
         <div className="portal-body">
           <div className="portal-main">
-            <div className="portal-filterbar">
-              <div className="portal-scope">
-                <button type="button" className={scope === "all" ? "on" : undefined} onClick={() => setScope("all")}>全部任务</button>
-                {signedIn ? (
-                  <button type="button" className={scope === "available" ? "on" : undefined} onClick={() => setScope("available")}>只看可接</button>
-                ) : (
-                  <a href={href.login}>登录后看可接任务</a>
-                )}
-              </div>
-              <div className="portal-sort">
-                <label htmlFor="portal-sort-select">排序</label>
-                <select id="portal-sort-select" value={sort} onChange={(event) => setSort(event.target.value as typeof sort)}>
-                  <option value="recent">最新发布</option>
-                  <option value="amount_desc">报酬最高</option>
-                  <option value="deadline_asc">截止最近</option>
-                  <option value="distance_asc">距离最近</option>
-                </select>
-              </div>
-              <button type="button" className="portal-refresh" onClick={() => setReloadToken((value) => value + 1)}>刷新</button>
-              {loading ? <span className="portal-loading">正在加载…</span> : null}
-              {anyFilter ? <button type="button" className="portal-clear" onClick={clearAll}>清除全部筛选</button> : null}
-            </div>
-
             {anyFilter ? (
               <p className="portal-filter-note">
                 当前结果：{searchText.trim() ? <>全文「{searchText.trim()}」</> : null}
@@ -463,6 +436,7 @@ export function Home() {
                 {activeRequirement ? <> · 完成者「{executorRequirementLabel(activeRequirement)}」</> : null}
                 {lat.trim() && lng.trim() ? <> · 距 {lat}, {lng} {radiusKm || "10"} 公里内</> : null}
                 <span className="portal-filter-total"> · 共 {total} 个匹配</span>
+                <button type="button" className="portal-clear" onClick={clearAll}>清除全部筛选</button>
               </p>
             ) : null}
 
