@@ -6,14 +6,12 @@ import {
   executorRequirementLabel,
   formatCredits,
   formatError,
-  formatTime,
   isAbort,
-  PAYMENT_MODE_LABEL,
   RECURRENCE_LABEL,
   URGENCY_LABEL,
 } from "../format";
 import { href } from "../route";
-import { ErrorNote, cx, Screen, StatusPill } from "../ui";
+import { ErrorNote, Screen } from "../ui";
 
 const CATEGORIES: Array<{
   kind: TaskKind;
@@ -21,13 +19,15 @@ const CATEGORIES: Array<{
   title: string;
   en: string;
   description: string;
+  hot: string[];
 }> = [
   {
     kind: "exclusive",
     short: "独",
     title: "独占任务",
     en: "exclusive",
-    description: "一位执行者独立承接，提交后由发布者确认。也可以按阶段交付。",
+    description: "一位执行者独立承接，提交后由发布者确认，也可按阶段交付。",
+    hot: ["设计", "写作", "翻译", "开发", "running", "urgent"],
   },
   {
     kind: "competitive",
@@ -35,6 +35,7 @@ const CATEGORIES: Array<{
     title: "竞争任务",
     en: "competitive",
     description: "多人同时提交，发布者指定中标方案，赢家通吃全部托管。",
+    hot: ["设计", "方案", "创意", "logo", "命名"],
   },
   {
     kind: "collaborative",
@@ -42,10 +43,11 @@ const CATEGORIES: Array<{
     title: "协作任务",
     en: "collaborative",
     description: "多个席位按角色分工，支持分别结算或全员到齐后统一结算。",
+    hot: ["开发", "写作", "推广", "策划", "design"],
   },
 ];
 
-const PREVIEW_LIMIT = 3;
+const PREVIEW_LIMIT = 6;
 type Scope = "all" | "available";
 
 // Filters live in the URL hash after "#/home?" so a refresh or a shared link
@@ -227,6 +229,28 @@ export function Home() {
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
   }, [facetItems]);
 
+  // Keyword entries grouped by task kind, used by the "all categories" matrix.
+  const keywordsByKind = useMemo(() => {
+    const counts: Record<TaskKind, Map<string, number>> = {
+      exclusive: new Map(),
+      competitive: new Map(),
+      collaborative: new Map(),
+    };
+    for (const task of facetItems) {
+      for (const keyword of task.keywords ?? []) {
+        counts[task.kind]?.set(keyword, (counts[task.kind]?.get(keyword) ?? 0) + 1);
+      }
+    }
+    const out: Record<TaskKind, string[]> = { exclusive: [], competitive: [], collaborative: [] };
+    for (const kind of Object.keys(counts) as TaskKind[]) {
+      out[kind] = Array.from((counts[kind] ?? new Map()).entries())
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .slice(0, 14)
+        .map(([name]) => name);
+    }
+    return out;
+  }, [facetItems]);
+
   // The server returns only tasks matching the active filters.
   const grouped = useMemo(() => {
     const groups: Record<TaskKind, Task[]> = {
@@ -252,418 +276,281 @@ export function Home() {
 
   const anyFilter = Boolean(searchText.trim() || activeKeyword || activeUrgency || activeRecurrence || activeRequirement || (lat.trim() && lng.trim()));
 
+  const submitSearch = (event: React.FormEvent) => {
+    event.preventDefault();
+    setSearchText(searchDraft);
+  };
+
+  const clearAll = () => {
+    setSearchText("");
+    setSearchDraft("");
+    setActiveKeyword(null);
+    setActiveUrgency(null);
+    setActiveRecurrence(null);
+    setActiveRequirement(null);
+    setLat("");
+    setLng("");
+  };
+
   return (
-    <Screen
-      title="首页"
-      lede="不用登录也能浏览任务市场。任务按玩法分成三类；登录后可查看「可接任务」并参与承接。"
-    >
+    <Screen title="任务市场" lede="不用登录也能逛任务市场。按玩法、关键字和任务属性快速找到适合你的任务。">
       <ErrorNote message={client ? error : clientError} />
 
-      <section className="home-hero">
-        <div>
-          <p className="eyebrow">任务市场</p>
-          <h2>找到适合你的任务</h2>
-          <p className="home-hero-copy">
-            独占、竞争、协作三种玩法，托管与结算都是模拟积分。未登录可浏览，登录后即可承接或发布任务。
-          </p>
-          <div className="home-hero-actions">
+      <div className="portal">
+        {/* 1. 顶部：自有品牌 logo + 城市站位 + 大搜索框 + 快捷入口 */}
+        <header className="portal-topbar">
+          <a className="portal-logo" href={href.home} aria-label="任务游戏首页">
+            <span className="portal-logo-mark" aria-hidden="true">任</span>
+            <span className="portal-logo-text">
+              <strong>任务游戏</strong>
+              <small>TASK GAME</small>
+            </span>
+          </a>
+          <div className="portal-site-tag" title="本地任务市场">
+            <span className="portal-pin" aria-hidden="true">●</span> 在线任务站
+          </div>
+          <form className="portal-search" role="search" onSubmit={submitSearch}>
+            <input
+              type="search"
+              value={searchDraft}
+              onChange={(event) => setSearchDraft(event.target.value)}
+              placeholder="搜任务：标题、描述、关键字"
+              aria-label="全文搜索任务"
+            />
+            <button type="submit">搜索</button>
+          </form>
+          <div className="portal-top-actions">
             {signedIn ? (
               <>
-                <a className="btn primary" href={href.tasks}>
-                  浏览任务
-                </a>
-                <a className="btn secondary" href={href.newTask}>
-                  创建任务
-                </a>
+                <a href={href.newTask}>免费发布任务</a>
+                <a href={href.tasks}>任务大厅</a>
               </>
             ) : (
               <>
-                <a className="btn primary" href={href.login}>
-                  登录 / 注册
-                </a>
-                <a className="btn secondary" href={href.tasks}>
-                  浏览任务列表
-                </a>
+                <a href={href.login}>登录</a>
+                <a href={href.login}>注册</a>
               </>
             )}
           </div>
-        </div>
-        <div className={cx("home-stats", !signedIn && "two")} aria-label="任务概览">
-          <div className="stat">
-            <strong>{stats.total}</strong>
-            <span>任务总数</span>
+        </header>
+
+        {/* 2. 频道导航带 */}
+        <nav className="portal-nav" aria-label="任务频道">
+          <a className="on" href={href.home}>首页</a>
+          {CATEGORIES.map((category) => (
+            <a key={category.kind} href={href.tasksByKind(category.kind)}>{category.title}</a>
+          ))}
+          <a href={signedIn ? href.tasks : href.login}>{signedIn ? "可接任务" : "登录后接任务"}</a>
+          <span className="portal-nav-spacer" />
+          <span className="portal-nav-count">共 {stats.total} 个任务</span>
+        </nav>
+
+        {/* 3. 热门搜索词（密集文字链，参考分类门户的热词区） */}
+        {keywordCounts.length > 0 ? (
+          <div className="portal-hotwords">
+            <strong>热门搜索：</strong>
+            {keywordCounts.slice(0, 12).map((item) => (
+              <button
+                type="button"
+                key={item.name}
+                className={activeKeyword === item.name ? "on" : undefined}
+                onClick={() => setActiveKeyword(activeKeyword === item.name ? null : item.name)}
+              >
+                {item.name}
+              </button>
+            ))}
           </div>
-          <div className="stat">
-            <strong>{stats.open}</strong>
-            <span>招募中</span>
+        ) : null}
+
+        {/* 4. 全部分类入口矩阵：每个玩法一列，下面是该玩法的密集关键字入口 */}
+        <section className="portal-catalog" aria-label="全部分类">
+          <div className="portal-section-head">
+            <h2>全部分类</h2>
+            <span>按玩法与关键字进入任务</span>
           </div>
-          {signedIn ? (
-            <div className="stat">
-              <strong>{stats.mine}</strong>
-              <span>与我相关</span>
+          <div className="portal-catalog-grid">
+            {CATEGORIES.map((category) => {
+              const dynamic = keywordsByKind[category.kind] ?? [];
+              const keywords = Array.from(new Set([...category.hot, ...dynamic])).slice(0, 14);
+              return (
+                <div className="portal-catalog-col" key={category.kind}>
+                  <h3>
+                    <a href={href.tasksByKind(category.kind)}>{category.title}</a>
+                  </h3>
+                  <div className="portal-catalog-links">
+                    {keywords.map((keyword) => (
+                      <button
+                        type="button"
+                        key={keyword}
+                        className={activeKeyword === keyword ? "on" : undefined}
+                        onClick={() => setActiveKeyword(activeKeyword === keyword ? null : keyword)}
+                      >
+                        {keyword}
+                      </button>
+                    ))}
+                  </div>
+                  <a className="portal-catalog-more" href={href.tasksByKind(category.kind)}>更多{category.title} &gt;</a>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        {/* 5. 快捷筛选入口：时限 / 周期 / 完成者，密集文字链 */}
+        <section className="portal-quick" aria-label="快捷筛选">
+          <div className="portal-quick-row">
+            <span className="portal-quick-label">按时限</span>
+            <button type="button" className={activeUrgency === null ? "on" : undefined} onClick={() => setActiveUrgency(null)}>全部</button>
+            {Object.entries(URGENCY_LABEL).map(([value, label]) => (
+              <button type="button" key={value} className={activeUrgency === value ? "on" : undefined} onClick={() => setActiveUrgency(value)}>{label}</button>
+            ))}
+          </div>
+          <div className="portal-quick-row">
+            <span className="portal-quick-label">按周期</span>
+            <button type="button" className={activeRecurrence === null ? "on" : undefined} onClick={() => setActiveRecurrence(null)}>全部</button>
+            {Object.entries(RECURRENCE_LABEL).map(([value, label]) => (
+              <button type="button" key={value} className={activeRecurrence === value ? "on" : undefined} onClick={() => setActiveRecurrence(value)}>{label}</button>
+            ))}
+          </div>
+          {requirementCounts.length > 0 ? (
+            <div className="portal-quick-row">
+              <span className="portal-quick-label">按完成者</span>
+              <button type="button" className={activeRequirement === null ? "on" : undefined} onClick={() => setActiveRequirement(null)}>全部</button>
+              {requirementCounts.map((item) => (
+                <button type="button" key={item.name} className={activeRequirement === item.name ? "on" : undefined} onClick={() => setActiveRequirement(item.name)}>
+                  {executorRequirementLabel(item.name)}
+                </button>
+              ))}
             </div>
           ) : null}
-        </div>
-      </section>
-
-      <form
-        className="home-search"
-        role="search"
-        onSubmit={(event) => {
-          event.preventDefault();
-          setSearchText(searchDraft);
-        }}
-      >
-        <input
-          type="search"
-          value={searchDraft}
-          onChange={(event) => setSearchDraft(event.target.value)}
-          placeholder="搜索任务的标题、描述或关键字，回车搜索"
-          aria-label="全文搜索任务"
-        />
-        <button type="submit" className="btn primary">
-          搜索
-        </button>
-        {searchText.trim() ? (
-          <button
-            type="button"
-            className="btn ghost"
-            onClick={() => {
-              setSearchText("");
-              setSearchDraft("");
-            }}
-          >
-            清除搜索
-          </button>
-        ) : null}
-      </form>
-      {searchText.trim() ? <p className="hint">正在全文搜索「{searchText.trim()}」，下面的筛选会在结果中继续收窄。</p> : null}
-
-      <div className="toolbar home-toolbar">
-        <div className="tabs" role="tablist" aria-label="任务范围">
-          <button type="button" className={scope === "all" ? "tab on" : "tab"} onClick={() => setScope("all")}>
-            全部任务
-          </button>
-          {signedIn ? (
-            <button type="button" className={scope === "available" ? "tab on" : "tab"} onClick={() => setScope("available")}>
-              只看可接
-            </button>
-          ) : (
-            <a className="tab" href={href.login}>
-              登录后看可接任务
-            </a>
-          )}
-        </div>
-        <label className="home-sort">
-          排序
-          <select value={sort} onChange={(event) => setSort(event.target.value as typeof sort)}>
-            <option value="recent">最新发布</option>
-            <option value="amount_desc">报酬最高</option>
-            <option value="deadline_asc">截止最近</option>
-            <option value="distance_asc">距离最近</option>
-          </select>
-        </label>
-        <button type="button" className="btn ghost" onClick={() => setReloadToken((value) => value + 1)}>
-          刷新
-        </button>
-        {loading ? <span className="hint">正在加载任务…</span> : null}
-      </div>
-
-      {keywordCounts.length > 0 ? (
-        <section className="keyword-bar" aria-label="按关键字分类">
-          <div className="keyword-bar-head">
-            <h2>按关键字分类</h2>
-            {activeKeyword ? (
-              <button type="button" className="btn ghost" onClick={() => setActiveKeyword(null)}>
-                清除筛选
-              </button>
-            ) : null}
-          </div>
-          <div className="keyword-chips">
-            <button
-              type="button"
-              className={activeKeyword === null ? "keyword-chip on" : "keyword-chip"}
-              onClick={() => setActiveKeyword(null)}
-            >
-              全部 <span>{total}</span>
-            </button>
-            {keywordCounts.map((item) => (
-              <button
-                type="button"
-                key={item.name}
-                className={activeKeyword === item.name ? "keyword-chip on" : "keyword-chip"}
-                onClick={() => setActiveKeyword(item.name)}
-              >
-                {item.name} <span>{item.count}</span>
-              </button>
-            ))}
-          </div>
-          {activeKeyword ? <p className="hint">当前按「{activeKeyword}」筛选，下面三类任务只显示带这个关键字的任务。</p> : null}
         </section>
-      ) : null}
 
-      <section className="keyword-bar" aria-label="按任务属性分类">
-        <div className="keyword-bar-head">
-          <h2>按任务属性分类</h2>
-          {activeUrgency || activeRecurrence || activeRequirement ? (
-            <button
-              type="button"
-              className="btn ghost"
-              onClick={() => {
-                setActiveUrgency(null);
-                setActiveRecurrence(null);
-                setActiveRequirement(null);
-              }}
-            >
-              清除属性筛选
-            </button>
-          ) : null}
-        </div>
-        <div className="attr-filter-row">
-          <span className="attr-filter-label">时限</span>
-          <button
-            type="button"
-            className={activeUrgency === null ? "keyword-chip on" : "keyword-chip"}
-            onClick={() => setActiveUrgency(null)}
-          >
-            全部
-          </button>
-          {Object.entries(URGENCY_LABEL).map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              className={activeUrgency === value ? "keyword-chip on" : "keyword-chip"}
-              onClick={() => setActiveUrgency(value)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        <div className="attr-filter-row">
-          <span className="attr-filter-label">周期</span>
-          <button
-            type="button"
-            className={activeRecurrence === null ? "keyword-chip on" : "keyword-chip"}
-            onClick={() => setActiveRecurrence(null)}
-          >
-            全部
-          </button>
-          {Object.entries(RECURRENCE_LABEL).map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              className={activeRecurrence === value ? "keyword-chip on" : "keyword-chip"}
-              onClick={() => setActiveRecurrence(value)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        {requirementCounts.length > 0 ? (
-          <div className="attr-filter-row">
-            <span className="attr-filter-label">完成者</span>
-            <button
-              type="button"
-              className={activeRequirement === null ? "keyword-chip on" : "keyword-chip"}
-              onClick={() => setActiveRequirement(null)}
-            >
-              全部
-            </button>
-            {requirementCounts.map((item) => (
-              <button
-                key={item.name}
-                type="button"
-                className={activeRequirement === item.name ? "keyword-chip on" : "keyword-chip"}
-                onClick={() => setActiveRequirement(item.name)}
-              >
-                {executorRequirementLabel(item.name)} <span>{item.count}</span>
-              </button>
-            ))}
-          </div>
-        ) : null}
-      </section>
-
-      <section className="keyword-bar" aria-label="按距离筛选">
-        <div className="keyword-bar-head">
-          <h2>按距离筛选</h2>
-          {(lat.trim() && lng.trim()) || anyFilter ? (
-            <button
-              type="button"
-              className="btn ghost"
-              onClick={() => {
-                setLat("");
-                setLng("");
-                setRadiusKm("10");
-              }}
-            >
-              清除位置
-            </button>
-          ) : null}
-        </div>
-        <p className="hint">填入中心点经纬度与半径，只显示该范围内的任务；任务需在创建时标记坐标。</p>
-        <div className="distance-row">
-          <label>
-            纬度
-            <input
-              type="number"
-              step="any"
-              min={-90}
-              max={90}
-              placeholder="39.9042"
-              value={lat}
-              onChange={(event) => setLat(event.target.value)}
-            />
-          </label>
-          <label>
-            经度
-            <input
-              type="number"
-              step="any"
-              min={-180}
-              max={180}
-              placeholder="116.4074"
-              value={lng}
-              onChange={(event) => setLng(event.target.value)}
-            />
-          </label>
-          <label>
-            半径（公里）
-            <input
-              type="number"
-              step="any"
-              min={0}
-              placeholder="10"
-              value={radiusKm}
-              onChange={(event) => setRadiusKm(event.target.value)}
-            />
-          </label>
-          <button type="button" className="btn secondary" onClick={() => setReloadToken((value) => value + 1)}>
-            按此位置查找
-          </button>
-        </div>
-        <button
-          type="button"
-          className="btn ghost"
-          onClick={() => {
-            if (!navigator.geolocation) return;
-            navigator.geolocation.getCurrentPosition(
-              (pos) => {
-                setLat(pos.coords.latitude.toFixed(4));
-                setLng(pos.coords.longitude.toFixed(4));
-              },
-              () => {},
-            );
-          }}
-        >
-          使用我的当前位置
-        </button>
-        {lat.trim() && lng.trim() ? (
-          <p className="hint">正在按「{lat}, {lng}」周围 {radiusKm || "10"} 公里筛选，共 {total} 个任务匹配。</p>
-        ) : null}
-      </section>
-
-      {anyFilter ? (
-        <button
-          type="button"
-          className="btn ghost home-clear-all"
-          onClick={() => {
-            setSearchText("");
-            setSearchDraft("");
-            setActiveKeyword(null);
-            setActiveUrgency(null);
-            setActiveRecurrence(null);
-            setActiveRequirement(null);
-            setLat("");
-            setLng("");
-          }}
-        >
-          清除全部筛选
-        </button>
-      ) : null}
-
-      <div className="home-categories">
-        {CATEGORIES.map((category) => {
-          const tasks = grouped[category.kind] ?? [];
-          return (
-            <section className="category-card" key={category.kind} aria-labelledby={`category-${category.kind}`}>
-              <header className="category-head">
-                <span className="category-mark" aria-hidden="true">
-                  {category.short}
-                </span>
-                <div>
-                  <h2 id={`category-${category.kind}`}>
-                    {category.title} <span className="en">{category.en}</span>
-                  </h2>
-                  <p>{category.description}</p>
-                </div>
-              </header>
-              <div className="category-meta">
-                <span>{tasks.length} 个任务</span>
-                <a href={href.tasksByKind(category.kind)}>查看全部</a>
+        {/* 6. 主体：左侧结果表 + 右侧工具（距离、排序、统计） */}
+        <div className="portal-body">
+          <div className="portal-main">
+            <div className="portal-filterbar">
+              <div className="portal-scope">
+                <button type="button" className={scope === "all" ? "on" : undefined} onClick={() => setScope("all")}>全部任务</button>
+                {signedIn ? (
+                  <button type="button" className={scope === "available" ? "on" : undefined} onClick={() => setScope("available")}>只看可接</button>
+                ) : (
+                  <a href={href.login}>登录后看可接任务</a>
+                )}
               </div>
-              <ul className="task-list home-task-list">
-                {tasks.length === 0 && !loading ? (
-                  <li className="empty">当前范围内暂无{category.title}。</li>
-                ) : null}
-                {tasks.slice(0, PREVIEW_LIMIT).map((task) => (
-                  <li key={task.id}>
-                    <a href={href.task(task.id)}>
-                      <div className="task-top">
-                        <StatusPill status={task.status} />
-                        {relationLabel(task, settings.userId) ? (
-                          <span className="relation">{relationLabel(task, settings.userId)}</span>
-                        ) : null}
-                      </div>
-                      <h3>{task.title}</h3>
-                      {(task.keywords ?? []).length > 0 ? (
-                        <span className="card-keywords">
-                          {(task.keywords ?? []).map((keyword) => (
-                            <span
-                              key={keyword}
-                              className={activeKeyword === keyword ? "card-keyword on" : "card-keyword"}
-                              onClick={(event) => {
-                                event.preventDefault();
-                                setActiveKeyword(keyword);
-                              }}
-                            >
-                              #{keyword}
-                            </span>
-                          ))}
-                        </span>
-                      ) : null}
-                      <p className="meta">
-                        <strong>{formatCredits(task.payment.amount)}</strong>
-                        <span>{PAYMENT_MODE_LABEL[task.payment.mode] ?? task.payment.mode}</span>
-                      </p>
-                      {task.attributes ? (
-                        <p className="home-task-attrs">
-                          {task.attributes.latitude != null && task.attributes.longitude != null ? (
-                            <span>坐标 {task.attributes.latitude.toFixed(2)}, {task.attributes.longitude.toFixed(2)}</span>
-                          ) : task.attributes.location ? (
-                            <span>位置 {task.attributes.location}</span>
-                          ) : null}
-                          <span>时限 {URGENCY_LABEL[task.attributes.urgency ?? "other"] ?? task.attributes.urgency}</span>
-                          <span>周期 {RECURRENCE_LABEL[task.attributes.recurrence ?? "one_time"] ?? task.attributes.recurrence}</span>
-                        </p>
-                      ) : null}
-                      {(task.attributes?.executor_requirements ?? []).length > 0 ? (
-                        <p className="home-task-requires">
-                          需要：{(task.attributes?.executor_requirements ?? []).map(executorRequirementLabel).join("、")}
-                        </p>
-                      ) : null}
-                      <p className="home-task-deadline">接受截止 {formatTime(task.acceptance.deadline)}</p>
-                    </a>
-                  </li>
-                ))}
-              </ul>
-              {tasks.length > PREVIEW_LIMIT ? (
-                <a className="btn ghost home-more" href={href.tasksByKind(category.kind)}>
-                  还有 {tasks.length - PREVIEW_LIMIT} 个任务
-                </a>
+              <div className="portal-sort">
+                <label htmlFor="portal-sort-select">排序</label>
+                <select id="portal-sort-select" value={sort} onChange={(event) => setSort(event.target.value as typeof sort)}>
+                  <option value="recent">最新发布</option>
+                  <option value="amount_desc">报酬最高</option>
+                  <option value="deadline_asc">截止最近</option>
+                  <option value="distance_asc">距离最近</option>
+                </select>
+              </div>
+              <button type="button" className="portal-refresh" onClick={() => setReloadToken((value) => value + 1)}>刷新</button>
+              {loading ? <span className="portal-loading">正在加载…</span> : null}
+              {anyFilter ? <button type="button" className="portal-clear" onClick={clearAll}>清除全部筛选</button> : null}
+            </div>
+
+            {anyFilter ? (
+              <p className="portal-filter-note">
+                当前结果：{searchText.trim() ? <>全文「{searchText.trim()}」</> : null}
+                {activeKeyword ? <> · 关键字「{activeKeyword}」</> : null}
+                {activeUrgency ? <> · 时限「{URGENCY_LABEL[activeUrgency as keyof typeof URGENCY_LABEL]}」</> : null}
+                {activeRecurrence ? <> · 周期「{RECURRENCE_LABEL[activeRecurrence as keyof typeof RECURRENCE_LABEL]}」</> : null}
+                {activeRequirement ? <> · 完成者「{executorRequirementLabel(activeRequirement)}」</> : null}
+                {lat.trim() && lng.trim() ? <> · 距 {lat}, {lng} {radiusKm || "10"} 公里内</> : null}
+                <span className="portal-filter-total"> · 共 {total} 个匹配</span>
+              </p>
+            ) : null}
+
+            {CATEGORIES.map((category) => {
+              const tasks = grouped[category.kind] ?? [];
+              return (
+                <section className="portal-block" key={category.kind}>
+                  <div className="portal-block-head">
+                    <h2>{category.title}<span>{category.en}</span></h2>
+                    <span className="portal-block-desc">{category.description}</span>
+                    <a href={href.tasksByKind(category.kind)}>更多 &gt;&gt;</a>
+                  </div>
+                  <ul className="portal-task-links">
+                    {tasks.length === 0 && !loading ? (
+                      <li className="portal-empty">当前范围内暂无{category.title}。</li>
+                    ) : null}
+                    {tasks.slice(0, PREVIEW_LIMIT).map((task) => (
+                      <li key={task.id}>
+                        <a href={href.task(task.id)} title={task.title}>
+                          <span className="portal-task-title">{task.title}</span>
+                          {relationLabel(task, settings.userId) ? <span className="portal-relation">{relationLabel(task, settings.userId)}</span> : null}
+                          <span className="portal-task-pay">{formatCredits(task.payment.amount)}</span>
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                  {tasks.length > PREVIEW_LIMIT ? (
+                    <a className="portal-block-more" href={href.tasksByKind(category.kind)}>查看全部 {tasks.length} 个{category.title} &gt;</a>
+                  ) : null}
+                </section>
+              );
+            })}
+          </div>
+
+          <aside className="portal-side">
+            <section className="portal-side-card">
+              <h3>任务概览</h3>
+              <div className="portal-stats">
+                <div><strong>{stats.total}</strong><span>匹配任务</span></div>
+                <div><strong>{stats.open}</strong><span>招募中</span></div>
+                {signedIn ? <div><strong>{stats.mine}</strong><span>与我相关</span></div> : null}
+              </div>
+            </section>
+
+            <section className="portal-side-card">
+              <h3>按距离找任务</h3>
+              <p className="portal-side-hint">填中心点经纬度与半径，只看范围内的任务。</p>
+              <div className="portal-distance">
+                <label>纬度<input type="number" step="any" min={-90} max={90} placeholder="39.9042" value={lat} onChange={(event) => setLat(event.target.value)} /></label>
+                <label>经度<input type="number" step="any" min={-180} max={180} placeholder="116.4074" value={lng} onChange={(event) => setLng(event.target.value)} /></label>
+                <label>半径 km<input type="number" step="any" min={0} placeholder="10" value={radiusKm} onChange={(event) => setRadiusKm(event.target.value)} /></label>
+                <button type="button" onClick={() => setReloadToken((value) => value + 1)}>查找</button>
+              </div>
+              <button
+                type="button"
+                className="portal-geo"
+                onClick={() => {
+                  if (!navigator.geolocation) return;
+                  navigator.geolocation.getCurrentPosition(
+                    (pos) => {
+                      setLat(pos.coords.latitude.toFixed(4));
+                      setLng(pos.coords.longitude.toFixed(4));
+                    },
+                    () => {},
+                  );
+                }}
+              >
+                使用我的当前位置
+              </button>
+              {(lat.trim() && lng.trim()) || anyFilter ? (
+                <button type="button" className="portal-clear-pos" onClick={() => { setLat(""); setLng(""); setRadiusKm("10"); }}>清除位置</button>
               ) : null}
             </section>
-          );
-        })}
+
+            <section className="portal-side-card">
+              <h3>玩法说明</h3>
+              <ul className="portal-guide">
+                {CATEGORIES.map((category) => (
+                  <li key={category.kind}><strong>{category.short} {category.title}</strong><br />{category.description}</li>
+                ))}
+              </ul>
+              <p className="portal-side-hint">托管与结算均为模拟积分，不涉及真实资金。</p>
+            </section>
+
+            <section className="portal-side-card portal-publish">
+              <h3>想发布任务？</h3>
+              <p className="portal-side-hint">登录后即可发布独占、竞争或协作任务，并设置关键字与任务属性。</p>
+              <a className="portal-publish-btn" href={signedIn ? href.newTask : href.login}>{signedIn ? "立即发布" : "登录 / 注册"}</a>
+            </section>
+          </aside>
+        </div>
       </div>
     </Screen>
   );
