@@ -621,6 +621,35 @@ button.person:disabled { cursor: progress; opacity: 0.7; }
 .portal-catalog-links button:hover, .portal-catalog-links button.on { color: var(--p-orange); text-decoration: underline; }
 .portal-catalog-more { display: inline-block; margin-top: 8px; font-size: 0.8rem; }
 
+/* all-categories: keyword sub-categories, each with its own task list */
+.portal-cat-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); align-items: stretch; }
+.portal-cat { display: flex; flex-direction: column; }
+.portal-cat.on { border-top-color: var(--p-orange); }
+.portal-cat.other { background: var(--p-soft); border-top-color: var(--p-muted); }
+.portal-cat h3 { display: flex; align-items: center; gap: 6px; }
+.portal-cat-name {
+  border: 0; background: none; padding: 0; font: inherit; font-weight: 700;
+  color: var(--p-blue-dark); text-align: left;
+}
+button.portal-cat-name:hover, .portal-cat.on .portal-cat-name { color: var(--p-orange); }
+.portal-cat.other .portal-cat-name { color: var(--p-muted); }
+.portal-cat-count {
+  font-size: 0.72rem; font-weight: 600; color: var(--p-muted);
+  background: var(--p-soft-2); border-radius: 9px; padding: 1px 7px;
+}
+.portal-cat-tasks { list-style: none; margin: 0; padding: 0; }
+.portal-cat-tasks li { border-top: 1px dashed var(--p-line); }
+.portal-cat-tasks li:first-child { border-top: 0; }
+.portal-cat-tasks a {
+  display: flex; justify-content: space-between; gap: 8px; align-items: baseline;
+  padding: 5px 0; font-size: 0.84rem;
+}
+.portal-cat-task-title {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.portal-cat-task-pay { flex: none; color: var(--p-orange); font-weight: 650; font-size: 0.8rem; }
+.portal-cat-empty { padding: 8px 0; color: var(--p-muted); font-size: 0.88rem; }
+
 /* quick filters */
 .portal-quick {
   margin: 14px 20px 0; padding: 12px 14px;
