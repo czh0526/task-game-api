@@ -47,7 +47,6 @@ const CATEGORIES: Array<{
   },
 ];
 
-const PREVIEW_LIMIT = 6;
 type Scope = "all" | "available";
 
 // Filters live in the URL hash after "#/home?" so a refresh or a shared link
@@ -229,13 +228,31 @@ export function Home() {
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
   }, [facetItems]);
 
-  // "All categories": group tasks into small categories by keyword. A task may
+  // "推荐任务": three curated columns over the unfiltered baseline, so the
+  // recommendations stay stable while a filter is active.
+  const recommendations = useMemo(() => {
+    const urgencyRank: Record<string, number> = { within_3_days: 0, within_week: 1, other: 2 };
+    const byUrgency = [...facetItems].sort((a, b) => {
+      const ra = urgencyRank[a.attributes?.urgency ?? "other"] ?? 2;
+      const rb = urgencyRank[b.attributes?.urgency ?? "other"] ?? 2;
+      return ra - rb || b.created_at.localeCompare(a.created_at);
+    });
+    const byNewest = [...facetItems].sort((a, b) => b.created_at.localeCompare(a.created_at));
+    const byPay = [...facetItems].sort((a, b) => b.payment.amount - a.payment.amount);
+    return [
+      { name: "紧急任务", tasks: byUrgency.slice(0, 5) },
+      { name: "最新任务", tasks: byNewest.slice(0, 5) },
+      { name: "丰厚回报", tasks: byPay.slice(0, 5) },
+    ];
+  }, [facetItems]);
+
+  // "全部任务": group the current (filtered) results by keyword. A task may
   // carry several keywords and appear in more than one category. Tasks without
   // any keyword go into a single "其它" category, always shown last.
   const keywordGroups = useMemo(() => {
     const groups = new Map<string, Task[]>();
     const others: Task[] = [];
-    for (const task of facetItems) {
+    for (const task of items) {
       const keywords = task.keywords ?? [];
       if (keywords.length === 0) {
         others.push(task);
@@ -252,20 +269,6 @@ export function Home() {
       .sort((a, b) => b.tasks.length - a.tasks.length || a.name.localeCompare(b.name));
     if (others.length > 0) result.push({ name: "其它", tasks: others });
     return result;
-  }, [facetItems]);
-
-  // The server returns only tasks matching the active filters.
-  const grouped = useMemo(() => {
-    const groups: Record<TaskKind, Task[]> = {
-      exclusive: [],
-      competitive: [],
-      collaborative: [],
-    };
-    for (const task of items) groups[task.kind]?.push(task);
-    for (const category of CATEGORIES) {
-      groups[category.kind].sort((a, b) => b.created_at.localeCompare(a.created_at));
-    }
-    return groups;
   }, [items]);
 
   const stats = useMemo(
@@ -366,50 +369,34 @@ export function Home() {
           </div>
         ) : null}
 
-        {/* 4. 全部分类：按关键字把任务分成小类，无关键字的任务归入「其它」 */}
-        <section className="portal-catalog" aria-label="全部分类">
+        {/* 4. 推荐任务：固定三列——紧急 / 最新 / 丰厚回报 */}
+        <section className="portal-catalog" aria-label="推荐任务">
           <div className="portal-section-head">
-            <h2>全部分类</h2>
-            <span>按关键字把任务分成小类；没有关键字的任务统一放在「其它」</span>
+            <h2>推荐任务</h2>
           </div>
-          {keywordGroups.length > 0 ? (
-            <div className="portal-catalog-grid portal-cat-grid">
-              {keywordGroups.map((group) => {
-                const isOther = group.name === "其它";
-                const active = !isOther && activeKeyword === group.name;
-                return (
-                  <div className={`portal-catalog-col portal-cat${active ? " on" : ""}${isOther ? " other" : ""}`} key={group.name}>
-                    <h3>
-                      {isOther ? (
-                        <span className="portal-cat-name">{group.name}</span>
-                      ) : (
-                        <button
-                          type="button"
-                          className="portal-cat-name"
-                          onClick={() => setActiveKeyword(active ? null : group.name)}
-                        >
-                          {group.name}
-                        </button>
-                      )}
-                      <span className="portal-cat-count">{group.tasks.length}</span>
-                    </h3>
-                    <ul className="portal-cat-tasks">
-                      {group.tasks.slice(0, 5).map((task) => (
-                        <li key={task.id}>
-                          <a href={href.task(task.id)} title={task.title}>
-                            <span className="portal-cat-task-title">{task.title}</span>
-                            <span className="portal-cat-task-pay">{formatCredits(task.payment.amount)}</span>
-                          </a>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <p className="portal-cat-empty">暂无任务分类。</p>
-          )}
+          <div className="portal-catalog-grid">
+            {recommendations.map((group, index) => (
+              <div className={`portal-catalog-col portal-rec portal-rec-${index}`} key={group.name}>
+                <h3>
+                  <span className="portal-rec-mark" aria-hidden="true">{["急", "新", "奖"][index]}</span>
+                  {group.name}
+                  <span className="portal-cat-count">{group.tasks.length}</span>
+                </h3>
+                <ul className="portal-cat-tasks">
+                  {group.tasks.length > 0 ? group.tasks.map((task) => (
+                    <li key={task.id}>
+                      <a href={href.task(task.id)} title={task.title}>
+                        <span className="portal-cat-task-title">{task.title}</span>
+                        <span className="portal-cat-task-pay">{formatCredits(task.payment.amount)}</span>
+                      </a>
+                    </li>
+                  )) : (
+                    <li className="portal-cat-empty">暂无任务</li>
+                  )}
+                </ul>
+              </div>
+            ))}
+          </div>
         </section>
 
         {/* 5. 快捷筛选入口：时限 / 周期 / 完成者，密集文字链 */}
@@ -479,35 +466,49 @@ export function Home() {
               </p>
             ) : null}
 
-            {CATEGORIES.map((category) => {
-              const tasks = grouped[category.kind] ?? [];
-              return (
-                <section className="portal-block" key={category.kind}>
-                  <div className="portal-block-head">
-                    <h2>{category.title}<span>{category.en}</span></h2>
-                    <span className="portal-block-desc">{category.description}</span>
-                    <a href={href.tasksByKind(category.kind)}>更多 &gt;&gt;</a>
-                  </div>
-                  <ul className="portal-task-links">
-                    {tasks.length === 0 && !loading ? (
-                      <li className="portal-empty">当前范围内暂无{category.title}。</li>
-                    ) : null}
-                    {tasks.slice(0, PREVIEW_LIMIT).map((task) => (
-                      <li key={task.id}>
-                        <a href={href.task(task.id)} title={task.title}>
-                          <span className="portal-task-title">{task.title}</span>
-                          {relationLabel(task, settings.userId) ? <span className="portal-relation">{relationLabel(task, settings.userId)}</span> : null}
-                          <span className="portal-task-pay">{formatCredits(task.payment.amount)}</span>
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
-                  {tasks.length > PREVIEW_LIMIT ? (
-                    <a className="portal-block-more" href={href.tasksByKind(category.kind)}>查看全部 {tasks.length} 个{category.title} &gt;</a>
-                  ) : null}
-                </section>
-              );
-            })}
+            <section className="portal-alltasks" aria-label="全部任务">
+              <div className="portal-section-head">
+                <h2>全部任务</h2>
+              </div>
+              {keywordGroups.length > 0 ? (
+                <div className="portal-catalog-grid portal-cat-grid portal-cat-grid-2">
+                  {keywordGroups.map((group) => {
+                    const isOther = group.name === "其它";
+                    const active = !isOther && activeKeyword === group.name;
+                    return (
+                      <div className={`portal-catalog-col portal-cat${active ? " on" : ""}${isOther ? " other" : ""}`} key={group.name}>
+                        <h3>
+                          {isOther ? (
+                            <span className="portal-cat-name">{group.name}</span>
+                          ) : (
+                            <button
+                              type="button"
+                              className="portal-cat-name"
+                              onClick={() => setActiveKeyword(active ? null : group.name)}
+                            >
+                              {group.name}
+                            </button>
+                          )}
+                          <span className="portal-cat-count">{group.tasks.length}</span>
+                        </h3>
+                        <ul className="portal-cat-tasks">
+                          {group.tasks.slice(0, 6).map((task) => (
+                            <li key={task.id}>
+                              <a href={href.task(task.id)} title={task.title}>
+                                <span className="portal-cat-task-title">{task.title}</span>
+                                <span className="portal-cat-task-pay">{formatCredits(task.payment.amount)}</span>
+                              </a>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="portal-cat-empty">{loading ? "正在加载…" : "当前范围内暂无任务。"}</p>
+              )}
+            </section>
           </div>
 
           <aside className="portal-side">
@@ -578,8 +579,3 @@ function isMine(task: Task, userId: string): boolean {
   return (task.collaborative?.roles ?? []).some((role) => role.assignee_user_id === userId);
 }
 
-function relationLabel(task: Task, userId: string): string {
-  if (task.publisher_id === userId) return "我发布";
-  if (isMine(task, userId)) return "我参与";
-  return "";
-}
