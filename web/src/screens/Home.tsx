@@ -229,26 +229,29 @@ export function Home() {
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
   }, [facetItems]);
 
-  // Keyword entries grouped by task kind, used by the "all categories" matrix.
-  const keywordsByKind = useMemo(() => {
-    const counts: Record<TaskKind, Map<string, number>> = {
-      exclusive: new Map(),
-      competitive: new Map(),
-      collaborative: new Map(),
-    };
+  // "All categories": group tasks into small categories by keyword. A task may
+  // carry several keywords and appear in more than one category. Tasks without
+  // any keyword go into a single "其它" category, always shown last.
+  const keywordGroups = useMemo(() => {
+    const groups = new Map<string, Task[]>();
+    const others: Task[] = [];
     for (const task of facetItems) {
-      for (const keyword of task.keywords ?? []) {
-        counts[task.kind]?.set(keyword, (counts[task.kind]?.get(keyword) ?? 0) + 1);
+      const keywords = task.keywords ?? [];
+      if (keywords.length === 0) {
+        others.push(task);
+        continue;
+      }
+      for (const keyword of keywords) {
+        const bucket = groups.get(keyword);
+        if (bucket) bucket.push(task);
+        else groups.set(keyword, [task]);
       }
     }
-    const out: Record<TaskKind, string[]> = { exclusive: [], competitive: [], collaborative: [] };
-    for (const kind of Object.keys(counts) as TaskKind[]) {
-      out[kind] = Array.from((counts[kind] ?? new Map()).entries())
-        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-        .slice(0, 14)
-        .map(([name]) => name);
-    }
-    return out;
+    const result = Array.from(groups.entries())
+      .map(([name, tasks]) => ({ name, tasks }))
+      .sort((a, b) => b.tasks.length - a.tasks.length || a.name.localeCompare(b.name));
+    if (others.length > 0) result.push({ name: "其它", tasks: others });
+    return result;
   }, [facetItems]);
 
   // The server returns only tasks matching the active filters.
@@ -363,38 +366,50 @@ export function Home() {
           </div>
         ) : null}
 
-        {/* 4. 全部分类入口矩阵：每个玩法一列，下面是该玩法的密集关键字入口 */}
+        {/* 4. 全部分类：按关键字把任务分成小类，无关键字的任务归入「其它」 */}
         <section className="portal-catalog" aria-label="全部分类">
           <div className="portal-section-head">
             <h2>全部分类</h2>
-            <span>按玩法与关键字进入任务</span>
+            <span>按关键字把任务分成小类；没有关键字的任务统一放在「其它」</span>
           </div>
-          <div className="portal-catalog-grid">
-            {CATEGORIES.map((category) => {
-              const dynamic = keywordsByKind[category.kind] ?? [];
-              const keywords = Array.from(new Set([...category.hot, ...dynamic])).slice(0, 14);
-              return (
-                <div className="portal-catalog-col" key={category.kind}>
-                  <h3>
-                    <a href={href.tasksByKind(category.kind)}>{category.title}</a>
-                  </h3>
-                  <div className="portal-catalog-links">
-                    {keywords.map((keyword) => (
-                      <button
-                        type="button"
-                        key={keyword}
-                        className={activeKeyword === keyword ? "on" : undefined}
-                        onClick={() => setActiveKeyword(activeKeyword === keyword ? null : keyword)}
-                      >
-                        {keyword}
-                      </button>
-                    ))}
+          {keywordGroups.length > 0 ? (
+            <div className="portal-catalog-grid portal-cat-grid">
+              {keywordGroups.map((group) => {
+                const isOther = group.name === "其它";
+                const active = !isOther && activeKeyword === group.name;
+                return (
+                  <div className={`portal-catalog-col portal-cat${active ? " on" : ""}${isOther ? " other" : ""}`} key={group.name}>
+                    <h3>
+                      {isOther ? (
+                        <span className="portal-cat-name">{group.name}</span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="portal-cat-name"
+                          onClick={() => setActiveKeyword(active ? null : group.name)}
+                        >
+                          {group.name}
+                        </button>
+                      )}
+                      <span className="portal-cat-count">{group.tasks.length}</span>
+                    </h3>
+                    <ul className="portal-cat-tasks">
+                      {group.tasks.slice(0, 5).map((task) => (
+                        <li key={task.id}>
+                          <a href={href.task(task.id)} title={task.title}>
+                            <span className="portal-cat-task-title">{task.title}</span>
+                            <span className="portal-cat-task-pay">{formatCredits(task.payment.amount)}</span>
+                          </a>
+                        </li>
+                      ))}
+                    </ul>
                   </div>
-                  <a className="portal-catalog-more" href={href.tasksByKind(category.kind)}>更多{category.title} &gt;</a>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="portal-cat-empty">暂无任务分类。</p>
+          )}
         </section>
 
         {/* 5. 快捷筛选入口：时限 / 周期 / 完成者，密集文字链 */}
