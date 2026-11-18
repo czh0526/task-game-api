@@ -81,6 +81,7 @@ code.mono, .mono { font-family: var(--mono); font-size: 0.86em; }
 }
 
 .main { padding: 28px 32px 64px; max-width: 1080px; }
+.home-main { margin-inline: auto; }
 
 .role-switch, .tabs, .toolbar, .nav {
   display: flex;

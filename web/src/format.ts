@@ -11,7 +11,7 @@ export const STATUS_LABEL: Record<TaskStatus, string> = {
 };
 
 export const KIND_LABEL: Record<TaskKind, string> = {
-  exclusive: "独占",
+  exclusive: "单人",
   competitive: "竞争",
   collaborative: "协作",
 };

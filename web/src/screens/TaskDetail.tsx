@@ -1002,7 +1002,7 @@ function acceptReason(task: Task, me: string, roleId: string): string | null {
   }
   if ((task.executor_ids ?? []).includes(me)) return "你已经接受过";
   if (task.kind === "exclusive") {
-    if (task.status !== "open") return "独占任务只有 open 可以接受";
+    if (task.status !== "open") return "单人任务只有 open 可以接受";
     return null;
   }
   if (task.status !== "open" && task.status !== "active") return "当前状态不能接受";

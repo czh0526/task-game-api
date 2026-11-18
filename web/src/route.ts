@@ -21,6 +21,7 @@ export const href = {
   tasks: "#/tasks",
   tasksByKind: (kind: TaskKind) => `#/tasks?kind=${encodeURIComponent(kind)}`,
   newTask: "#/tasks/new",
+  agentZone: "#/home?requirement=agent",
   task: (id: string) => `#/tasks/${encodeURIComponent(id)}`,
   scores: "#/scores",
   conversation: (id: string) => `#/chat/${encodeURIComponent(id)}`,

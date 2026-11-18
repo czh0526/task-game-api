@@ -23,8 +23,8 @@ const CATEGORIES: Array<{
 }> = [
   {
     kind: "exclusive",
-    short: "独",
-    title: "独占任务",
+    short: "单",
+    title: "单人任务",
     en: "exclusive",
     description: "一位执行者独立承接，提交后由发布者确认，也可按阶段交付。",
     hot: ["设计", "写作", "翻译", "开发", "running", "urgent"],
@@ -334,13 +334,14 @@ export function Home() {
           </div>
         </header>
 
-        {/* 2. 频道导航带 */}
+        {/* 2. 频道导航带：首页 / 单人任务 / 协作任务 / 竞争任务 / 代理专区 */}
         <nav className="portal-nav" aria-label="任务频道">
           <a className="on" href={href.home}>首页</a>
-          {CATEGORIES.map((category) => (
-            <a key={category.kind} href={href.tasksByKind(category.kind)}>{category.title}</a>
-          ))}
-          <a href={signedIn ? href.tasks : href.login}>{signedIn ? "可接任务" : "登录后接任务"}</a>
+          {(["exclusive", "collaborative", "competitive"] as TaskKind[]).map((kind) => {
+            const category = CATEGORIES.find((item) => item.kind === kind);
+            return category ? <a key={kind} href={href.tasksByKind(kind)}>{category.title}</a> : null;
+          })}
+          <a href={href.agentZone}>代理专区</a>
           <span className="portal-nav-spacer" />
           <span className="portal-nav-count">共 {stats.total} 个任务</span>
         </nav>
@@ -546,7 +547,7 @@ export function Home() {
 
             <section className="portal-side-card portal-publish">
               <h3>想发布任务？</h3>
-              <p className="portal-side-hint">登录后即可发布独占、竞争或协作任务，并设置关键字与任务属性。</p>
+              <p className="portal-side-hint">登录后即可发布单人、竞争或协作任务，并设置关键字与任务属性。</p>
               <a className="portal-publish-btn" href={signedIn ? href.newTask : href.login}>{signedIn ? "立即发布" : "登录 / 注册"}</a>
             </section>
           </aside>
