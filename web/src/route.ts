@@ -52,12 +52,26 @@ export function parseRoute(hash: string): Route {
   return { name: "home" };
 }
 
-export function useRoute(): Route {
-  const [route, setRoute] = useState<Route>(() => parseRoute(window.location.hash));
+/** Landing route when the app opens with no hash: members start at their tasks. */
+export function defaultHash(signedIn: boolean): string {
+  return signedIn ? href.tasks : href.home;
+}
+
+export function useRoute(signedIn: boolean): Route {
+  const [route, setRoute] = useState<Route>(() => {
+    if (!window.location.hash) {
+      // Decide the landing page before the first render. Child screen effects
+      // (e.g. Home writing "#/home") run before this hook's effect, so waiting
+      // until an effect would let them overwrite the redirect.
+      const next = defaultHash(signedIn);
+      window.history.replaceState(null, "", next);
+      return parseRoute(next);
+    }
+    return parseRoute(window.location.hash);
+  });
   useEffect(() => {
     const onChange = () => setRoute(parseRoute(window.location.hash));
     window.addEventListener("hashchange", onChange);
-    if (!window.location.hash) window.location.replace("#/home");
     return () => window.removeEventListener("hashchange", onChange);
   }, []);
   return route;
