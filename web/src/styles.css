@@ -702,7 +702,12 @@ button.portal-cat-name:hover, .portal-cat.on .portal-cat-name { color: var(--p-o
 .portal-clear { margin-left: auto; color: var(--p-orange); }
 .portal-refresh:hover, .portal-clear:hover, .portal-clear-pos:hover { border-color: var(--p-blue); color: var(--p-blue); }
 .portal-loading { color: var(--p-muted); font-size: 0.82rem; }
-.portal-filter-note { margin: 0 0 12px; color: var(--p-muted); font-size: 0.85rem; }
+.portal-filter-note {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  margin: 0 0 12px; padding: 8px 12px;
+  border: 1px solid var(--p-line); border-radius: 6px; background: var(--p-soft);
+  color: var(--p-muted); font-size: 0.85rem;
+}
 .portal-filter-total { color: var(--p-orange); font-weight: 650; }
 
 /* per-kind result block with dense text links */
