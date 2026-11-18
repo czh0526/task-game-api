@@ -472,7 +472,7 @@ export function CreateTask() {
         ) : null}
         {form.kind === "collaborative" ? (
           <p className="hint">
-            协作任务固定 <code className="mono">payment.mode = one_shot</code>。分阶段只用于独占和竞争。
+            协作任务固定 <code className="mono">payment.mode = one_shot</code>。分阶段只用于单人和竞争。
           </p>
         ) : (
           <fieldset>

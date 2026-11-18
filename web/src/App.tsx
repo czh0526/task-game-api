@@ -106,7 +106,7 @@ export function App() {
         </aside>
       ) : null}
 
-      <main className={cx("main", !signedIn && route.name === "auth" && "auth-main")}>
+      <main className={cx("main", !signedIn && route.name === "auth" && "auth-main", route.name === "home" && "home-main")}>
         {signedIn ? (
           <>
             <ErrorNote message={chatError} />
