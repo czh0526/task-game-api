@@ -54,7 +54,7 @@ export function App() {
   }, [route, signedIn]);
 
   useEffect(() => {
-    if (signedIn && route.name === "auth") window.location.replace(href.home);
+    if (signedIn && route.name === "auth") window.location.replace(href.tasks);
   }, [signedIn, route.name]);
 
   return (
@@ -84,9 +84,6 @@ export function App() {
           <SessionCard />
           <DevIdentity />
           <nav className="nav">
-          <a href={href.home} aria-current={route.name === "home" ? "page" : undefined}>
-            首页
-          </a>
           <a href={href.tasks} aria-current={route.name === "tasks" || route.name === "task" ? "page" : undefined}>
             任务
           </a>
