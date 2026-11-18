@@ -650,6 +650,24 @@ button.portal-cat-name:hover, .portal-cat.on .portal-cat-name { color: var(--p-o
 .portal-cat-task-pay { flex: none; color: var(--p-orange); font-weight: 650; font-size: 0.8rem; }
 .portal-cat-empty { padding: 8px 0; color: var(--p-muted); font-size: 0.88rem; }
 
+/* recommended tasks: three fixed columns (urgent / newest / best paid) */
+.portal-rec h3 { display: flex; align-items: center; gap: 8px; }
+.portal-rec-mark {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; flex: none; border-radius: 5px;
+  font-size: 0.78rem; font-weight: 700; color: #fff; background: var(--p-blue);
+}
+.portal-rec-0 { border-top-color: #c0392b; }
+.portal-rec-0 .portal-rec-mark { background: #c0392b; }
+.portal-rec-1 { border-top-color: var(--p-blue); }
+.portal-rec-1 .portal-rec-mark { background: var(--p-blue); }
+.portal-rec-2 { border-top-color: #b8860b; }
+.portal-rec-2 .portal-rec-mark { background: #b8860b; }
+
+/* all tasks: keyword sub-categories in a fixed two-column grid */
+.portal-alltasks { margin-bottom: 18px; }
+.portal-cat-grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
 /* quick filters */
 .portal-quick {
   margin: 14px 20px 0; padding: 12px 14px;
@@ -768,6 +786,7 @@ button.portal-cat-name:hover, .portal-cat.on .portal-cat-name { color: var(--p-o
   .portal-nav { padding: 0 10px; }
   .portal-nav-count { display: none; }
   .portal-catalog-grid { grid-template-columns: 1fr; }
+  .portal-cat-grid, .portal-cat-grid-2 { grid-template-columns: 1fr; }
   .portal-body { grid-template-columns: 1fr; }
   .portal-task-links { grid-template-columns: 1fr; }
 }
