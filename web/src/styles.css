@@ -678,6 +678,16 @@ button.portal-cat-name:hover, .portal-cat.on .portal-cat-name { color: var(--p-o
 .portal-quick-label { flex: none; width: 62px; color: var(--p-blue-dark); font-weight: 650; font-size: 0.86rem; }
 .portal-quick-row button { border: 0; background: none; padding: 2px 0; color: #3a4658; font-size: 0.86rem; }
 .portal-quick-row button:hover, .portal-quick-row button.on { color: var(--p-orange); font-weight: 650; }
+.portal-quick-selects { gap: 10px 24px; }
+.portal-quick-field { display: inline-flex; align-items: center; gap: 8px; }
+.portal-quick-field .portal-quick-label { width: auto; }
+.portal-quick-field select {
+  padding: 5px 26px 5px 9px; min-width: 108px;
+  border: 1px solid var(--p-line); border-radius: 5px; background: #fff;
+  color: var(--p-ink); font-size: 0.86rem; cursor: pointer;
+}
+.portal-quick-field select:focus { outline: none; border-color: var(--p-blue); }
+.portal-geo-message { margin: 6px 0 0; color: var(--p-orange); font-size: 0.8rem; }
 
 /* main + side */
 .portal-body { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 18px; padding: 18px 20px 24px; align-items: start; }
@@ -695,12 +705,12 @@ button.portal-cat-name:hover, .portal-cat.on .portal-cat-name { color: var(--p-o
 .portal-scope button.on { background: var(--p-blue); color: #fff; }
 .portal-sort { display: inline-flex; align-items: center; gap: 6px; color: var(--p-muted); font-size: 0.85rem; }
 .portal-sort select { padding: 5px 8px; border: 1px solid var(--p-line); border-radius: 5px; background: #fff; color: var(--p-ink); }
-.portal-refresh, .portal-clear, .portal-clear-pos {
+.portal-refresh, .portal-clear {
   border: 1px solid var(--p-line); background: #fff; color: var(--p-muted);
   padding: 5px 10px; border-radius: 5px; font-size: 0.82rem;
 }
 .portal-clear { margin-left: auto; color: var(--p-orange); }
-.portal-refresh:hover, .portal-clear:hover, .portal-clear-pos:hover { border-color: var(--p-blue); color: var(--p-blue); }
+.portal-refresh:hover, .portal-clear:hover { border-color: var(--p-blue); color: var(--p-blue); }
 .portal-loading { color: var(--p-muted); font-size: 0.82rem; }
 .portal-filter-note {
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
@@ -751,19 +761,6 @@ button.portal-cat-name:hover, .portal-cat.on .portal-cat-name { color: var(--p-o
 .portal-stats strong { display: block; font-size: 1.3rem; color: var(--p-blue); }
 .portal-stats span { font-size: 0.72rem; color: var(--p-muted); }
 .portal-side-hint { margin: 0 0 8px; color: var(--p-muted); font-size: 0.8rem; line-height: 1.5; }
-.portal-distance { display: flex; flex-direction: column; gap: 6px; }
-.portal-distance label { display: flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--p-muted); }
-.portal-distance input {
-  flex: 1; min-width: 0; padding: 5px 8px;
-  border: 1px solid var(--p-line); border-radius: 5px; font-size: 0.85rem; color: var(--p-ink);
-}
-.portal-distance > button {
-  margin-top: 2px; padding: 7px; border: 0; border-radius: 5px;
-  background: var(--p-blue); color: #fff; font-weight: 650;
-}
-.portal-distance > button:hover { background: var(--p-blue-dark); }
-.portal-geo, .portal-clear-pos { width: 100%; margin-top: 8px; }
-.portal-geo { border: 1px dashed var(--p-blue); background: var(--p-soft); color: var(--p-blue); padding: 6px; border-radius: 5px; font-size: 0.8rem; }
 .portal-guide { list-style: none; margin: 0; padding: 0; }
 .portal-guide li { padding: 6px 0; font-size: 0.8rem; color: var(--p-muted); border-bottom: 1px dotted var(--p-line); line-height: 1.5; }
 .portal-guide strong { color: var(--p-ink); }

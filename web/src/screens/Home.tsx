@@ -66,6 +66,16 @@ type FilterParams = {
 
 const SORTS = ["recent", "amount_desc", "deadline_asc", "distance_asc"] as const;
 
+// Distance options use a browser-geolocated center point. Empty = no filter.
+const DISTANCE_OPTIONS = [
+  { value: "", label: "不限" },
+  { value: "0.5", label: "500m" },
+  { value: "1", label: "1km" },
+  { value: "3", label: "3km" },
+  { value: "5", label: "5km" },
+  { value: "10", label: "10km" },
+] as const;
+
 function readFilters(): FilterParams {
   const raw = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : window.location.hash;
   const question = raw.indexOf("?");
@@ -80,7 +90,7 @@ function readFilters(): FilterParams {
     requirement: params.get("requirement"),
     lat: params.get("lat") ?? "",
     lng: params.get("lng") ?? "",
-    radiusKm: params.get("radius") ?? "10",
+    radiusKm: params.get("radius") ?? "",
     sort: SORTS.find((item) => item === sort) ?? "recent",
   };
 }
@@ -119,10 +129,10 @@ export function Home() {
   const [lat, setLat] = useState(initial.lat);
   const [lng, setLng] = useState(initial.lng);
   const [radiusKm, setRadiusKm] = useState(initial.radiusKm);
+  const [geoMessage, setGeoMessage] = useState<string | null>(null);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [reloadToken, setReloadToken] = useState(0);
   const requestSeq = useRef(0);
 
   // Build the query from all active filters. Filtering happens in SQL across
@@ -175,7 +185,7 @@ export function Home() {
       })
       .catch(() => {});
     return () => ac.abort();
-  }, [client, reloadToken]);
+  }, [client]);
 
   useEffect(() => {
     if (!client) return;
@@ -198,7 +208,7 @@ export function Home() {
         if (!ac.signal.aborted && seq === requestSeq.current) setLoading(false);
       });
     return () => ac.abort();
-  }, [client, query, reloadToken]);
+  }, [client, query]);
 
   const keywordCounts = useMemo(() => {
     const counts = new Map<string, number>();
@@ -276,11 +286,45 @@ export function Home() {
     [total, items, settings.userId],
   );
 
-  const anyFilter = Boolean(searchText.trim() || activeKeyword || activeUrgency || activeRecurrence || activeRequirement || (lat.trim() && lng.trim()));
+  const anyFilter = Boolean(searchText.trim() || activeKeyword || activeUrgency || activeRecurrence || activeRequirement || radiusKm);
+  const distanceLabel = DISTANCE_OPTIONS.find((option) => option.value === radiusKm)?.label;
 
   const submitSearch = (event: React.FormEvent) => {
     event.preventDefault();
     setSearchText(searchDraft);
+  };
+
+  // Choosing a distance needs a center point. Read the browser location once,
+  // then filter by radius on the server. "不限" clears the location and radius.
+  const chooseDistance = (value: string) => {
+    setRadiusKm(value);
+    if (!value) {
+      setLat("");
+      setLng("");
+      setGeoMessage(null);
+      return;
+    }
+    if (lat.trim() && lng.trim()) {
+      setGeoMessage(null);
+      return;
+    }
+    if (!navigator.geolocation) {
+      setGeoMessage("当前浏览器不支持定位，无法按距离筛选。");
+      return;
+    }
+    setGeoMessage("正在获取你的位置…");
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setLat(pos.coords.latitude.toFixed(4));
+        setLng(pos.coords.longitude.toFixed(4));
+        setGeoMessage(null);
+      },
+      () => {
+        setRadiusKm("");
+        setGeoMessage("无法获取位置，请检查浏览器的定位权限后重试。");
+      },
+      { timeout: 8000 },
+    );
   };
 
   const clearAll = () => {
@@ -292,6 +336,8 @@ export function Home() {
     setActiveRequirement(null);
     setLat("");
     setLng("");
+    setRadiusKm("");
+    setGeoMessage(null);
   };
 
   return (
@@ -395,22 +441,37 @@ export function Home() {
           </div>
         </section>
 
-        {/* 5. 快捷筛选入口：时限 / 周期 / 完成者，密集文字链 */}
+        {/* 5. 快捷筛选：时限 / 周期 / 距离用下拉框，完成者保持文字链 */}
         <section className="portal-quick" aria-label="快捷筛选">
-          <div className="portal-quick-row">
-            <span className="portal-quick-label">按时限</span>
-            <button type="button" className={activeUrgency === null ? "on" : undefined} onClick={() => setActiveUrgency(null)}>全部</button>
-            {Object.entries(URGENCY_LABEL).map(([value, label]) => (
-              <button type="button" key={value} className={activeUrgency === value ? "on" : undefined} onClick={() => setActiveUrgency(value)}>{label}</button>
-            ))}
+          <div className="portal-quick-row portal-quick-selects">
+            <label className="portal-quick-field">
+              <span className="portal-quick-label">按时限</span>
+              <select value={activeUrgency ?? ""} onChange={(event) => setActiveUrgency(event.target.value || null)}>
+                <option value="">全部</option>
+                {Object.entries(URGENCY_LABEL).map(([value, label]) => (
+                  <option key={value} value={value}>{label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="portal-quick-field">
+              <span className="portal-quick-label">按周期</span>
+              <select value={activeRecurrence ?? ""} onChange={(event) => setActiveRecurrence(event.target.value || null)}>
+                <option value="">全部</option>
+                {Object.entries(RECURRENCE_LABEL).map(([value, label]) => (
+                  <option key={value} value={value}>{label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="portal-quick-field">
+              <span className="portal-quick-label">按距离</span>
+              <select value={radiusKm} onChange={(event) => chooseDistance(event.target.value)}>
+                {DISTANCE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
           </div>
-          <div className="portal-quick-row">
-            <span className="portal-quick-label">按周期</span>
-            <button type="button" className={activeRecurrence === null ? "on" : undefined} onClick={() => setActiveRecurrence(null)}>全部</button>
-            {Object.entries(RECURRENCE_LABEL).map(([value, label]) => (
-              <button type="button" key={value} className={activeRecurrence === value ? "on" : undefined} onClick={() => setActiveRecurrence(value)}>{label}</button>
-            ))}
-          </div>
+          {geoMessage ? <p className="portal-geo-message">{geoMessage}</p> : null}
           {requirementCounts.length > 0 ? (
             <div className="portal-quick-row">
               <span className="portal-quick-label">按完成者</span>
@@ -434,7 +495,7 @@ export function Home() {
                 {activeUrgency ? <> · 时限「{URGENCY_LABEL[activeUrgency as keyof typeof URGENCY_LABEL]}」</> : null}
                 {activeRecurrence ? <> · 周期「{RECURRENCE_LABEL[activeRecurrence as keyof typeof RECURRENCE_LABEL]}」</> : null}
                 {activeRequirement ? <> · 完成者「{executorRequirementLabel(activeRequirement)}」</> : null}
-                {lat.trim() && lng.trim() ? <> · 距 {lat}, {lng} {radiusKm || "10"} 公里内</> : null}
+                {radiusKm && distanceLabel ? <> · 距当前位置 {distanceLabel} 内</> : null}
                 <span className="portal-filter-total"> · 共 {total} 个匹配</span>
                 <button type="button" className="portal-clear" onClick={clearAll}>清除全部筛选</button>
               </p>
@@ -493,36 +554,6 @@ export function Home() {
                 <div><strong>{stats.open}</strong><span>招募中</span></div>
                 {signedIn ? <div><strong>{stats.mine}</strong><span>与我相关</span></div> : null}
               </div>
-            </section>
-
-            <section className="portal-side-card">
-              <h3>按距离找任务</h3>
-              <p className="portal-side-hint">填中心点经纬度与半径，只看范围内的任务。</p>
-              <div className="portal-distance">
-                <label>纬度<input type="number" step="any" min={-90} max={90} placeholder="39.9042" value={lat} onChange={(event) => setLat(event.target.value)} /></label>
-                <label>经度<input type="number" step="any" min={-180} max={180} placeholder="116.4074" value={lng} onChange={(event) => setLng(event.target.value)} /></label>
-                <label>半径 km<input type="number" step="any" min={0} placeholder="10" value={radiusKm} onChange={(event) => setRadiusKm(event.target.value)} /></label>
-                <button type="button" onClick={() => setReloadToken((value) => value + 1)}>查找</button>
-              </div>
-              <button
-                type="button"
-                className="portal-geo"
-                onClick={() => {
-                  if (!navigator.geolocation) return;
-                  navigator.geolocation.getCurrentPosition(
-                    (pos) => {
-                      setLat(pos.coords.latitude.toFixed(4));
-                      setLng(pos.coords.longitude.toFixed(4));
-                    },
-                    () => {},
-                  );
-                }}
-              >
-                使用我的当前位置
-              </button>
-              {(lat.trim() && lng.trim()) || anyFilter ? (
-                <button type="button" className="portal-clear-pos" onClick={() => { setLat(""); setLng(""); setRadiusKm("10"); }}>清除位置</button>
-              ) : null}
             </section>
 
             <section className="portal-side-card">

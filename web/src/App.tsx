@@ -30,9 +30,9 @@ const TITLES: Record<string, string> = {
 };
 
 export function App() {
-  const route = useRoute();
   const { settings, health } = useApp();
   const signedIn = isSignedIn(settings);
+  const route = useRoute(signedIn);
   const [chatError, setChatError] = useState<string | null>(null);
 
   useEffect(() => {
