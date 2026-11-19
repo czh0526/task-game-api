@@ -23,7 +23,7 @@ function listQuery(status: "" | TaskStatus, kind: "" | TaskKind, tab: Tab, curso
 export function TaskList() {
   const { client, clientError, settings } = useApp();
   const signedIn = isSignedIn(settings);
-  const route = useRoute(signedIn);
+  const route = useRoute();
   const routeKind = route.name === "tasks" ? route.kind ?? "" : "";
   const [items, setItems] = useState<Task[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);

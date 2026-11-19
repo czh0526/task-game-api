@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { defaultHash, href, parseRoute } from "../src/route.ts";
+import { afterLoginHash, defaultHash, href, isProtectedRoute, parseRoute } from "../src/route.ts";
 
 test("empty hash lands on the homepage", () => {
   assert.deepEqual(parseRoute(""), { name: "home" });
@@ -10,10 +10,31 @@ test("empty hash lands on the homepage", () => {
   assert.equal(href.login, "#/login");
 });
 
-test("default landing page depends on sign-in state", () => {
-  assert.equal(defaultHash(false), "#/home");
-  assert.equal(defaultHash(true), "#/tasks");
-  assert.deepEqual(parseRoute(defaultHash(true)), { name: "tasks", kind: undefined });
+test("default landing page is always the public home", () => {
+  assert.equal(defaultHash(), "#/home");
+  assert.deepEqual(parseRoute(defaultHash()), { name: "home" });
+});
+
+test("protected routes are defined by the URL, not sign-in state", () => {
+  assert.equal(isProtectedRoute({ name: "home" }), false);
+  assert.equal(isProtectedRoute({ name: "task", id: "t1" }), false);
+  assert.equal(isProtectedRoute({ name: "auth" }), false);
+  assert.equal(isProtectedRoute({ name: "tasks" }), true);
+  assert.equal(isProtectedRoute({ name: "new" }), true);
+  assert.equal(isProtectedRoute({ name: "friends" }), true);
+  assert.equal(isProtectedRoute({ name: "conversation", id: "c1" }), true);
+  assert.equal(isProtectedRoute({ name: "settings" }), true);
+  assert.equal(isProtectedRoute({ name: "scores" }), true);
+  assert.equal(isProtectedRoute({ name: "invites" }), true);
+});
+
+test("after-login redirect honours a safe next hash", () => {
+  assert.equal(afterLoginHash("#/login"), "#/home");
+  const next = encodeURIComponent("#/tasks/task_123");
+  assert.equal(afterLoginHash(`#/login?next=${next}`), "#/tasks/task_123");
+  // Off-site or malformed next values fall back to the public home.
+  assert.equal(afterLoginHash(`#/login?next=${encodeURIComponent("https://evil.example")}`), "#/home");
+  assert.equal(afterLoginHash(`#/login?next=${encodeURIComponent("//evil.example")}`), "#/home");
 });
 
 test("kind query preselects the task list filter", () => {

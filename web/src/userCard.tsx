@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { createIdempotencyKey, type FriendList, type UserScores } from "taskgame-client";
+import { isSignedIn } from "./client";
 import { useApp } from "./context";
 import { formatError, isAbort } from "./format";
+import { LoginGate } from "./LoginGate";
 import { openDirectChat, reportChatError } from "./openChat";
 import { personLabel } from "./person";
 import { Button, ErrorNote } from "./ui";
@@ -21,6 +23,7 @@ export function openUserCard(userId: string): void {
  */
 export function UserCardHost() {
   const { client, settings } = useApp();
+  const signedIn = isSignedIn(settings);
   const [userId, setUserId] = useState<string | null>(null);
   const [scores, setScores] = useState<UserScores | null>(null);
   const [isFriend, setIsFriend] = useState(false);
@@ -28,6 +31,7 @@ export function UserCardHost() {
   const [loading, setLoading] = useState(false);
   const [acting, setActing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loginOpen, setLoginOpen] = useState(false);
 
   useEffect(() => {
     const onOpen = (event: Event) => {
@@ -54,16 +58,13 @@ export function UserCardHost() {
     setHasPending(false);
     setError(null);
     setLoading(true);
-    void Promise.all([
-      client.getUserScores(userId, { signal: ac.signal }),
-      client.listFriends({ signal: ac.signal }),
-      client.listFriendRequests({ direction: "outgoing" }, { signal: ac.signal }),
-    ])
-      .then(([profile, friends, outgoing]) => {
-        if (ac.signal.aborted) return;
-        setScores(profile);
-        setIsFriend(friendIds(friends).has(userId));
-        setHasPending(outgoing.items.some((request) => request.to_user_id === userId && request.status === "pending"));
+
+    // Public profile is readable without an account. Keep its result separate
+    // from friend state so an anonymous visitor never sees a token error.
+    void client
+      .getUserScores(userId, { signal: ac.signal })
+      .then((profile) => {
+        if (!ac.signal.aborted) setScores(profile);
       })
       .catch((err: unknown) => {
         if (ac.signal.aborted || isAbort(err)) return;
@@ -72,23 +73,49 @@ export function UserCardHost() {
       .finally(() => {
         if (!ac.signal.aborted) setLoading(false);
       });
+
+    // Friend state needs a session. Only ask when signed in; a failure here is
+    // ignored so the public card still renders normally.
+    if (signedIn) {
+      void Promise.all([
+        client.listFriends({ signal: ac.signal }),
+        client.listFriendRequests({ direction: "outgoing" }, { signal: ac.signal }),
+      ])
+        .then(([friends, outgoing]) => {
+          if (ac.signal.aborted) return;
+          setIsFriend(friendIds(friends).has(userId));
+          setHasPending(
+            outgoing.items.some((request) => request.to_user_id === userId && request.status === "pending"),
+          );
+        })
+        .catch(() => {
+          // Non-fatal: the public profile above is what matters here.
+        });
+    }
+
     return () => ac.abort();
-  }, [userId, client]);
+  }, [userId, client, signedIn]);
 
   if (!userId) return null;
 
   const self = userId === settings.userId;
-  const addDisabled = self || isFriend || hasPending || acting || loading;
-  const addLabel = self
-    ? "这是你自己"
-    : isFriend
-      ? "已是好友"
-      : hasPending
-        ? "已发申请"
-        : "加为好友";
+  const addDisabled = self || acting || loading || (signedIn && (isFriend || hasPending));
+  const addLabel = !signedIn
+    ? "登录后加为好友"
+    : self
+      ? "这是你自己"
+      : isFriend
+        ? "已是好友"
+        : hasPending
+          ? "已发申请"
+          : "加为好友";
 
   async function addFriend() {
     if (!client || !userId || addDisabled) return;
+    if (!signedIn) {
+      setLoginOpen(true);
+      return;
+    }
     setActing(true);
     setError(null);
     try {
@@ -107,6 +134,10 @@ export function UserCardHost() {
 
   async function sendMessage() {
     if (!client || !userId || self) return;
+    if (!signedIn) {
+      setLoginOpen(true);
+      return;
+    }
     setActing(true);
     setError(null);
     try {
@@ -122,55 +153,62 @@ export function UserCardHost() {
   const initial = (scores?.nickname ?? "").trim().charAt(0).toUpperCase() || "?";
 
   return (
-    <div
-      className="usercard-backdrop"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) setUserId(null);
-      }}
-    >
-      <div className="usercard" role="dialog" aria-modal="true" aria-label={`${label} 的资料`}>
-        <button type="button" className="usercard-close" aria-label="关闭" onClick={() => setUserId(null)}>
-          ×
-        </button>
-        <div className="usercard-head">
-          <span className="usercard-avatar" aria-hidden="true">
-            {initial}
-          </span>
-          <div>
-            <h2 className="usercard-name">{label}</h2>
-            <p className="usercard-id mono" title={userId}>
-              {userId}
-            </p>
-          </div>
-        </div>
-
-        {loading ? <p className="hint">正在加载资料…</p> : null}
-        <ErrorNote message={error} />
-
-        {scores ? (
-          <div className="usercard-stats">
+    <>
+      <div
+        className="usercard-backdrop"
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget) setUserId(null);
+        }}
+      >
+        <div className="usercard" role="dialog" aria-modal="true" aria-label={`${label} 的资料`}>
+          <button type="button" className="usercard-close" aria-label="关闭" onClick={() => setUserId(null)}>
+            ×
+          </button>
+          <div className="usercard-head">
+            <span className="usercard-avatar" aria-hidden="true">
+              {initial}
+            </span>
             <div>
-              <span>诚信</span>
-              <strong>{scores.integrity}</strong>
-            </div>
-            <div>
-              <span>能力</span>
-              <strong>{scores.ability}</strong>
+              <h2 className="usercard-name">{label}</h2>
+              <p className="usercard-id mono" title={userId}>
+                {userId}
+              </p>
             </div>
           </div>
-        ) : null}
 
-        <div className="usercard-actions">
-          <Button type="button" kind="primary" disabled={addDisabled} onClick={() => void addFriend()}>
-            {addLabel}
-          </Button>
-          <Button type="button" kind="secondary" disabled={self || acting} onClick={() => void sendMessage()}>
-            发消息
-          </Button>
+          {loading ? <p className="hint">正在加载资料…</p> : null}
+          <ErrorNote message={error} />
+
+          {scores ? (
+            <div className="usercard-stats">
+              <div>
+                <span>诚信</span>
+                <strong>{scores.integrity}</strong>
+              </div>
+              <div>
+                <span>能力</span>
+                <strong>{scores.ability}</strong>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="usercard-actions">
+            <Button type="button" kind="primary" disabled={addDisabled} onClick={() => void addFriend()}>
+              {addLabel}
+            </Button>
+            <Button type="button" kind="secondary" disabled={self || acting} onClick={() => void sendMessage()}>
+              {signedIn ? "发消息" : "登录后发消息"}
+            </Button>
+          </div>
+          <p className="usercard-tip">
+            {signedIn
+              ? "好友关系需对方接受后生效。已经是好友时，「加为好友」会变灰。"
+              : "查看资料无需登录；加好友或发消息需要先登录。"}
+          </p>
         </div>
-        <p className="usercard-tip">好友关系需对方接受后生效。已经是好友时，「加为好友」会变灰。</p>
       </div>
-    </div>
+      {loginOpen ? <LoginGate onClose={() => setLoginOpen(false)} /> : null}
+    </>
   );
 }
 

@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { TaskGameClient } from "taskgame-client";
+import { isSignedIn } from "./client";
 import { useApp } from "./context";
 import { personLabel } from "./person";
 import { openUserCard } from "./userCard";
@@ -70,7 +71,8 @@ export function UserRef({ userId }: { userId: string }): ReactNode {
 }
 
 export function useNickname(userId: string): string | undefined {
-  const { client } = useApp();
+  const { client, settings } = useApp();
+  const signedIn = isSignedIn(settings);
   const [value, setValue] = useState<string | undefined>(() => (userId ? nicknames.get(userId) : undefined));
 
   useEffect(() => {
@@ -84,13 +86,13 @@ export function useNickname(userId: string): string | undefined {
 
   useEffect(() => {
     if (!client || !userId || nicknames.has(userId)) return;
-    schedule(client, userId);
-  }, [client, userId]);
+    schedule(client, userId, signedIn);
+  }, [client, userId, signedIn]);
 
   return value;
 }
 
-function schedule(client: TaskGameClient, userId: string): void {
+function schedule(client: TaskGameClient, userId: string, signedIn: boolean): void {
   if (loadedClient !== client) {
     loadedClient = client;
     friendsLoaded = false;
@@ -107,13 +109,13 @@ function schedule(client: TaskGameClient, userId: string): void {
     flushTimer = 0;
     const ids = [...queued];
     queued.clear();
-    void fill(client, ids, gen);
+    void fill(client, ids, gen, signedIn);
   }, 20);
 }
 
-async function fill(client: TaskGameClient, ids: string[], gen: number): Promise<void> {
+async function fill(client: TaskGameClient, ids: string[], gen: number, signedIn: boolean): Promise<void> {
   if (gen !== generation) return;
-  if (!friendsLoaded) {
+  if (signedIn && !friendsLoaded) {
     try {
       const list = await client.listFriends();
       if (gen !== generation) return;

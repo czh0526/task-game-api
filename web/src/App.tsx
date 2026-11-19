@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { isSignedIn } from "./client";
 import { useApp } from "./context";
+import { LoginGate } from "./LoginGate";
 import { CHAT_ERROR_EVENT } from "./openChat";
 import { DevIdentity, SessionCard } from "./identity";
-import { href, useRoute } from "./route";
+import { href, isProtectedRoute, useRoute, type Route } from "./route";
 import { AuthScreen } from "./screens/AuthScreen";
 import { Conversation } from "./screens/Conversation";
 import { CreateTask } from "./screens/CreateTask";
@@ -33,7 +34,10 @@ const TITLES: Record<string, string> = {
 export function App() {
   const { settings, health } = useApp();
   const signedIn = isSignedIn(settings);
-  const route = useRoute(signedIn);
+  const route = useRoute();
+  // Navigation follows the URL only. A protected page opened while signed out
+  // keeps its URL and shows a login modal on top; signing in reveals the page.
+  const gateOpen = !signedIn && isProtectedRoute(route);
   const [chatError, setChatError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -50,13 +54,9 @@ export function App() {
   }, [route]);
 
   useEffect(() => {
-    const page = TITLES[route.name] ?? (signedIn ? "任务游戏" : "登录");
+    const page = TITLES[route.name] ?? "任务游戏";
     document.title = `${page} · 任务游戏`;
-  }, [route, signedIn]);
-
-  useEffect(() => {
-    if (signedIn && route.name === "auth") window.location.replace(href.tasks);
-  }, [signedIn, route.name]);
+  }, [route]);
 
   return (
     <div className={cx("app", !signedIn && "auth-app")}>
@@ -107,29 +107,48 @@ export function App() {
         </aside>
       ) : null}
 
-      <main className={cx("main", !signedIn && route.name === "auth" && "auth-main", route.name === "home" && "home-main")}>
-        {signedIn ? (
-          <>
-            <ErrorNote message={chatError} />
-            {route.name === "home" ? <Home /> : null}
-            {route.name === "tasks" ? <TaskList /> : null}
-            {route.name === "new" ? <CreateTask /> : null}
-            {route.name === "task" ? <TaskDetail key={route.id} id={route.id} /> : null}
-            {route.name === "scores" ? <Scores /> : null}
-            {route.name === "invites" ? <Invites /> : null}
-            {route.name === "friends" ? <Friends /> : null}
-            {route.name === "settings" ? <Settings /> : null}
-            {route.name === "conversation" ? <Conversation key={route.id} id={route.id} /> : null}
-          </>
-        ) : route.name === "home" || route.name === "tasks" ? (
-          <>
-            {route.name === "home" ? <Home /> : <TaskList />}
-          </>
-        ) : (
-          <AuthScreen />
-        )}
+      <main className={cx("main", route.name === "auth" && "auth-main", route.name === "home" && "home-main")}>
+        <ErrorNote message={chatError} />
+        {renderRoute(route, gateOpen)}
       </main>
+      {gateOpen ? <LoginGate onClose={() => window.location.replace(href.home)} /> : null}
       <UserCardHost />
+    </div>
+  );
+}
+
+/** Resolve the URL to a screen, independent of sign-in state. */
+function renderRoute(route: Route, gateOpen: boolean) {
+  switch (route.name) {
+    case "home":
+      return <Home />;
+    case "task":
+      return <TaskDetail key={route.id} id={route.id} />;
+    case "auth":
+      return <AuthScreen />;
+    case "tasks":
+      return gateOpen ? <GatePlaceholder /> : <TaskList />;
+    case "new":
+      return gateOpen ? <GatePlaceholder /> : <CreateTask />;
+    case "scores":
+      return gateOpen ? <GatePlaceholder /> : <Scores />;
+    case "invites":
+      return gateOpen ? <GatePlaceholder /> : <Invites />;
+    case "friends":
+      return gateOpen ? <GatePlaceholder /> : <Friends />;
+    case "settings":
+      return gateOpen ? <GatePlaceholder /> : <Settings />;
+    case "conversation":
+      return gateOpen ? <GatePlaceholder /> : <Conversation key={route.id} id={route.id} />;
+    default:
+      return <Home />;
+  }
+}
+
+function GatePlaceholder() {
+  return (
+    <div className="gate-placeholder">
+      <p>这个页面需要登录后才能查看。请在弹出的窗口中登录。</p>
     </div>
   );
 }
