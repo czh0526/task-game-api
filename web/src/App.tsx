@@ -3,7 +3,7 @@ import { isSignedIn } from "./client";
 import { useApp } from "./context";
 import { LoginGate } from "./LoginGate";
 import { CHAT_ERROR_EVENT } from "./openChat";
-import { DevIdentity, SessionCard } from "./identity";
+import { TopBar } from "./TopBar";
 import { href, isProtectedRoute, useRoute, type Route } from "./route";
 import { AuthScreen } from "./screens/AuthScreen";
 import { Conversation } from "./screens/Conversation";
@@ -59,53 +59,8 @@ export function App() {
   }, [route]);
 
   return (
-    <div className={cx("app", !signedIn && "auth-app")}>
-      <header className="top">
-        <div className="brand">
-          <span className="mark" aria-hidden="true">
-            任
-          </span>
-          <div>
-            <strong>任务游戏</strong>
-            <small>Open Protocol v0.1</small>
-          </div>
-        </div>
-        <p className={cx("health", health === "ok" && "ok", health === "down" && "down")}>
-          {health === "checking" ? "正在连接…" : health === "ok" ? "服务已连接" : "服务未连接"}
-        </p>
-        {!signedIn ? (
-          <a className="btn compact secondary" href={href.login}>
-            登录 / 注册
-          </a>
-        ) : null}
-      </header>
-
-      {signedIn ? (
-        <aside className="side">
-          <SessionCard />
-          <DevIdentity />
-          <nav className="nav">
-          <a href={href.tasks} aria-current={route.name === "tasks" || route.name === "task" ? "page" : undefined}>
-            任务
-          </a>
-          <a href={href.newTask} aria-current={route.name === "new" ? "page" : undefined}>
-            创建
-          </a>
-          <a href={href.invites} aria-current={route.name === "invites" ? "page" : undefined}>
-            邀请
-          </a>
-          <a href={href.friends} aria-current={route.name === "friends" ? "page" : undefined}>
-            好友
-          </a>
-          <a href={href.scores} aria-current={route.name === "scores" ? "page" : undefined}>
-            积分
-          </a>
-          <a href={href.settings} aria-current={route.name === "settings" ? "page" : undefined}>
-            设置
-          </a>
-        </nav>
-        </aside>
-      ) : null}
+    <div className="app">
+      <TopBar route={route} health={health} />
 
       <main className={cx("main", route.name === "auth" && "auth-main", route.name === "home" && "home-main")}>
         <ErrorNote message={chatError} />
