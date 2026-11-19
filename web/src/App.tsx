@@ -111,7 +111,6 @@ export function App() {
           <>
             <ErrorNote message={chatError} />
             {route.name === "home" ? <Home /> : null}
-            {route.name === "auth" ? <Home /> : null}
             {route.name === "tasks" ? <TaskList /> : null}
             {route.name === "new" ? <CreateTask /> : null}
             {route.name === "task" ? <TaskDetail key={route.id} id={route.id} /> : null}
