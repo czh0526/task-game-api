@@ -1,0 +1,151 @@
+import { useState, type FormEvent } from "react";
+import { bearer, isTaskGameError } from "taskgame-client";
+import { clientErrorText, createClient } from "./client";
+import { useApp } from "./context";
+import { formatError } from "./format";
+import { DevIdentity } from "./identity";
+import { nicknameError, nicknameServerError } from "./person";
+import { afterLoginHash } from "./route";
+import type { Settings } from "./settings";
+import { Button, ErrorNote, Field } from "./ui";
+
+type Mode = "login" | "register";
+
+/**
+ * Reusable login / register form. Used by the standalone auth screen and by
+ * the login gate modal. On success it persists the session; `onSuccess` lets
+ * the caller react (e.g. close a modal), otherwise it navigates to the
+ * post-login route.
+ */
+export function LoginForm({ onSuccess }: { onSuccess?: () => void }) {
+  const { settings, setSettings, patchSettings, clientError } = useApp();
+  const [mode, setMode] = useState<Mode>("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [nickname, setNickname] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+
+  async function onSubmit(event: FormEvent) {
+    event.preventDefault();
+    setError(null);
+    let anon;
+    try {
+      anon = createClient(loggedOutShape(settings));
+    } catch (err) {
+      setError(clientErrorText(err));
+      return;
+    }
+    if (mode === "register" && nickname.trim()) {
+      const local = nicknameError(nickname);
+      if (local) {
+        setError(local);
+        return;
+      }
+    }
+    setPending(true);
+    try {
+      const trimmedNick = nickname.trim();
+      const body =
+        mode === "register"
+          ? { email: email.trim(), password, ...(trimmedNick ? { nickname: trimmedNick } : {}) }
+          : { email: email.trim(), password };
+      const session = mode === "register" ? await anon.register(body) : await anon.login(body);
+      const me = await anon.withAuth(bearer(session.access_token)).me();
+      if (me.id !== session.user.id) {
+        throw new Error("登录返回的用户和令牌不一致");
+      }
+      setSettings({
+        ...settings,
+        authMode: "bearer",
+        bearerToken: session.access_token,
+        userId: me.id,
+        email: me.email || session.user.email,
+        apiKey: "",
+      });
+      if (onSuccess) onSuccess();
+      else window.location.replace(afterLoginHash());
+    } catch (err) {
+      setError(authErrorText(err));
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="tabs auth-switch" role="group" aria-label="登录或注册">
+        <button type="button" className={mode === "login" ? "tab on" : "tab"} onClick={() => setMode("login")}>
+          登录
+        </button>
+        <button type="button" className={mode === "register" ? "tab on" : "tab"} onClick={() => setMode("register")}>
+          注册
+        </button>
+      </div>
+      <form className="form card" onSubmit={onSubmit}>
+        <Field label="服务地址" hint="本机 API 默认 http://127.0.0.1:8891">
+          <input
+            value={settings.baseUrl}
+            spellCheck={false}
+            autoComplete="off"
+            onChange={(event) => patchSettings({ baseUrl: event.target.value })}
+          />
+        </Field>
+        <Field label="邮箱">
+          <input
+            type="email"
+            required
+            autoComplete="email"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+          />
+        </Field>
+        <Field label="密码" hint={mode === "register" ? "至少 8 个字符，最长 72 字节。服务只保存 bcrypt，不会存明文。" : undefined}>
+          <input
+            type="password"
+            required
+            minLength={mode === "register" ? 8 : undefined}
+            autoComplete={mode === "register" ? "new-password" : "current-password"}
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+          />
+        </Field>
+        {mode === "register" ? (
+          <Field label="昵称（可选）" hint="显示名，1 到 32 个字符。可以以后在「设置」里再填。不要求唯一。">
+            <input
+              value={nickname}
+              autoComplete="nickname"
+              placeholder="可以先留空"
+              onChange={(event) => setNickname(event.target.value)}
+            />
+          </Field>
+        ) : null}
+        <ErrorNote message={error || clientError} />
+        <Button type="submit" kind="primary" pending={pending}>
+          {mode === "register" ? "注册并登录" : "登录"}
+        </Button>
+      </form>
+      <DevIdentity />
+    </>
+  );
+}
+
+function loggedOutShape(settings: Settings): Settings {
+  return { ...settings, authMode: "apiKey", apiKey: "", bearerToken: "", userId: "", email: "" };
+}
+
+function authErrorText(error: unknown): string {
+  if (isTaskGameError(error)) {
+    if (error.code === "conflict") return "这个邮箱已经注册。";
+    if (error.code === "unauthorized") return "邮箱或密码不正确。";
+    if (error.code === "invalid_argument") {
+      const nick = nicknameServerError(error.message);
+      if (nick) return nick;
+      if (error.message.includes("email")) return "请填写有效的邮箱地址。";
+      if (error.message.includes("at least")) return "密码至少 8 个字符。";
+      if (error.message.includes("72")) return "密码不能超过 72 字节。";
+      if (error.message.includes("required")) return "请填写密码。";
+    }
+  }
+  return formatError(error);
+}

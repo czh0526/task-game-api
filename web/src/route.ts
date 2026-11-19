@@ -52,16 +52,32 @@ export function parseRoute(hash: string): Route {
   return { name: "home" };
 }
 
-/** Landing route when the app opens with no hash: members start at their tasks. */
-export function defaultHash(signedIn: boolean): string {
-  return signedIn ? href.tasks : href.home;
+/**
+ * Landing route when the app opens with no hash. Navigation is driven only by
+ * the URL, never by sign-in state, so the default is always the public home.
+ */
+export function defaultHash(): string {
+  return href.home;
+}
+
+/** Pages that require a signed-in user; an anonymous visit shows a login gate. */
+export function isProtectedRoute(route: Route): boolean {
+  return (
+    route.name === "tasks" ||
+    route.name === "new" ||
+    route.name === "scores" ||
+    route.name === "conversation" ||
+    route.name === "invites" ||
+    route.name === "friends" ||
+    route.name === "settings"
+  );
 }
 
 /**
  * Hash to open after sign-in. A login link may carry `?next=<hash>` so that
  * e.g. a visitor reading a public task detail returns there after logging in.
  * Only same-app hashes (starting with "#/") are honoured; anything else is
- * ignored to avoid open redirects. Defaults to the task list.
+ * ignored to avoid open redirects. Defaults to the public home.
  */
 export function afterLoginHash(hash: string = window.location.hash): string {
   const raw = hash.startsWith("#") ? hash.slice(1) : hash;
@@ -70,16 +86,16 @@ export function afterLoginHash(hash: string = window.location.hash): string {
     const next = new URLSearchParams(raw.slice(question + 1)).get("next");
     if (next && next.startsWith("#/") && !next.startsWith("//")) return next;
   }
-  return href.tasks;
+  return href.home;
 }
 
-export function useRoute(signedIn: boolean): Route {
+export function useRoute(): Route {
   const [route, setRoute] = useState<Route>(() => {
     if (!window.location.hash) {
       // Decide the landing page before the first render. Child screen effects
       // (e.g. Home writing "#/home") run before this hook's effect, so waiting
       // until an effect would let them overwrite the redirect.
-      const next = defaultHash(signedIn);
+      const next = defaultHash();
       window.history.replaceState(null, "", next);
       return parseRoute(next);
     }

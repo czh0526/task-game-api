@@ -808,6 +808,19 @@ button.portal-cat-name:hover, .portal-cat.on .portal-cat-name { color: var(--p-o
 .usercard-actions .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .usercard-tip { margin: 14px 0 0; color: var(--ink-soft); font-size: 0.78rem; line-height: 1.5; }
 
+/* Login gate modal for protected pages opened while signed out. */
+.login-gate-backdrop { z-index: 1100; align-items: flex-start; overflow-y: auto; }
+.login-gate {
+  position: relative; width: min(460px, 100%);
+  margin: 6vh auto; padding: 26px 24px 28px;
+  border: 1px solid var(--line); border-radius: 14px;
+  background: var(--bg-raised); box-shadow: var(--shadow);
+}
+.login-gate-title { margin: 0 40px 4px 0; font-size: 1.25rem; }
+.login-gate-hint { margin: 0 0 16px; }
+.login-gate .form.card { border: 0; padding: 0; box-shadow: none; background: transparent; }
+.gate-placeholder { padding: 40px 0; color: var(--ink-soft); }
+
 @media (max-width: 900px) {
   .app { grid-template-columns: 1fr; }
   .side { border-right: 0; border-bottom: 1px solid var(--line); }
