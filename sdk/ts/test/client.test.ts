@@ -348,6 +348,21 @@ describe("protocol calls", () => {
     assert.equal(calls[6]?.url, "http://127.0.0.1:8891/v1/chats/cht_1/messages");
   });
 
+  it("posts a sticker message with emoji in text", async () => {
+    const calls: Captured[] = [];
+    const client = new TaskGameClient({
+      baseUrl: "http://127.0.0.1:8891/v1",
+      apiKey: "dev-publisher-key",
+      fetch: (url, init) => {
+        calls.push({ url, method: init.method, headers: init.headers, body: init.body });
+        return Promise.resolve(jsonResponse(201, { ...task, id: "msg_1", type: "sticker", text: "😂" }));
+      },
+    });
+    const msg = await client.postMessage("cht_1", { type: "sticker", text: "😂" });
+    assert.equal(msg.type, "sticker");
+    assert.deepEqual(JSON.parse(calls[0]?.body ?? ""), { type: "sticker", text: "😂" });
+  });
+
   it("posts a direct chat as type and user_id", async () => {
     const calls: Captured[] = [];
     const client = new TaskGameClient({

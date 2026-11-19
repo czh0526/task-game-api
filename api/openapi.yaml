@@ -25,6 +25,7 @@ info:
     - Additive in v0.1, assignee_policy is enforced on accept. specific allows user_ids or a pending/accepted invite, and a declined invite blocks until a new invite. criteria requires ability >= min_ability. The publisher cannot accept their own task. Funding a specific task invites each user_id (task.invited). GET /tasks?assignable=me lists tasks the caller can accept now. Friendship does not add an assignee_policy value and does not change who can accept a task.
     - Additive in v0.1, mutual friends and personal groups. POST /friends/requests {user_id} asks an existing user. You cannot friend yourself. Already friends, or a pending request you already sent, is 409 and does not insert a second row. If the other user already has a pending request toward you, that call accepts the existing request (200, status accepted) instead of opening another one. The recipient can accept or decline. The requester can cancel a pending outgoing request; cancel does not emit a webhook. Either friend can unfriend, which ends the relationship for both sides and clears both users' group membership for that pair. A later request is allowed. GET /friends is only the caller's list: groups are personal folders (a friend is in at most one of the owner's groups, or ungrouped). Deleting a group does not unfriend. Caps: 50 groups per user, 500 friends per user, 100 pending outgoing requests, group names 1–32 characters after trim and unique per owner, sort_order from -1000000 to 1000000. Friend objects expose user_id, nickname, integrity, ability, and since — the same public scores as GET /users/{userId}/scores — and never email, balance, or password. nickname is empty when unset and is not unique. Webhook events friend.requested, friend.accepted, friend.declined, and friend.removed are delivered to the other party's existing webhook subscriptions (owner-scoped, same HMAC delivery as score.updated). They are not task-scoped.
     - Additive in v0.1, public market listing: GET /tasks without credentials is allowed so the web landing page can show task categories before sign-in. GET /tasks/{taskId} is also public so a visitor can open a task's detail from the listing before signing in. GET /users/{userId}/scores is public so a visitor can open a user's profile card before signing in; friend actions still require auth and the web UI prompts for login. `assignable=me` still requires auth. Task mutations and all other routes remain protected.
+    - Additive in v0.1, chat stickers: POST /chats/{chatId}/messages accepts `type: sticker`, which carries an emoji (or short emoticon phrase) in `text` with no `attachment_ref`. Stickers are stored and echoed like text messages and the web UI renders them enlarged. No new field or upload is required.
 servers:
   - url: https://api.example.com/v1
 security:
@@ -1124,6 +1125,7 @@ paths:
       operationId: postMessage
       description: |
         Members only. Unfriend does not remove direct-chat members, so a former friend can still send.
+        `type: sticker` sends an emoji as a chat message: put the emoji (or short emoticon phrase) in `text`, leave `attachment_ref` empty. It is stored and echoed like a text message and needs no upload.
       parameters:
         - name: chatId
           in: path
@@ -1803,7 +1805,8 @@ components:
       properties:
         type:
           type: string
-          enum: [text, attachment_ref]
+          enum: [text, sticker, attachment_ref]
+          description: "`sticker` carries an emoji (or short emoticon phrase) in `text` and renders as an enlarged emoji in clients; it needs no attachment upload."
         text: { type: string }
         attachment_ref: { type: string }
     Message:

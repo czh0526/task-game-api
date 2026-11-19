@@ -195,7 +195,7 @@ type Payment struct {
 type PostMessageReq struct {
 	ChatId         string `path:"chatId" json:"-"`
 	IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
-	Type           string `json:"type,options=text|attachment_ref"`
+	Type           string `json:"type,options=text|sticker|attachment_ref"`
 	Text           string `json:"text,optional,omitempty"`
 	AttachmentRef  string `json:"attachment_ref,optional,omitempty"`
 }

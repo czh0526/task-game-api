@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createIdempotencyKey, type Chat, type Message } from "taskgame-client";
 import { useApp } from "../context";
+import { EMOJI_STICKERS, stickerLabel } from "../emojis";
 import { formatError, formatTime, isAbort } from "../format";
 import { UserRef, useNickname } from "../names";
 import { personLabel } from "../person";
@@ -17,6 +18,7 @@ export function Conversation({ id }: { id: string }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [truncated, setTruncated] = useState(false);
   const [text, setText] = useState("");
+  const [emojiOpen, setEmojiOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -87,25 +89,29 @@ export function Conversation({ id }: { id: string }) {
     };
   }, [client, error, load]);
 
-  async function onPost() {
-    if (!client) return;
-    const body = text.trim();
-    if (!body) return;
+  async function post(body: string, type: "text" | "sticker") {
+    body = body.trim();
+    if (!client || !body || pending) return;
     setPending(true);
     setError(null);
     try {
       const message = await client.postMessage(
         id,
-        { type: "text", text: body },
+        { type, text: body },
         { idempotencyKey: createIdempotencyKey("msg") },
       );
       setMessages((prev) => (prev.some((item) => item.id === message.id) ? prev : [...prev, message]));
-      setText("");
+      if (type === "text") setText("");
+      setEmojiOpen(false);
     } catch (err) {
       setError(formatError(err));
     } finally {
       setPending(false);
     }
+  }
+
+  async function onPost() {
+    await post(text, "text");
   }
 
   const peer = chat ? otherMember(chat, settings.userId) : "";
@@ -166,7 +172,14 @@ export function Conversation({ id }: { id: string }) {
                   <UserRef userId={message.sender_id} />
                   <time dateTime={message.created_at}>{formatTime(message.created_at)}</time>
                 </header>
-                <p>{message.text || message.attachment_ref}</p>
+                {message.type === "sticker" ? (
+                  <p className="sticker" title={stickerLabel(message.text ?? "")}>
+                    <span className="sticker-face" aria-hidden="true">{message.text}</span>
+                    <span className="sticker-label">{stickerLabel(message.text ?? "")}</span>
+                  </p>
+                ) : (
+                  <p>{message.text || message.attachment_ref}</p>
+                )}
               </article>
             ))}
           </div>
@@ -178,13 +191,44 @@ export function Conversation({ id }: { id: string }) {
               void onPost();
             }}
           >
-            <textarea
-              rows={3}
-              maxLength={8000}
-              value={text}
-              placeholder="发送文字"
-              onChange={(event) => setText(event.target.value)}
-            />
+            <div className="composer-input">
+              <textarea
+                rows={3}
+                maxLength={8000}
+                value={text}
+                placeholder="发送文字，或点下面的表情发送表情包"
+                onChange={(event) => setText(event.target.value)}
+              />
+              <div className="emoji-bar">
+                <button
+                  type="button"
+                  className={emojiOpen ? "emoji-toggle on" : "emoji-toggle"}
+                  aria-expanded={emojiOpen}
+                  disabled={pending}
+                  onClick={() => setEmojiOpen((open) => !open)}
+                >
+                  😀 表情
+                </button>
+                {emojiOpen ? (
+                  <div className="emoji-panel" role="group" aria-label="选择表情包">
+                    {EMOJI_STICKERS.map((sticker) => (
+                      <button
+                        type="button"
+                        key={sticker.char}
+                        className="emoji-option"
+                        title={sticker.label}
+                        aria-label={sticker.label}
+                        disabled={pending}
+                        onClick={() => void post(sticker.char, "sticker")}
+                      >
+                        <span aria-hidden="true">{sticker.char}</span>
+                        <small>{sticker.label}</small>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </div>
             <Button type="submit" kind="primary" pending={pending} disabled={pending || !text.trim()}>
               发送
             </Button>

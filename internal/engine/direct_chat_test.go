@@ -473,3 +473,36 @@ func pendingDeliveryCount(t *testing.T, st store.Store) int {
 	}
 	return len(rows)
 }
+
+func TestStickerMessage(t *testing.T) {
+	ctx := context.Background()
+	eng, st, clk := newEngine(t, 1_000_000)
+	ensureUsers(t, st, clk, "usr_a", "usr_b")
+	becomeFriends(t, eng, "usr_a", "usr_b")
+
+	chat, err := eng.CreateChat(ctx, "usr_a", &types.CreateChatReq{Type: model.ChatDirect, UserId: "usr_b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sticker, err := eng.PostMessage(ctx, "usr_a", &types.PostMessageReq{ChatId: chat.Id, Type: "sticker", Text: "😂"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sticker.Type != "sticker" || sticker.Text != "😂" || sticker.AttachmentRef != "" {
+		t.Fatalf("sticker %+v", sticker)
+	}
+
+	page, err := eng.ListMessages(ctx, "usr_b", &types.ListMessagesReq{ChatId: chat.Id})
+	if err != nil || len(page.Items) != 1 || page.Items[0].Type != "sticker" || page.Items[0].Text != "😂" {
+		t.Fatalf("history %+v %v", page, err)
+	}
+
+	// sticker requires text, and rejects an attachment ref
+	if _, err := eng.PostMessage(ctx, "usr_a", &types.PostMessageReq{ChatId: chat.Id, Type: "sticker"}); codeOf(err) != "invalid_argument" {
+		t.Fatalf("sticker without text: %v", err)
+	}
+	if _, err := eng.PostMessage(ctx, "usr_a", &types.PostMessageReq{ChatId: chat.Id, Type: "sticker", Text: "😂", AttachmentRef: "att_1"}); codeOf(err) != "invalid_argument" {
+		t.Fatalf("sticker with ref: %v", err)
+	}
+}

@@ -463,6 +463,54 @@ th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line
 .bubble.mine { margin-left: auto; background: #3d2a24; color: #fff8f4; border-color: #3d2a24; }
 .bubble.mine .en, .bubble.mine header, .bubble.mine footer, .bubble.mine code { color: #f0d7cc; }
 .composer { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; margin-top: 12px; }
+.composer-input { position: relative; display: grid; gap: 6px; min-width: 0; }
+.emoji-bar { display: flex; align-items: center; }
+.emoji-toggle {
+  border: 1px solid #d9d0c2;
+  background: var(--bg-raised);
+  color: var(--ink);
+  border-radius: 8px;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.emoji-toggle:hover { background: rgba(157, 44, 26, 0.06); }
+.emoji-toggle.on { border-color: var(--accent); color: var(--accent); }
+.emoji-toggle:disabled { cursor: progress; opacity: 0.6; }
+.emoji-panel {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  width: min(24rem, 90vw);
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 2px;
+  padding: 8px;
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+.emoji-option {
+  display: grid;
+  justify-items: center;
+  gap: 1px;
+  padding: 5px 2px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+}
+.emoji-option:hover { background: rgba(157, 44, 26, 0.08); }
+.emoji-option:disabled { cursor: progress; opacity: 0.6; }
+.emoji-option span { font-size: 1.55rem; line-height: 1.1; }
+.emoji-option small { color: var(--ink-soft); font-size: 0.68rem; }
+.bubble .sticker { display: grid; justify-items: center; gap: 2px; margin: 6px 0; }
+.sticker-face { font-size: 3.2rem; line-height: 1.15; }
+.sticker-label { color: var(--ink-soft); font-size: 0.78rem; }
+.bubble.mine .sticker-label { color: #f0d7cc; }
 
 .friend-row {
   display: flex;

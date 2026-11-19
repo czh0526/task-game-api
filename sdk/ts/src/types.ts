@@ -42,7 +42,7 @@ export type DropoutRule = "replace";
 
 export type PaymentCondition = "on_accept" | "on_milestone_pass" | "on_final_confirm";
 
-export type MessageType = "text" | "attachment_ref";
+export type MessageType = "text" | "sticker" | "attachment_ref";
 
 export type WebhookEventType =
   | "task.funded"
