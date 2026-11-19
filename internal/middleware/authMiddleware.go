@@ -28,11 +28,11 @@ func NewAuthMiddleware(cfg config.AuthConf) *AuthMiddleware {
 }
 
 // Handle rejects unauthenticated calls before the handler runs.
-// The task market listing and individual task details are public so visitors
-// can browse tasks before sign-in; credentials, when supplied, are still validated.
+// The task market listing, individual task details, and a user's public scores
+// are readable without sign-in; credentials, when supplied, are still validated.
 func (m *AuthMiddleware) Handle(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if isPublicTaskRead(r) && !hasCredentials(r) {
+		if isPublicRead(r) && !hasCredentials(r) {
 			next(w, r)
 			return
 		}
@@ -45,10 +45,11 @@ func (m *AuthMiddleware) Handle(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// isPublicTaskRead reports GET requests that only read public task data:
-// the market listing (GET /v1/tasks) and a single task detail
-// (GET /v1/tasks/{taskId}). Task mutations and all other routes stay protected.
-func isPublicTaskRead(r *http.Request) bool {
+// isPublicRead reports GET requests that only read public data: the market
+// listing (GET /v1/tasks), a single task detail (GET /v1/tasks/{taskId}), and
+// a user's public scores (GET /v1/users/{userId}/scores). Mutations and all
+// other routes stay protected.
+func isPublicRead(r *http.Request) bool {
 	if r.Method != http.MethodGet {
 		return false
 	}
@@ -56,14 +57,21 @@ func isPublicTaskRead(r *http.Request) bool {
 	if path == "/v1/tasks" {
 		return true
 	}
-	const prefix = "/v1/tasks/"
-	if !strings.HasPrefix(path, prefix) {
-		return false
+	const tasksPrefix = "/v1/tasks/"
+	if strings.HasPrefix(path, tasksPrefix) {
+		// Only a single segment after /v1/tasks/ is the detail route; deeper
+		// paths (e.g. /v1/tasks/{id}/invites) are not public.
+		rest := strings.TrimPrefix(path, tasksPrefix)
+		return rest != "" && !strings.Contains(rest, "/")
 	}
-	// Only a single path segment after /v1/tasks/ is the detail route; deeper
-	// paths (e.g. /v1/tasks/{id}/invites) are not public.
-	rest := strings.TrimPrefix(path, prefix)
-	return rest != "" && !strings.Contains(rest, "/")
+	const usersPrefix = "/v1/users/"
+	if strings.HasPrefix(path, usersPrefix) {
+		// Exactly /v1/users/{userId}/scores is public; other user routes and
+		// trailing sub-paths stay protected.
+		parts := strings.Split(strings.TrimPrefix(path, usersPrefix), "/")
+		return len(parts) == 2 && parts[0] != "" && parts[1] == "scores"
+	}
+	return false
 }
 
 func hasCredentials(r *http.Request) bool {

@@ -3,7 +3,6 @@ package user
 import (
 	"context"
 
-	"taskgame/internal/auth"
 	"taskgame/internal/svc"
 	"taskgame/internal/types"
 
@@ -25,8 +24,8 @@ func NewGetUserScoresLogic(ctx context.Context, svcCtx *svc.ServiceContext) *Get
 }
 
 func (l *GetUserScoresLogic) GetUserScores(req *types.GetUserScoresReq) (*types.UserScores, error) {
-	if _, err := auth.Require(l.ctx); err != nil {
-		return nil, err
-	}
+	// Public profile data: anonymous visitors can read a user's nickname and
+	// scores so the web UI can show a profile card before sign-in. Credentials
+	// are still validated by the middleware when supplied.
 	return l.svcCtx.Engine.GetUserScores(l.ctx, req.UserId)
 }
