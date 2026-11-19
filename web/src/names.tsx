@@ -1,8 +1,8 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { TaskGameClient } from "taskgame-client";
 import { useApp } from "./context";
-import { openDirectChat, reportChatError } from "./openChat";
 import { personLabel } from "./person";
+import { openUserCard } from "./userCard";
 
 const nicknames = new Map<string, string>();
 const listeners = new Set<() => void>();
@@ -38,7 +38,6 @@ export function PersonName({
   chat?: boolean;
 }) {
   const { client, settings } = useApp();
-  const [pending, setPending] = useState(false);
   const label = personLabel(nickname, userId);
   const self = Boolean(userId) && userId === settings.userId;
   if (!chat || !client || !userId || self) {
@@ -53,15 +52,11 @@ export function PersonName({
       type="button"
       className="person person-chat"
       title={userId}
-      aria-label={`与 ${label} 发消息`}
-      disabled={pending}
+      aria-label={`查看 ${label} 的资料`}
       onClick={(event) => {
         event.stopPropagation();
         event.preventDefault();
-        setPending(true);
-        void openDirectChat(client, userId)
-          .catch((err: unknown) => reportChatError(err))
-          .finally(() => setPending(false));
+        openUserCard(userId);
       }}
     >
       {label}

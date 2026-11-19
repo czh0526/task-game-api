@@ -15,6 +15,7 @@ import { Settings } from "./screens/Settings";
 import { TaskDetail } from "./screens/TaskDetail";
 import { TaskList } from "./screens/TaskList";
 import { cx, ErrorNote } from "./ui";
+import { UserCardHost } from "./userCard";
 
 const TITLES: Record<string, string> = {
   home: "首页",
@@ -128,6 +129,7 @@ export function App() {
           <AuthScreen />
         )}
       </main>
+      <UserCardHost />
     </div>
   );
 }
