@@ -771,6 +771,43 @@ button.portal-cat-name:hover, .portal-cat.on .portal-cat-name { color: var(--p-o
 }
 .portal-publish-btn:hover { background: #c65a13; text-decoration: none; color: #fff; }
 
+/* User profile card (opened by clicking a person name) */
+.usercard-backdrop {
+  position: fixed; inset: 0; z-index: 1000;
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px; background: rgba(29, 26, 22, 0.5);
+}
+.usercard {
+  position: relative; width: min(420px, 100%);
+  padding: 24px; border: 1px solid var(--line); border-radius: 14px;
+  background: var(--bg-raised); box-shadow: var(--shadow);
+}
+.usercard-close {
+  position: absolute; top: 10px; right: 12px;
+  border: 0; background: none; color: var(--ink-soft);
+  font-size: 1.6rem; line-height: 1; padding: 0 6px;
+}
+.usercard-close:hover { color: var(--ink); }
+.usercard-head { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
+.usercard-avatar {
+  flex: none; width: 52px; height: 52px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--accent); color: var(--accent-ink);
+  font-size: 1.4rem; font-weight: 700;
+}
+.usercard-name { margin: 0; font-size: 1.2rem; overflow-wrap: anywhere; }
+.usercard-id { margin: 2px 0 0; color: var(--ink-soft); font-size: 0.78rem; overflow-wrap: anywhere; }
+.usercard-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 4px 0 18px; }
+.usercard-stats > div {
+  display: flex; align-items: baseline; justify-content: space-between;
+  padding: 10px 14px; border: 1px solid var(--line); border-radius: 8px; background: #fff;
+}
+.usercard-stats span { color: var(--ink-soft); font-size: 0.86rem; }
+.usercard-stats strong { font-size: 1.2rem; }
+.usercard-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.usercard-actions .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.usercard-tip { margin: 14px 0 0; color: var(--ink-soft); font-size: 0.78rem; line-height: 1.5; }
+
 @media (max-width: 900px) {
   .app { grid-template-columns: 1fr; }
   .side { border-right: 0; border-bottom: 1px solid var(--line); }
