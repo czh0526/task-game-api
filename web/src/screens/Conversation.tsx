@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createIdempotencyKey, type Chat, type Message } from "taskgame-client";
 import { useApp } from "../context";
-import { EMOJI_STICKERS, stickerLabel } from "../emojis";
+import { asStickerChar, EMOJI_STICKERS, insertAtCaret, stickerLabel } from "../emojis";
 import { formatError, formatTime, isAbort } from "../format";
 import { UserRef, useNickname } from "../names";
 import { personLabel } from "../person";
@@ -23,6 +23,7 @@ export function Conversation({ id }: { id: string }) {
   const [pending, setPending] = useState(false);
   const [loading, setLoading] = useState(true);
   const seenCursor = useRef<string | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const load = useCallback(
     async (signal?: AbortSignal) => {
@@ -101,7 +102,7 @@ export function Conversation({ id }: { id: string }) {
         { idempotencyKey: createIdempotencyKey("msg") },
       );
       setMessages((prev) => (prev.some((item) => item.id === message.id) ? prev : [...prev, message]));
-      if (type === "text") setText("");
+      setText("");
       setEmojiOpen(false);
     } catch (err) {
       setError(formatError(err));
@@ -111,7 +112,21 @@ export function Conversation({ id }: { id: string }) {
   }
 
   async function onPost() {
-    await post(text, "text");
+    const body = text.trim();
+    const sticker = asStickerChar(body);
+    await post(body, sticker ? "sticker" : "text");
+  }
+
+  function addEmoji(char: string) {
+    const el = textareaRef.current;
+    const start = el?.selectionStart ?? text.length;
+    const end = el?.selectionEnd ?? text.length;
+    const next = insertAtCaret(text, char, start, end);
+    setText(next.text);
+    requestAnimationFrame(() => {
+      el?.focus();
+      el?.setSelectionRange(next.caret, next.caret);
+    });
   }
 
   const peer = chat ? otherMember(chat, settings.userId) : "";
@@ -193,10 +208,11 @@ export function Conversation({ id }: { id: string }) {
           >
             <div className="composer-input">
               <textarea
+                ref={textareaRef}
                 rows={3}
                 maxLength={8000}
                 value={text}
-                placeholder="发送文字，或点下面的表情发送表情包"
+                placeholder="写消息，点表情可插入文字中；只发一个表情会显示为大表情包"
                 onChange={(event) => setText(event.target.value)}
               />
               <div className="emoji-bar">
@@ -210,16 +226,16 @@ export function Conversation({ id }: { id: string }) {
                   😀 表情
                 </button>
                 {emojiOpen ? (
-                  <div className="emoji-panel" role="group" aria-label="选择表情包">
+                  <div className="emoji-panel" role="group" aria-label="插入表情到消息">
                     {EMOJI_STICKERS.map((sticker) => (
                       <button
                         type="button"
                         key={sticker.char}
                         className="emoji-option"
                         title={sticker.label}
-                        aria-label={sticker.label}
+                        aria-label={`插入表情 ${sticker.label}`}
                         disabled={pending}
-                        onClick={() => void post(sticker.char, "sticker")}
+                        onClick={() => addEmoji(sticker.char)}
                       >
                         <span aria-hidden="true">{sticker.char}</span>
                         <small>{sticker.label}</small>

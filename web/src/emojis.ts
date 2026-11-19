@@ -40,3 +40,22 @@ const labelByChar = new Map(EMOJI_STICKERS.map((item) => [item.char, item.label]
 export function stickerLabel(text: string): string {
   return labelByChar.get(text.trim()) ?? text;
 }
+
+/** A message that is exactly one built-in emoji is sent as a big sticker; anything else is inline text. */
+export function asStickerChar(text: string): string | null {
+  const value = text.trim();
+  return labelByChar.has(value) ? value : null;
+}
+
+/**
+ * Insert an emoji into text at the caret (or replace the selection) and return
+ * the next caret position, so emojis can be embedded anywhere in a message.
+ */
+export function insertAtCaret(text: string, emoji: string, start: number, end: number): { text: string; caret: number } {
+  const from = Math.max(0, Math.min(start, text.length));
+  const to = Math.max(from, Math.min(end, text.length));
+  return {
+    text: text.slice(0, from) + emoji + text.slice(to),
+    caret: from + emoji.length,
+  };
+}
