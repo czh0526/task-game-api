@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { defaultHash, href, parseRoute } from "../src/route.ts";
+import { afterLoginHash, defaultHash, href, parseRoute } from "../src/route.ts";
 
 test("empty hash lands on the homepage", () => {
   assert.deepEqual(parseRoute(""), { name: "home" });
@@ -14,6 +14,15 @@ test("default landing page depends on sign-in state", () => {
   assert.equal(defaultHash(false), "#/home");
   assert.equal(defaultHash(true), "#/tasks");
   assert.deepEqual(parseRoute(defaultHash(true)), { name: "tasks", kind: undefined });
+});
+
+test("after-login redirect honours a safe next hash", () => {
+  assert.equal(afterLoginHash("#/login"), "#/tasks");
+  const next = encodeURIComponent("#/tasks/task_123");
+  assert.equal(afterLoginHash(`#/login?next=${next}`), "#/tasks/task_123");
+  // Off-site or malformed next values fall back to the task list.
+  assert.equal(afterLoginHash(`#/login?next=${encodeURIComponent("https://evil.example")}`), "#/tasks");
+  assert.equal(afterLoginHash(`#/login?next=${encodeURIComponent("//evil.example")}`), "#/tasks");
 });
 
 test("kind query preselects the task list filter", () => {
