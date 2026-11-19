@@ -2,12 +2,14 @@ import { useEffect, useState, type FormEvent } from "react";
 import { isTaskGameError } from "taskgame-client";
 import { useApp } from "../context";
 import { formatError, isAbort } from "../format";
+import { DevIdentity } from "../identity";
 import { notifyProfile } from "../names";
 import { nicknameError, nicknameServerError } from "../person";
+import { loggedOut } from "../settings";
 import { Button, ErrorNote, Field, OkNote, Screen } from "../ui";
 
 export function Settings() {
-  const { client, clientError, settings } = useApp();
+  const { client, clientError, settings, setSettings } = useApp();
   const [email, setEmail] = useState(settings.email);
   const [nickname, setNickname] = useState("");
   const [saved, setSaved] = useState("");
@@ -105,6 +107,21 @@ export function Settings() {
           {saved ? "更新" : "保存"}
         </Button>
       </form>
+
+      <section className="settings-block">
+        <h2>账号</h2>
+        <p className="hint">{settings.email || "开发密钥账号没有邮箱"} · {settings.userId}</p>
+        <div className="who-actions">
+          <Button kind="secondary" onClick={() => setSettings(loggedOut(settings))}>
+            退出登录
+          </Button>
+        </div>
+      </section>
+
+      <section className="settings-block">
+        <h2>连接与开发身份</h2>
+        <DevIdentity />
+      </section>
     </Screen>
   );
 }

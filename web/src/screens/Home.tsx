@@ -345,15 +345,8 @@ export function Home() {
       <ErrorNote message={client ? error : clientError} />
 
       <div className="portal">
-        {/* 1. 顶部：自有品牌 logo + 城市站位 + 大搜索框 + 快捷入口 */}
+        {/* 1. 搜索条：品牌与登录入口已由全局顶栏统一提供，这里只保留搜索 */}
         <header className="portal-topbar">
-          <a className="portal-logo" href={href.home} aria-label="任务游戏首页">
-            <span className="portal-logo-mark" aria-hidden="true">任</span>
-            <span className="portal-logo-text">
-              <strong>任务游戏</strong>
-              <small>TASK GAME</small>
-            </span>
-          </a>
           <div className="portal-site-tag" title="本地任务市场">
             <span className="portal-pin" aria-hidden="true">●</span> 在线任务站
           </div>
@@ -367,29 +360,16 @@ export function Home() {
             />
             <button type="submit">搜索</button>
           </form>
-          <div className="portal-top-actions">
-            {signedIn ? (
-              <>
-                <a href={href.newTask}>免费发布任务</a>
-                <a href={href.tasks}>任务大厅</a>
-              </>
-            ) : (
-              <>
-                <a href={href.login}>登录</a>
-                <a href={href.login}>注册</a>
-              </>
-            )}
-          </div>
+          <span className="portal-nav-count">共 {stats.total} 个任务</span>
         </header>
 
-        {/* 2. 频道导航带：首页 / 单人任务 / 协作任务 / 竞争任务 / 代理专区 */}
+        {/* 2. 频道导航带：玩法频道用 URL 切到任务列表，首页是当前频道 */}
         <nav className="portal-nav" aria-label="任务频道">
           <a className="on" href={href.home}>首页</a>
           {(["exclusive", "collaborative", "competitive"] as TaskKind[]).map((kind) => {
             const category = CATEGORIES.find((item) => item.kind === kind);
             return category ? <a key={kind} href={href.tasksByKind(kind)}>{category.title}</a> : null;
           })}
-          <a href={href.agentZone}>代理专区</a>
           <span className="portal-nav-spacer" />
           <span className="portal-nav-count">共 {stats.total} 个任务</span>
         </nav>
@@ -472,17 +452,26 @@ export function Home() {
             </label>
           </div>
           {geoMessage ? <p className="portal-geo-message">{geoMessage}</p> : null}
-          {requirementCounts.length > 0 ? (
-            <div className="portal-quick-row">
-              <span className="portal-quick-label">按完成者</span>
-              <button type="button" className={activeRequirement === null ? "on" : undefined} onClick={() => setActiveRequirement(null)}>全部</button>
-              {requirementCounts.map((item) => (
-                <button type="button" key={item.name} className={activeRequirement === item.name ? "on" : undefined} onClick={() => setActiveRequirement(item.name)}>
-                  {executorRequirementLabel(item.name)}
-                </button>
-              ))}
-            </div>
-          ) : null}
+          <div className="portal-quick-row">
+            <span className="portal-quick-label">按完成者</span>
+            {requirementCounts.length > 0 ? (
+              <>
+                <button type="button" className={activeRequirement === null ? "on" : undefined} onClick={() => setActiveRequirement(null)}>全部</button>
+                {requirementCounts.map((item) => (
+                  <button type="button" key={item.name} className={activeRequirement === item.name ? "on" : undefined} onClick={() => setActiveRequirement(item.name)}>
+                    {executorRequirementLabel(item.name)}
+                  </button>
+                ))}
+              </>
+            ) : null}
+            <button
+              type="button"
+              className={activeRequirement === "agent" ? "on" : undefined}
+              onClick={() => setActiveRequirement(activeRequirement === "agent" ? null : "agent")}
+            >
+              代理接单
+            </button>
+          </div>
         </section>
 
         {/* 6. 主体：左侧结果表 + 右侧工具（距离、排序、统计） */}
@@ -569,7 +558,7 @@ export function Home() {
             <section className="portal-side-card portal-publish">
               <h3>想发布任务？</h3>
               <p className="portal-side-hint">登录后即可发布单人、竞争或协作任务，并设置关键字与任务属性。</p>
-              <a className="portal-publish-btn" href={signedIn ? href.newTask : href.login}>{signedIn ? "立即发布" : "登录 / 注册"}</a>
+              <a className="portal-publish-btn" href={signedIn ? href.newTask : href.login}>{signedIn ? "立即发布" : "登录后发布"}</a>
             </section>
           </aside>
         </div>
