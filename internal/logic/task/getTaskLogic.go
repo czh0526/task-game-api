@@ -3,7 +3,6 @@ package task
 import (
 	"context"
 
-	"taskgame/internal/auth"
 	"taskgame/internal/svc"
 	"taskgame/internal/types"
 
@@ -25,8 +24,8 @@ func NewGetTaskLogic(ctx context.Context, svcCtx *svc.ServiceContext) *GetTaskLo
 }
 
 func (l *GetTaskLogic) GetTask(req *types.GetTaskReq) (*types.Task, error) {
-	if _, err := auth.Require(l.ctx); err != nil {
-		return nil, err
-	}
+	// Task detail is public market data: anonymous visitors can read it before
+	// sign-in. Credentials are still validated by the middleware when supplied;
+	// other task routes keep requiring auth.
 	return l.svcCtx.Engine.GetTask(l.ctx, req.TaskId)
 }

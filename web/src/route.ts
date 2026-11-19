@@ -57,6 +57,22 @@ export function defaultHash(signedIn: boolean): string {
   return signedIn ? href.tasks : href.home;
 }
 
+/**
+ * Hash to open after sign-in. A login link may carry `?next=<hash>` so that
+ * e.g. a visitor reading a public task detail returns there after logging in.
+ * Only same-app hashes (starting with "#/") are honoured; anything else is
+ * ignored to avoid open redirects. Defaults to the task list.
+ */
+export function afterLoginHash(hash: string = window.location.hash): string {
+  const raw = hash.startsWith("#") ? hash.slice(1) : hash;
+  const question = raw.indexOf("?");
+  if (question >= 0) {
+    const next = new URLSearchParams(raw.slice(question + 1)).get("next");
+    if (next && next.startsWith("#/") && !next.startsWith("//")) return next;
+  }
+  return href.tasks;
+}
+
 export function useRoute(signedIn: boolean): Route {
   const [route, setRoute] = useState<Route>(() => {
     if (!window.location.hash) {

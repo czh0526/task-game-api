@@ -28,11 +28,11 @@ func NewAuthMiddleware(cfg config.AuthConf) *AuthMiddleware {
 }
 
 // Handle rejects unauthenticated calls before the handler runs.
-// The task market listing is public so the web landing page can show tasks
-// before sign-in; credentials, when supplied, are still validated.
+// The task market listing and individual task details are public so visitors
+// can browse tasks before sign-in; credentials, when supplied, are still validated.
 func (m *AuthMiddleware) Handle(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if isPublicTaskList(r) && !hasCredentials(r) {
+		if isPublicTaskRead(r) && !hasCredentials(r) {
 			next(w, r)
 			return
 		}
@@ -45,8 +45,25 @@ func (m *AuthMiddleware) Handle(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func isPublicTaskList(r *http.Request) bool {
-	return r.Method == http.MethodGet && r.URL.Path == "/v1/tasks"
+// isPublicTaskRead reports GET requests that only read public task data:
+// the market listing (GET /v1/tasks) and a single task detail
+// (GET /v1/tasks/{taskId}). Task mutations and all other routes stay protected.
+func isPublicTaskRead(r *http.Request) bool {
+	if r.Method != http.MethodGet {
+		return false
+	}
+	path := strings.TrimSuffix(r.URL.Path, "/")
+	if path == "/v1/tasks" {
+		return true
+	}
+	const prefix = "/v1/tasks/"
+	if !strings.HasPrefix(path, prefix) {
+		return false
+	}
+	// Only a single path segment after /v1/tasks/ is the detail route; deeper
+	// paths (e.g. /v1/tasks/{id}/invites) are not public.
+	rest := strings.TrimPrefix(path, prefix)
+	return rest != "" && !strings.Contains(rest, "/")
 }
 
 func hasCredentials(r *http.Request) bool {

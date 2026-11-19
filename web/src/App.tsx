@@ -125,6 +125,8 @@ export function App() {
           <>
             {route.name === "home" ? <Home /> : <TaskList />}
           </>
+        ) : route.name === "task" ? (
+          <TaskDetail key={route.id} id={route.id} />
         ) : (
           <AuthScreen />
         )}

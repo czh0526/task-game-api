@@ -5,7 +5,7 @@ import { useApp } from "../context";
 import { formatError } from "../format";
 import { DevIdentity } from "../identity";
 import { nicknameError, nicknameServerError } from "../person";
-import { href } from "../route";
+import { afterLoginHash } from "../route";
 import type { Settings } from "../settings";
 import { Button, ErrorNote, Field, Screen } from "../ui";
 
@@ -57,7 +57,7 @@ export function AuthScreen() {
         email: me.email || session.user.email,
         apiKey: "",
       });
-      window.location.replace(href.tasks);
+      window.location.replace(afterLoginHash());
     } catch (err) {
       setError(authErrorText(err));
     } finally {

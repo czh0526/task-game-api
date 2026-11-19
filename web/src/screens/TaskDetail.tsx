@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { createIdempotencyKey, type Message, type ResolutionOutcome, type Task } from "taskgame-client";
+import { isSignedIn } from "../client";
 import { useApp } from "../context";
 import {
   ENTRY_LABEL,
@@ -32,6 +33,7 @@ import { ActionRow, Button, ErrorNote, Field, IdText, KindPill, Screen, StatusPi
 
 export function TaskDetail({ id }: { id: string }) {
   const { client, clientError, settings } = useApp();
+  const signedIn = isSignedIn(settings);
   const [task, setTask] = useState<Task | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -85,7 +87,7 @@ export function TaskDetail({ id }: { id: string }) {
   }, [task]);
 
   useEffect(() => {
-    if (!client) return;
+    if (!client || !signedIn) return;
     const ac = new AbortController();
     client
       .me({ signal: ac.signal })
@@ -96,10 +98,10 @@ export function TaskDetail({ id }: { id: string }) {
         if (!ac.signal.aborted) setIsArbiter(false);
       });
     return () => ac.abort();
-  }, [client]);
+  }, [client, signedIn]);
 
   useEffect(() => {
-    if (!client || !task?.chat_id) return;
+    if (!client || !signedIn || !task?.chat_id) return;
     const ac = new AbortController();
     const chatId = task.chat_id;
     setChatNote(null);
@@ -114,7 +116,7 @@ export function TaskDetail({ id }: { id: string }) {
         setChatNote(formatError(err));
       });
     return () => ac.abort();
-  }, [client, task?.chat_id, task?.updated_at]);
+  }, [client, signedIn, task?.chat_id, task?.updated_at]);
 
   async function run(name: string, fn: () => Promise<Task>) {
     setPending(name);
@@ -475,6 +477,7 @@ export function TaskDetail({ id }: { id: string }) {
         </section>
       ) : null}
 
+      {signedIn ? (
       <section className="card">
         <h2>操作</h2>
         <p className="hint">
@@ -927,6 +930,20 @@ export function TaskDetail({ id }: { id: string }) {
           </p>
         )}
       </section>
+      ) : (
+        <section className="card task-public-cta">
+          <h2>参与这个任务</h2>
+          <p>登录后可接受任务、提交成果、与对方沟通。</p>
+          <div className="actions">
+            <a className="btn primary" href={`${href.login}?next=${encodeURIComponent(href.task(task.id))}`}>
+              登录 / 注册
+            </a>
+            <a className="btn secondary" href={href.home}>
+              返回首页
+            </a>
+          </div>
+        </section>
+      )}
     </Screen>
   );
 }
