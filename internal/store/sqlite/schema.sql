@@ -129,7 +129,8 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
 );
 
 CREATE INDEX IF NOT EXISTS idx_deliveries_status ON webhook_deliveries (status, created_at);
-CREATE INDEX IF NOT EXISTS idx_deliveries_claim ON webhook_deliveries (status, claimed_until, created_at, id);
+-- idx_deliveries_claim is created in migrate after older files gain claimed_until.
+-- A CREATE INDEX here fails when webhook_deliveries already exists without that column.
 
 -- type is task (bound to task_id), direct (one row per friend pair), or group
 -- (free-form member_ids, a new row on each POST). pair_low and pair_high are

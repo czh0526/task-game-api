@@ -152,3 +152,86 @@ func TestOpenMigratesChatType(t *testing.T) {
 		t.Fatalf("found %+v %v", found, err)
 	}
 }
+
+// TestOpenMigratesOldWebhookDeliveries covers a database created before
+// delivery claims. schema.sql must not index claimed_until until migrate adds it.
+func TestOpenMigratesOldWebhookDeliveries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old-deliveries.db")
+	raw, err := sql.Open("sqlite", "file:"+path+"?mode=rwc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = raw.Exec(`CREATE TABLE webhook_deliveries (
+		id TEXT PRIMARY KEY,
+		webhook_id TEXT NOT NULL,
+		event_id TEXT NOT NULL,
+		event_type TEXT NOT NULL,
+		body TEXT NOT NULL,
+		status TEXT NOT NULL,
+		attempts INTEGER NOT NULL,
+		last_error TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL
+	)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = raw.Exec(`INSERT INTO webhook_deliveries
+		(id, webhook_id, event_id, event_type, body, status, attempts, last_error, created_at)
+		VALUES ('dlv_old', 'wh_old', 'evt_old', 'task.funded', '{}', 'pending', 0, '', '2026-11-04T12:00:00.000000000Z')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := Open("file:"+path+"?mode=rwc", 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
+	now := time.Date(2026, 11, 20, 8, 0, 0, 0, time.UTC)
+	if err := st.Webhooks().Insert(ctx, model.Webhook{
+		ID: "wh_old", OwnerID: "usr_publisher", URL: "http://127.0.0.1/hook", Secret: "secret-secret-secret",
+		Events: []string{"task.funded"}, CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := st.Deliveries().ClaimPending(ctx, 3, 10, now, now.Add(time.Hour))
+	if err != nil || len(claimed) != 1 || claimed[0].ID != "dlv_old" || claimed[0].Attempts != 1 {
+		t.Fatalf("claim old delivery %+v %v", claimed, err)
+	}
+
+	check, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = check.Close() })
+	var indexName string
+	if err := check.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_deliveries_claim'`).Scan(&indexName); err != nil {
+		t.Fatal(err)
+	}
+	cols := map[string]bool{}
+	rows, err := check.Query(`PRAGMA table_info(webhook_deliveries)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
+			t.Fatal(err)
+		}
+		cols[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !cols["claim_token"] || !cols["claimed_until"] {
+		t.Fatalf("delivery columns after open: %+v", cols)
+	}
+}
