@@ -68,9 +68,17 @@ func Sign(secret string, body []byte) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-// DeliverPending attempts one batch. Failures stay pending until MaxAttempts.
+// DeliverPending claims one batch, then POSTs outside the claim.
+// A second worker does not deliver a row whose lease is still held.
+// Receivers should still dedupe on X-Event-Id: a crash after POST and before
+// Finish, or a POST that outlives the lease, can deliver the same event again.
 func (d *Dispatcher) DeliverPending(ctx context.Context) error {
-	rows, err := d.store.Deliveries().ListPending(ctx, d.cfg.MaxAttempts, 20)
+	now := time.Now()
+	lease := d.cfg.Timeout
+	if lease < 30*time.Second {
+		lease = 30 * time.Second
+	}
+	rows, err := d.store.Deliveries().ClaimPending(ctx, d.cfg.MaxAttempts, 20, now, now.Add(lease))
 	if err != nil {
 		return err
 	}
@@ -86,17 +94,16 @@ func (d *Dispatcher) DeliverPending(ctx context.Context) error {
 func (d *Dispatcher) deliverOne(ctx context.Context, row model.Delivery) {
 	body := []byte(row.Body)
 	sig := Sign(row.Secret, body)
-	attempts := row.Attempts + 1
 	if d.cfg.Mode == "log" {
 		logx.WithContext(ctx).Infof("webhook %s event %s type %s signature %s (log mode)", row.WebhookID, row.EventID, row.EventType, sig)
-		_ = d.store.Deliveries().Update(ctx, row.ID, attempts, model.DeliveryDelivered, "")
+		_ = d.store.Deliveries().Finish(ctx, row.ID, row.ClaimToken, model.DeliveryDelivered, "")
 		return
 	}
 	reqCtx, cancel := context.WithTimeout(ctx, d.cfg.Timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, row.URL, bytes.NewReader(body))
 	if err != nil {
-		d.finish(ctx, row, attempts, err.Error())
+		d.finish(ctx, row, err.Error())
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -105,27 +112,27 @@ func (d *Dispatcher) deliverOne(ctx context.Context, row model.Delivery) {
 	req.Header.Set(HeaderEventID, row.EventID)
 	resp, err := d.client.Do(req)
 	if err != nil {
-		d.finish(ctx, row, attempts, err.Error())
+		d.finish(ctx, row, err.Error())
 		return
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		logx.WithContext(ctx).Infof("webhook %s event %s delivered status %d", row.WebhookID, row.EventID, resp.StatusCode)
-		_ = d.store.Deliveries().Update(ctx, row.ID, attempts, model.DeliveryDelivered, "")
+		_ = d.store.Deliveries().Finish(ctx, row.ID, row.ClaimToken, model.DeliveryDelivered, "")
 		return
 	}
-	d.finish(ctx, row, attempts, fmt.Sprintf("status %d", resp.StatusCode))
+	d.finish(ctx, row, fmt.Sprintf("status %d", resp.StatusCode))
 }
 
-func (d *Dispatcher) finish(ctx context.Context, row model.Delivery, attempts int, message string) {
+func (d *Dispatcher) finish(ctx context.Context, row model.Delivery, message string) {
 	if len(message) > 500 {
 		message = message[:500]
 	}
 	status := model.DeliveryPending
-	if attempts >= d.cfg.MaxAttempts {
+	if row.Attempts >= d.cfg.MaxAttempts {
 		status = model.DeliveryFailed
 	}
-	logx.WithContext(ctx).Errorf("webhook %s event %s attempt %d: %s", row.WebhookID, row.EventID, attempts, message)
-	_ = d.store.Deliveries().Update(ctx, row.ID, attempts, status, message)
+	logx.WithContext(ctx).Errorf("webhook %s event %s attempt %d: %s", row.WebhookID, row.EventID, row.Attempts, message)
+	_ = d.store.Deliveries().Finish(ctx, row.ID, row.ClaimToken, status, message)
 }

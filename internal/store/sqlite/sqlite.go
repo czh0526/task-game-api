@@ -6,13 +6,12 @@ import (
 	"context"
 	"database/sql"
 	"embed"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"taskgame/internal/store"
+	"taskgame/internal/store/sqlstore"
 
 	_ "modernc.org/sqlite"
 )
@@ -28,20 +27,9 @@ func schemaText() (string, error) {
 	return string(b), nil
 }
 
-type querier interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
-
-// DB is a SQLite Store.
-type DB struct {
-	db      *sql.DB
-	initial int64
-}
-
 // Open creates the database file, applies schema, and returns a Store.
-func Open(dsn string, initialBalance int64) (*DB, error) {
+// One connection is used so SQLite writers cannot interleave.
+func Open(dsn string, initialBalance int64) (*sqlstore.DB, error) {
 	if err := mkdirForDSN(dsn); err != nil {
 		return nil, err
 	}
@@ -75,55 +63,10 @@ func Open(dsn string, initialBalance int64) (*DB, error) {
 			return nil, fmt.Errorf("sqlite %s: %w", pragma, err)
 		}
 	}
-	return &DB{db: db, initial: initialBalance}, nil
+	return sqlstore.New(db, initialBalance, dialect{}), nil
 }
 
-func (d *DB) Close() error { return d.db.Close() }
-
-func (d *DB) Ping(ctx context.Context) error { return d.db.PingContext(ctx) }
-
-func (d *DB) Users() store.UserRepo             { return &userRepo{q: d.db, initial: d.initial} }
-func (d *DB) Tasks() store.TaskRepo             { return &taskRepo{q: d.db} }
-func (d *DB) Submissions() store.SubmissionRepo { return &submissionRepo{q: d.db} }
-func (d *DB) Escrow() store.EscrowRepo          { return &escrowRepo{q: d.db} }
-func (d *DB) Webhooks() store.WebhookRepo       { return &webhookRepo{q: d.db} }
-func (d *DB) Deliveries() store.DeliveryRepo    { return &deliveryRepo{q: d.db} }
-func (d *DB) Chats() store.ChatRepo             { return &chatRepo{q: d.db} }
-func (d *DB) Invites() store.InviteRepo         { return &inviteRepo{q: d.db} }
-func (d *DB) Friends() store.FriendRepo         { return &friendRepo{q: d.db} }
-func (d *DB) Idem() store.IdemRepo              { return &idemRepo{q: d.db} }
-
-func (d *DB) InTx(ctx context.Context, fn func(ctx context.Context, r store.Repos) error) error {
-	tx, err := d.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	r := &txRepos{q: tx, initial: d.initial}
-	if err := fn(ctx, r); err != nil {
-		_ = tx.Rollback()
-		return err
-	}
-	return tx.Commit()
-}
-
-// txRepos binds every repository to one transaction.
-type txRepos struct {
-	q       querier
-	initial int64
-}
-
-func (t *txRepos) Users() store.UserRepo             { return &userRepo{q: t.q, initial: t.initial} }
-func (t *txRepos) Tasks() store.TaskRepo             { return &taskRepo{q: t.q} }
-func (t *txRepos) Submissions() store.SubmissionRepo { return &submissionRepo{q: t.q} }
-func (t *txRepos) Escrow() store.EscrowRepo          { return &escrowRepo{q: t.q} }
-func (t *txRepos) Webhooks() store.WebhookRepo       { return &webhookRepo{q: t.q} }
-func (t *txRepos) Deliveries() store.DeliveryRepo    { return &deliveryRepo{q: t.q} }
-func (t *txRepos) Chats() store.ChatRepo             { return &chatRepo{q: t.q} }
-func (t *txRepos) Invites() store.InviteRepo         { return &inviteRepo{q: t.q} }
-func (t *txRepos) Friends() store.FriendRepo         { return &friendRepo{q: t.q} }
-func (t *txRepos) Idem() store.IdemRepo              { return &idemRepo{q: t.q} }
-
-// migrate adds password-account columns on databases created before they existed.
+// migrate adds columns on databases created before they existed.
 // CREATE TABLE IF NOT EXISTS does not alter an existing users table.
 func migrate(ctx context.Context, db *sql.DB) error {
 	cols, err := userColumns(ctx, db)
@@ -199,6 +142,22 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		ON chats (pair_low, pair_high)
 		WHERE type = 'direct' AND pair_low != ''`); err != nil {
 		return fmt.Errorf("migrate chats direct pair: %w", err)
+	}
+	if err := addColumns(ctx, db, "escrow_accounts", map[string]string{
+		"version": "INTEGER NOT NULL DEFAULT 0",
+	}); err != nil {
+		return err
+	}
+	if err := addColumns(ctx, db, "webhook_deliveries", map[string]string{
+		"claim_token":   "TEXT NOT NULL DEFAULT ''",
+		"claimed_until": "TEXT",
+	}); err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, `
+		CREATE INDEX IF NOT EXISTS idx_deliveries_claim
+		ON webhook_deliveries (status, claimed_until, created_at, id)`); err != nil {
+		return fmt.Errorf("migrate deliveries claim index: %w", err)
 	}
 	return nil
 }
@@ -298,52 +257,6 @@ func sqliteFile(dsn string) string {
 	s = strings.TrimPrefix(s, "file:")
 	if s == "" || strings.HasPrefix(s, ":memory:") {
 		return ""
-	}
-	return s
-}
-
-func jsonText(v any) (string, error) {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return "", err
-	}
-	if string(b) == "null" {
-		return "[]", nil
-	}
-	return string(b), nil
-}
-
-func jsonOrNull(v any) (any, error) {
-	if v == nil {
-		return nil, nil
-	}
-	b, err := json.Marshal(v)
-	if err != nil {
-		return nil, err
-	}
-	if string(b) == "null" {
-		return nil, nil
-	}
-	return string(b), nil
-}
-
-func unmarshalSlice[T any](s string) ([]T, error) {
-	if s == "" || s == "null" {
-		return []T{}, nil
-	}
-	var out []T
-	if err := json.Unmarshal([]byte(s), &out); err != nil {
-		return nil, err
-	}
-	if out == nil {
-		return []T{}, nil
-	}
-	return out, nil
-}
-
-func nullString(s string) any {
-	if s == "" {
-		return nil
 	}
 	return s
 }

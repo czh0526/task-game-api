@@ -74,7 +74,7 @@ func call[T any](e *Engine, ctx context.Context, userID, method, path, key strin
 
 	var out T
 	err = e.store.InTx(ctx, func(ctx context.Context, r store.Repos) error {
-		rec, err := r.Idem().Get(ctx, userID, method, path, key)
+		rec, err := r.Idem().GetLocked(ctx, userID, method, path, key)
 		if err != nil {
 			return err
 		}
@@ -102,7 +102,7 @@ func call[T any](e *Engine, ctx context.Context, userID, method, path, key strin
 			CreatedAt:    e.now(),
 		}); err != nil {
 			if errors.Is(err, store.ErrConflict) {
-				rec, gerr := r.Idem().Get(ctx, userID, method, path, key)
+				rec, gerr := r.Idem().GetLocked(ctx, userID, method, path, key)
 				if gerr != nil {
 					return gerr
 				}

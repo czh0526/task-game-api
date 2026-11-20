@@ -8,7 +8,8 @@ Start the API from the repository root before calling it:
 
 ```bash
 make run
-# listens on http://127.0.0.1:8891
+# etc/taskgame.mysql.yaml, MySQL on 127.0.0.1:3306, listens on http://127.0.0.1:8891
+# SQLite: make run-sqlite (etc/taskgame.yaml)
 ```
 
 Development keys (`etc/taskgame.yaml`):

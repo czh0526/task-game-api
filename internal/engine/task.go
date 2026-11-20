@@ -16,7 +16,7 @@ func loadTask(ctx context.Context, r store.Repos, taskID string) (model.Task, er
 	if !id.ValidTaskID(taskID) {
 		return model.Task{}, biz.Invalid("taskId must match ^tsk_")
 	}
-	t, err := r.Tasks().Get(ctx, taskID)
+	t, err := r.Tasks().Lock(ctx, taskID)
 	if errors.Is(err, store.ErrNotFound) {
 		return model.Task{}, biz.NotFound("task not found")
 	}

@@ -79,7 +79,7 @@ func (e *Engine) confirm(ctx context.Context, r store.Repos, in confirmInput) (*
 	if t.EscrowID == "" {
 		return nil, biz.Conflict("task has no escrow")
 	}
-	acc, err := r.Escrow().GetByTask(ctx, t.ID)
+	acc, err := r.Escrow().LockByTask(ctx, t.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +195,7 @@ func (e *Engine) confirm(ctx context.Context, r store.Repos, in confirmInput) (*
 		refundEntry = &ent
 	}
 	acc.Held -= pool
-	if err := r.Escrow().Update(ctx, acc); err != nil {
+	if err := saveEscrow(ctx, r, acc); err != nil {
 		return nil, err
 	}
 

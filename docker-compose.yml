@@ -1,0 +1,19 @@
+# Local MySQL mysql:8.4.11 for Store.Driver mysql. The API is not started here.
+#   docker compose up -d
+#   go run . -f etc/taskgame.mysql.yaml
+services:
+  mysql:
+    image: mysql:8.4.11
+    environment:
+      MYSQL_ROOT_PASSWORD: "123456"
+      MYSQL_DATABASE: taskgame
+    ports:
+      - "3306:3306"
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p123456"]
+      interval: 5s
+      timeout: 5s
+      retries: 20

@@ -1,20 +1,18 @@
-package sqlite
+package sqlstore
 
 import (
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 
 	"taskgame/internal/model"
 	"taskgame/internal/store"
 )
 
-type friendRepo struct{ q querier }
-
-func isUniqueConflict(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
+type friendRepo struct {
+	q querier
+	d Dialect
 }
 
 func (r *friendRepo) InsertRequest(ctx context.Context, row model.FriendRequest) error {
@@ -25,7 +23,7 @@ func (r *friendRepo) InsertRequest(ctx context.Context, row model.FriendRequest)
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		row.ID, row.FromUserID, row.ToUserID, low, high, row.Status,
 		model.FormatTime(row.CreatedAt), model.FormatTime(row.UpdatedAt))
-	if isUniqueConflict(err) {
+	if r.d.IsUnique(err) {
 		return store.ErrConflict
 	}
 	return err
@@ -36,7 +34,7 @@ func (r *friendRepo) UpdateRequest(ctx context.Context, row model.FriendRequest)
 		UPDATE friend_requests SET status = ?, updated_at = ? WHERE id = ?`,
 		row.Status, model.FormatTime(row.UpdatedAt), row.ID)
 	if err != nil {
-		if isUniqueConflict(err) {
+		if r.d.IsUnique(err) {
 			return store.ErrConflict
 		}
 		return err
@@ -120,7 +118,7 @@ func (r *friendRepo) InsertFriendship(ctx context.Context, row model.Friendship)
 	_, err := r.q.ExecContext(ctx, `
 		INSERT INTO friendships (user_low, user_high, created_at) VALUES (?, ?, ?)`,
 		low, high, model.FormatTime(row.CreatedAt))
-	if isUniqueConflict(err) {
+	if r.d.IsUnique(err) {
 		return store.ErrConflict
 	}
 	return err
@@ -215,7 +213,7 @@ func (r *friendRepo) InsertGroup(ctx context.Context, row model.FriendGroup) err
 		VALUES (?, ?, ?, ?, ?, ?)`,
 		row.ID, row.OwnerID, row.Name, row.SortOrder,
 		model.FormatTime(row.CreatedAt), model.FormatTime(row.UpdatedAt))
-	if isUniqueConflict(err) {
+	if r.d.IsUnique(err) {
 		return store.ErrConflict
 	}
 	return err
@@ -226,7 +224,7 @@ func (r *friendRepo) UpdateGroup(ctx context.Context, row model.FriendGroup) err
 		UPDATE friend_groups SET name = ?, sort_order = ?, updated_at = ?
 		WHERE id = ? AND owner_id = ?`,
 		row.Name, row.SortOrder, model.FormatTime(row.UpdatedAt), row.ID, row.OwnerID)
-	if isUniqueConflict(err) {
+	if r.d.IsUnique(err) {
 		return store.ErrConflict
 	}
 	if err != nil {
@@ -295,10 +293,7 @@ func (r *friendRepo) CountGroups(ctx context.Context, ownerID string) (int, erro
 }
 
 func (r *friendRepo) SetMembership(ctx context.Context, ownerID, friendUserID, groupID string) error {
-	_, err := r.q.ExecContext(ctx, `
-		INSERT INTO friend_group_members (owner_id, friend_user_id, group_id) VALUES (?, ?, ?)
-		ON CONFLICT(owner_id, friend_user_id) DO UPDATE SET group_id = excluded.group_id`,
-		ownerID, friendUserID, groupID)
+	_, err := r.q.ExecContext(ctx, r.d.MembershipUpsert(), ownerID, friendUserID, groupID)
 	return err
 }
 

@@ -16,9 +16,6 @@ import (
 // FundTask holds payment.amount from the publisher and moves draft → open.
 func (e *Engine) FundTask(ctx context.Context, userID string, req *types.FundTaskReq) (*types.Task, error) {
 	return call(e, ctx, userID, http.MethodPost, taskPath(req.TaskId, "fund"), req.IdempotencyKey, req, func(ctx context.Context, r store.Repos) (*types.Task, error) {
-		if _, err := r.Users().Ensure(ctx, userID, e.now()); err != nil {
-			return nil, err
-		}
 		t, err := loadTask(ctx, r, req.TaskId)
 		if err != nil {
 			return nil, err
@@ -28,6 +25,9 @@ func (e *Engine) FundTask(ctx context.Context, userID string, req *types.FundTas
 		}
 		if t.Status != model.StatusDraft {
 			return nil, biz.Conflict("task is not a draft")
+		}
+		if _, err := r.Users().Ensure(ctx, userID, e.now()); err != nil {
+			return nil, err
 		}
 		if err := r.Users().AddBalance(ctx, userID, -t.Payment.Amount); err != nil {
 			if errors.Is(err, store.ErrInsufficient) {
@@ -431,7 +431,7 @@ func (e *Engine) DisputeTask(ctx context.Context, userID string, req *types.Disp
 		if t.EscrowID == "" {
 			return nil, biz.Conflict("task has no escrow")
 		}
-		acc, err := r.Escrow().GetByTask(ctx, t.ID)
+		acc, err := r.Escrow().LockByTask(ctx, t.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -448,7 +448,7 @@ func (e *Engine) DisputeTask(ctx context.Context, userID string, req *types.Disp
 				return nil, err
 			}
 		}
-		if err := r.Escrow().Update(ctx, acc); err != nil {
+		if err := saveEscrow(ctx, r, acc); err != nil {
 			return nil, err
 		}
 		for i := range t.Payment.Milestones {

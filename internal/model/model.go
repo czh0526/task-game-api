@@ -101,14 +101,15 @@ const (
 	UrgencyOther       = "other"
 
 	// Recurrence schedule for a task.
-	RecurrenceOneTime  = "one_time"
-	RecurrenceDaily    = "daily"
-	RecurrenceWeekly   = "weekly"
-	RecurrenceMonthly  = "monthly"
+	RecurrenceOneTime = "one_time"
+	RecurrenceDaily   = "daily"
+	RecurrenceWeekly  = "weekly"
+	RecurrenceMonthly = "monthly"
 
-	DeliveryPending   = "pending"
-	DeliveryDelivered = "delivered"
-	DeliveryFailed    = "failed"
+	DeliveryPending    = "pending"
+	DeliveryDelivering = "delivering"
+	DeliveryDelivered  = "delivered"
+	DeliveryFailed     = "failed"
 )
 
 const (
@@ -358,7 +359,9 @@ type EscrowAccount struct {
 	Held     int64
 	Frozen   int64
 	Currency string
-	Entries  []EscrowEntry
+	// Version is the compare-and-swap token for held and frozen. It is not an API field.
+	Version int64
+	Entries []EscrowEntry
 }
 
 type EscrowEntry struct {
@@ -380,17 +383,18 @@ type Webhook struct {
 }
 
 type Delivery struct {
-	ID        string
-	WebhookID string
-	EventID   string
-	EventType string
-	Body      string
-	Status    string
-	Attempts  int
-	LastError string
-	URL       string
-	Secret    string
-	CreatedAt time.Time
+	ID         string
+	WebhookID  string
+	EventID    string
+	EventType  string
+	Body       string
+	Status     string
+	Attempts   int
+	LastError  string
+	URL        string
+	Secret     string
+	ClaimToken string
+	CreatedAt  time.Time
 }
 
 const (

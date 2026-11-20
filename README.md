@@ -1,6 +1,6 @@
 # Task Game Open Protocol v0.1
 
-Simulated-escrow HTTP API for the Task Game Open Protocol. The contract is [`api/openapi.yaml`](api/openapi.yaml) (OpenAPI 3.1). The service is a [go-zero](https://github.com/zeromicro/go-zero) API: `taskgame.api` is the goctl source, handlers and routes are generated, and the task state machine lives in `internal/engine` behind a `store.Store` interface. The default store is SQLite through `modernc.org/sqlite` (no cgo).
+Simulated-escrow HTTP API for the Task Game Open Protocol. The contract is [`api/openapi.yaml`](api/openapi.yaml) (OpenAPI 3.1). The service is a [go-zero](https://github.com/zeromicro/go-zero) API: `taskgame.api` is the goctl source, handlers and routes are generated, and the task state machine lives in `internal/engine` behind a `store.Store` interface. The default store is SQLite through `modernc.org/sqlite` (no cgo). `Store.Driver: mysql` uses MySQL 8.0.19+ (InnoDB, utf8mb4) so more than one API process can share one database.
 
 Credits are simulated. There is no payment provider. Locked v0.1 rules:
 
@@ -44,19 +44,47 @@ Mint a dev JWT with `make token` (subject defaults to `usr_publisher`).
 go mod tidy
 CGO_ENABLED=0 go test ./...
 CGO_ENABLED=0 go build ./...
-CGO_ENABLED=0 go run . -f etc/taskgame.yaml
 ```
 
-`Makefile` 会导出 `CGO_ENABLED=0`（也可在命令行覆盖），所以等价于：
+`Makefile` 会导出 `CGO_ENABLED=0`（也可在命令行覆盖），所以测试和构建等价于 `make tidy`、`make test`、`make build`。
+
+`make run` 使用 `etc/taskgame.mysql.yaml`，连本机 MySQL（镜像 `mysql:8.4.11`，`root` / `123456`，库 `taskgame`，`127.0.0.1:3306`）。先启动数据库：
 
 ```bash
-make tidy
-make test
-make build
+docker compose up -d
 make run
 ```
 
-进程监听 `http://0.0.0.0:8891`。探活是 `GET /health`（响应 `{"status":"ok"}`）。业务路径都在 `/v1` 下。SQLite 文件是 `data/taskgame.db`（已在 `.gitignore` 中），目录会在启动时创建。
+`etc/taskgame.yaml` 的 `Store.Driver` 仍是 `sqlite`。要用那个文件：
+
+```bash
+make run-sqlite
+# 或
+CGO_ENABLED=0 go run . -f etc/taskgame.yaml
+```
+
+进程监听 `http://0.0.0.0:8891`。探活是 `GET /health`（响应 `{"status":"ok"}`）。业务路径都在 `/v1` 下。SQLite 文件是 `data/taskgame.db`（已在 `.gitignore` 中），只在 `make run-sqlite` 时创建。
+
+MySQL 配置在 `etc/taskgame.mysql.yaml`。直接启动：
+
+```bash
+docker compose up -d
+CGO_ENABLED=0 go run . -f etc/taskgame.mysql.yaml
+```
+
+`etc/taskgame.mysql.yaml` 的 DSN 是 `root:123456@tcp(127.0.0.1:3306)/taskgame`，与 `docker-compose.yml` 的 root 密码和库名一致。驱动是 `github.com/go-sql-driver/mysql`。`Open` 会补上 `clientFoundRows=true` 和 `utf8mb4`（DSN 里已经写了就保持原样）。多个进程可以共用这一份 DSN。每个进程仍然跑自动结算和 webhook 投递；任务行和托管行在事务里加锁，托管的 `held`/`frozen` 按版本做比较并交换，webhook 先把行认领为 `delivering` 再 POST。接收方仍应按 `X-Event-Id` 去重：worker 在 POST 成功之后、写回 `delivered` 之前崩溃时，租约到期会再投一次。SQLite 仍是单连接，不要把两个进程指到同一个 SQLite 文件。如果本机 compose 数据卷是用以前的 root 密码初始化的，新密码不会写进已有数据，需要重建容器和卷：`docker compose down -v && docker compose up -d`。这会清空该 MySQL 数据卷。
+
+需要 MySQL 的测试（并发自动结算、并发席位超时退款、并发 webhook 投递、超过 50 条的超时扫描）在设置了 `TASKGAME_MYSQL_DSN` 时运行。账号要能 `CREATE DATABASE`。compose 里的 root 可以：
+
+```bash
+export TASKGAME_MYSQL_DSN='root:123456@tcp(127.0.0.1:3306)/taskgame?charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=false'
+export TASKGAME_MYSQL_REQUIRED=1
+CGO_ENABLED=0 go test ./...
+# 或
+make test-mysql
+```
+
+没设置 DSN 时这些用例会跳过，SQLite 测试照常跑。冒烟脚本不关心驱动，服务听在 8891 即可：`bash scripts/smoke.sh`。
 
 开发用的静态密钥在 `etc/taskgame.yaml` 的 `Auth.ApiKeys`：
 
@@ -120,7 +148,8 @@ CGO_ENABLED=0 go test ./internal/engine -run 'TestAutoSettleCompetitiveDoesNotPi
 - `Auth.JwtSecret`：HS256 密钥，至少 16 个字符。`make token`、注册和登录共用它
 - `Auth.TokenTTL`：注册和登录签发的 JWT 有效期，缺省 24h
 - `Auth.ApiKeys`：静态 `X-Api-Key` → 用户 id
-- `Store.DSN`：modernc SQLite DSN
+- `Store.Driver`：`sqlite`（默认，单连接）或 `mysql`（MySQL 8.0.19+ 连接池）
+- `Store.DSN`：SQLite 文件 DSN，或 go-sql-driver 的 MySQL DSN
 - `Escrow.InitialBalance`：用户第一次出现时记入的模拟积分（开发配置是 1000000）
 - `Webhook.Mode`：`log` 只记录签名，不发 HTTP；`post` 才真正 POST
 - `AutoSettle`：到 `review_deadline` 后自动结算。竞争任务如果有多份提交，不会猜赢家，保持 `in_review`
@@ -135,19 +164,47 @@ Requires Go 1.26 (see `go.mod`), `python3` (the smoke script reads JSON with it)
 go mod tidy
 CGO_ENABLED=0 go test ./...
 CGO_ENABLED=0 go build ./...
-CGO_ENABLED=0 go run . -f etc/taskgame.yaml
 ```
 
-The `Makefile` exports `CGO_ENABLED=0` (override it from the environment or the command line), so the same steps are:
+The `Makefile` exports `CGO_ENABLED=0` (override it from the environment or the command line), so test and build are `make tidy`, `make test`, and `make build`.
+
+`make run` loads `etc/taskgame.mysql.yaml` and connects to local MySQL (image `mysql:8.4.11`, `root` / `123456`, database `taskgame`, `127.0.0.1:3306`). Start the database first:
 
 ```bash
-make tidy
-make test
-make build
+docker compose up -d
 make run
 ```
 
-The process listens on `http://0.0.0.0:8891`. Liveness is `GET /health` (`{"status":"ok"}`). Protocol routes are under `/v1`. The SQLite file is `data/taskgame.db` (gitignored); the directory is created on startup.
+`Store.Driver` in `etc/taskgame.yaml` stays `sqlite`. To use that file:
+
+```bash
+make run-sqlite
+# or
+CGO_ENABLED=0 go run . -f etc/taskgame.yaml
+```
+
+The process listens on `http://0.0.0.0:8891`. Liveness is `GET /health` (`{"status":"ok"}`). Protocol routes are under `/v1`. The SQLite file is `data/taskgame.db` (gitignored) and is created only by `make run-sqlite`.
+
+The MySQL config is `etc/taskgame.mysql.yaml`. Start it directly with:
+
+```bash
+docker compose up -d
+CGO_ENABLED=0 go run . -f etc/taskgame.mysql.yaml
+```
+
+`etc/taskgame.mysql.yaml` uses `root:123456@tcp(127.0.0.1:3306)/taskgame`, the same root password and database as `docker-compose.yml`. The driver is `github.com/go-sql-driver/mysql`. `Open` sets `clientFoundRows=true` and `utf8mb4` when the DSN does not already say so. Several processes can share that DSN. Each process still runs auto-settle and webhook delivery. Task and escrow rows are locked inside the transaction, escrow `held`/`frozen` updates compare-and-swap on a version, and a webhook row is claimed as `delivering` before the POST. Receivers should still dedupe on `X-Event-Id`: if a worker crashes after the POST and before it marks the row delivered, the lease expires and another worker sends the event again. SQLite stays single-connection. Do not point two processes at one SQLite file. If a compose volume was already initialized with the previous root password, recreate the container and volume so the new password applies: `docker compose down -v && docker compose up -d`. That deletes the MySQL data volume.
+
+Tests that need MySQL (concurrent auto-settle, concurrent per-seat timeout refund, concurrent webhook delivery, and the timeout sweep past 50 rows) run when `TASKGAME_MYSQL_DSN` is set. The account must be allowed to `CREATE DATABASE`. The compose root user can:
+
+```bash
+export TASKGAME_MYSQL_DSN='root:123456@tcp(127.0.0.1:3306)/taskgame?charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=false'
+export TASKGAME_MYSQL_REQUIRED=1
+CGO_ENABLED=0 go test ./...
+# or
+make test-mysql
+```
+
+Without the DSN those cases skip and the SQLite tests still run. Smoke does not care which driver is behind port 8891: `bash scripts/smoke.sh`.
 
 Development keys live in `etc/taskgame.yaml` under `Auth.ApiKeys`:
 
@@ -211,7 +268,8 @@ CGO_ENABLED=0 go test ./internal/engine -run 'TestAutoSettleCompetitiveDoesNotPi
 - `Auth.JwtSecret`: HS256 secret, at least 16 characters. Shared by `make token`, register, and login
 - `Auth.TokenTTL`: lifetime of register and login JWTs, default 24h
 - `Auth.ApiKeys`: static `X-Api-Key` to user id
-- `Store.DSN`: modernc SQLite DSN
+- `Store.Driver`: `sqlite` (default, one connection) or `mysql` (MySQL 8.0.19+ pool)
+- `Store.DSN`: a SQLite file DSN, or a go-sql-driver MySQL DSN
 - `Escrow.InitialBalance`: simulated credits granted the first time a user is seen (1000000 in the dev file)
 - `Webhook.Mode`: `log` records the signature and does not POST; `post` delivers HTTP
 - `AutoSettle`: settles when `review_deadline` passes. A competitive task with more than one submission stays `in_review` until `winner_select_deadline`, then refunds. `OpenTimeout`, `StartTimeout`, and `SeatTimeout` default to 72h
@@ -326,7 +384,7 @@ internal/logic               鉴权用户 → engine / caller id → engine
 internal/svc                 依赖注入 / wiring
 internal/middleware          Bearer JWT 与 X-Api-Key
 internal/engine              状态机、托管账本、幂等 / FSM, escrow, idempotency
-internal/store               Store 接口；sqlite 实现 / interface and sqlite impl
+internal/store               Store 接口；sqlite 与 mysql / sqlite and mysql
 internal/webhook             签名与投递 / sign and deliver
 internal/model               持久化记录 / persistence records
 scripts/smoke.sh             三种任务的端到端冒烟 / smoke for all three kinds
@@ -335,9 +393,9 @@ docs/client-ts.md            客户端接入说明（中英） / client guide (z
 web/                         浏览器演示（Vite + React） / player demo UI
 ```
 
-换 Postgres 时实现同一个 `store.Store`，handler 不用改。SQLite 的 JSON 列是 TEXT，schema 注释里标了对应的 jsonb。
+MySQL 实现同一个 `store.Store`，handler 不用改。JSON 和时间在两个驱动里都是文本。SQLite 用隐式 `rowid` 排消息，MySQL 用 `messages.seq`。
 
-A Postgres store should implement the same `store.Store`. Handlers stay put. SQLite JSON columns are TEXT; `internal/store/sqlite/schema.sql` notes the jsonb mapping.
+The MySQL store implements the same `store.Store`. Handlers stay put. JSON and timestamps are text on both drivers. SQLite orders messages by the implicit `rowid`. MySQL uses `messages.seq`.
 
 ## OpenAPI 路径 → handler
 

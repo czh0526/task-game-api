@@ -1,4 +1,4 @@
-.PHONY: tidy build test run smoke token generate sdk
+.PHONY: tidy build test run run-sqlite smoke token generate sdk
 
 # modernc.org/sqlite does not need cgo. Export so build, test, and run stay
 # reproducible on machines without a C compiler. Override on the command line
@@ -20,7 +20,20 @@ build:
 test:
 	go test ./...
 
+# MySQL 8 tests, including the concurrent settle, timeout, and webhook cases.
+# Start MySQL first: docker compose up -d
+# The account needs CREATE DATABASE (the compose root user does).
+test-mysql:
+	TASKGAME_MYSQL_DSN="$${TASKGAME_MYSQL_DSN:-root:123456@tcp(127.0.0.1:3306)/taskgame?charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=false}" \
+	TASKGAME_MYSQL_REQUIRED=1 go test ./...
+
+# Local MySQL from etc/taskgame.mysql.yaml: root/123456, database taskgame,
+# 127.0.0.1:3306. Start the server first (`docker compose up -d`).
 run:
+	go run . -f etc/taskgame.mysql.yaml
+
+# SQLite file from etc/taskgame.yaml (data/taskgame.db). Store.Driver there stays sqlite.
+run-sqlite:
 	go run . -f etc/taskgame.yaml
 
 # The API must already be listening (make run). scripts/smoke.sh covers

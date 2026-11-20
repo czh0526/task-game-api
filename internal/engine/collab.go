@@ -322,7 +322,7 @@ func (e *Engine) confirmPerSeat(ctx context.Context, r store.Repos, t model.Task
 	if t.EscrowID == "" {
 		return nil, biz.Conflict("task has no escrow")
 	}
-	acc, err := r.Escrow().GetByTask(ctx, t.ID)
+	acc, err := r.Escrow().LockByTask(ctx, t.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -397,7 +397,7 @@ func (e *Engine) confirmPerSeat(ctx context.Context, r store.Repos, t model.Task
 	if perSeatTaskStatus(t) == model.StatusSettled && acc.Held != 0 {
 		return nil, biz.Conflict("escrow hold does not match the settled seats")
 	}
-	if err := r.Escrow().Update(ctx, acc); err != nil {
+	if err := saveEscrow(ctx, r, acc); err != nil {
 		return nil, err
 	}
 	e.syncCollaborativeProgress(&t)
