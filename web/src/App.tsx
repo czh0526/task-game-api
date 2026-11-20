@@ -54,7 +54,7 @@ export function App() {
   }, [route]);
 
   useEffect(() => {
-    const page = TITLES[route.name] ?? "任务游戏";
+    const page = route.name === "auth" && route.mode === "register" ? "注册" : (TITLES[route.name] ?? "任务游戏");
     document.title = `${page} · 任务游戏`;
   }, [route]);
 
@@ -80,7 +80,7 @@ function renderRoute(route: Route, gateOpen: boolean) {
     case "task":
       return <TaskDetail key={route.id} id={route.id} />;
     case "auth":
-      return <AuthScreen />;
+      return <AuthScreen mode={route.mode} />;
     case "tasks":
       return gateOpen ? <GatePlaceholder /> : <TaskList />;
     case "new":

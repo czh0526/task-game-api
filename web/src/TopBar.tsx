@@ -146,7 +146,7 @@ export function TopBar({ route, health }: { route: Route; health: "checking" | "
           ) : (
             <div className="topbar-guest">
               <a href={href.login}>登录</a>
-              <a className="topbar-register" href={href.login}>注册</a>
+              <a className="topbar-register" href={href.register}>注册</a>
             </div>
           )}
         </div>
