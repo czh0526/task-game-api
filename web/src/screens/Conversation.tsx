@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createIdempotencyKey, type Chat, type Message } from "taskgame-client";
+import { Avatar } from "../Avatar";
 import { useApp } from "../context";
 import { asStickerChar, EMOJI_STICKERS, insertAtCaret, stickerLabel } from "../emojis";
 import { formatError, formatTime, isAbort } from "../format";
@@ -196,7 +197,7 @@ export function Conversation({
             {messages.map((message) => (
               <article key={message.id} className={message.sender_id === settings.userId ? "bubble mine" : "bubble"}>
                 <header>
-                  <UserRef userId={message.sender_id} />
+                  <Avatar userId={message.sender_id} className="bubble-avatar" />
                   <time dateTime={message.created_at}>{formatTime(message.created_at)}</time>
                 </header>
                 {message.type === "sticker" ? (

@@ -292,6 +292,24 @@ type PatchMeReq struct {
 	Nickname string `json:"nickname,optional"`
 }
 
+// PutMeAvatarReq carries a base64-encoded image, optionally as a data URL.
+type PutMeAvatarReq struct {
+	Image string `json:"image"`
+}
+
+// AvatarSummary describes the stored 720x720 avatar.
+type AvatarSummary struct {
+	UserId    string `json:"user_id"`
+	AvatarUrl string `json:"avatar_url"`
+	Width     int    `json:"width"`
+	Height    int    `json:"height"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+type GetUserAvatarReq struct {
+	UserId string `path:"userId" json:"-"`
+}
+
 type Submission struct {
 	Id          string         `json:"id"`
 	ExecutorId  string         `json:"executor_id"`

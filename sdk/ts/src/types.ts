@@ -492,6 +492,22 @@ export interface ProfileUpdate {
   nickname: string;
 }
 
+/** `PUT /v1/me/avatar`. A base64 JPEG/PNG/GIF, optionally a data URL. */
+export interface AvatarUpload {
+  image: string;
+}
+
+/** Result of `PUT /v1/me/avatar`. The stored image is always 720x720 JPEG. */
+export interface AvatarSummary {
+  user_id: string;
+  /** Public URL, e.g. `/v1/users/usr_x/avatar`. */
+  avatar_url: string;
+  width: number;
+  height: number;
+  /** Upload timestamp, also used as the image ETag. */
+  updated_at: string;
+}
+
 /** Caller summary from register, login, and `GET /v1/me`. Email is empty for API-key users. */
 export interface UserSummary {
   id: string;

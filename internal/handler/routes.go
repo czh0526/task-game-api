@@ -198,9 +198,19 @@ func RegisterHandlers(server *rest.Server, serverCtx *svc.ServiceContext) {
 					Handler: user.ListMyInvitesHandler(serverCtx),
 				},
 				{
+					Method:  http.MethodPut,
+					Path:    "/me/avatar",
+					Handler: user.PutMeAvatarHandler(serverCtx),
+				},
+				{
 					Method:  http.MethodGet,
 					Path:    "/users/:userId/scores",
 					Handler: user.GetUserScoresHandler(serverCtx),
+				},
+				{
+					Method:  http.MethodGet,
+					Path:    "/users/:userId/avatar",
+					Handler: user.GetUserAvatarHandler(serverCtx),
 				},
 			}...,
 		),

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { createIdempotencyKey, type FriendList, type UserScores } from "taskgame-client";
+import { Avatar } from "./Avatar";
 import { isSignedIn } from "./client";
 import { useApp } from "./context";
 import { formatError, isAbort } from "./format";
@@ -150,7 +151,6 @@ export function UserCardHost() {
   }
 
   const label = personLabel(scores?.nickname, userId);
-  const initial = (scores?.nickname ?? "").trim().charAt(0).toUpperCase() || "?";
 
   return (
     <>
@@ -165,9 +165,7 @@ export function UserCardHost() {
             ×
           </button>
           <div className="usercard-head">
-            <span className="usercard-avatar" aria-hidden="true">
-              {initial}
-            </span>
+            <Avatar userId={userId} name={scores?.nickname} className="usercard-avatar" />
             <div>
               <h2 className="usercard-name">{label}</h2>
               <p className="usercard-id mono" title={userId}>

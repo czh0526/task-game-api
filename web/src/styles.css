@@ -1147,3 +1147,55 @@ button.portal-cat-name:hover, .portal-cat.on .portal-cat-name { color: var(--p-o
   .wx-head-meta { flex-wrap: wrap; }
   .wx-detail-pane-chat { height: 60vh; min-height: 420px; }
 }
+
+/* Shared avatar ---------------------------------------------------------- */
+/* Sizes, radii, and background colours come from the caller's own class
+   (wx-avatar, usercard-avatar, topbar-avatar, bubble-avatar). Only the image
+   placement and the fallback tile behaviour live here. */
+.avatar {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  overflow: hidden;
+  flex: none;
+  color: #fff;
+  font-weight: 650;
+  line-height: 1;
+  vertical-align: middle;
+}
+.avatar > img {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.avatar-lg { width: 64px; height: 64px; border-radius: 8px; font-size: 1.7rem; }
+.wx-rail-avatar-img { width: 100%; height: 100%; border-radius: 6px; }
+
+/* Chat bubbles: avatar replaces the sender name. */
+.bubble header { align-items: center; }
+.bubble-avatar { width: 26px; height: 26px; border-radius: 50%; font-size: 0.72rem; }
+.chat-inline-head {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 4px; color: var(--ink-soft); font-size: 0.8rem;
+}
+
+/* Settings avatar uploader. */
+.avatar-editor { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; margin: 14px 0; }
+.avatar-editor > .avatar { width: 96px; height: 96px; border-radius: 10px; font-size: 2.2rem; }
+.avatar-editor-preview {
+  width: 96px; height: 96px; flex: none;
+  border-radius: 10px; object-fit: cover;
+  border: 1px solid var(--line); background: #fff;
+}
+.avatar-editor-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.avatar-editor-actions > small { flex-basis: 100%; }
+.avatar-editor-actions label.btn { display: inline-flex; align-items: center; cursor: pointer; }
+.avatar-editor-actions label.btn:has(input:disabled) { opacity: 0.6; cursor: default; }
+
+@media (max-width: 700px) {
+  .avatar-editor { gap: 12px; }
+  .avatar-editor > .avatar, .avatar-editor-preview { width: 72px; height: 72px; }
+}

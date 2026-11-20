@@ -2,6 +2,8 @@ import { apiKey, authHeaders, bearer, type Auth, type BearerToken } from "./auth
 import { TaskGameError, taskGameErrorFromResponse } from "./errors.js";
 import type {
   AcceptTaskBody,
+  AvatarSummary,
+  AvatarUpload,
   CancelTaskBody,
   Chat,
   ChatCreate,
@@ -152,6 +154,24 @@ export class TaskGameClient {
    */
   updateMe(body: ProfileUpdate, options?: CallOptions): Promise<UserSummary> {
     return this.send("PATCH", `${this.apiBase}/me`, options, body, true, "forbidden");
+  }
+
+  /**
+   * `PUT /v1/me/avatar`. Uploads a base64 image (data URLs are accepted) and
+   * returns the stored 720x720 avatar summary. The server centre-crops and
+   * resizes, so any aspect ratio is fine. No Idempotency-Key.
+   */
+  putMeAvatar(body: AvatarUpload, options?: CallOptions): Promise<AvatarSummary> {
+    return this.send("PUT", `${this.apiBase}/me/avatar`, options, body, true, "forbidden");
+  }
+
+  /**
+   * Public URL of `GET /v1/users/{userId}/avatar` (raw 720x720 JPEG bytes).
+   * This is a URL builder, not a request: put the result in an `<img src>`.
+   * A 404 means the user has no avatar and callers should show a fallback.
+   */
+  getUserAvatar(userId: string): string {
+    return `${this.apiBase}/users/${segment(userId, "userId")}/avatar`;
   }
 
   /** `GET /v1/tasks` */
