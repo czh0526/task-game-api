@@ -47,6 +47,16 @@ Mint a dev JWT with `make token` (subject defaults to `usr_publisher`).
 - 前端保留 45 秒兜底轮询，防止信号丢失或流连不上；不可见标签页依旧不发请求。
 - 订阅表在进程内存里（`internal/notify`），**只在单进程部署下有效**；多实例需要换成 Redis pub/sub 或让客户端退回轮询。反向代理需禁用响应缓冲（服务端已发 `X-Accel-Buffering: no`）。
 
+## 展示层：全局未读角标与桌面通知
+
+只靠 SSE，用户停在首页或任务详情页时仍然看不到新消息。为此前端在 `App.tsx` 挂了两个**全局**消费者，与具体页面无关：
+
+- **未读角标**：`web/src/useUnread.ts` 汇总 `GET /v1/friends` 的 `unread_count`，`TopBar` 上的铃铛在任何页面显示总数（>99 显示 `99+`），点击跳转好友页。SSE 信号、`hello`/`resync`、标已读（同标签事件 + 跨标签 `BroadcastChannel`）、切回可见、45 秒兜底轮询都会触发重算。**口径与好友页一致：只统计好友的一对一会话**，任务会话、群聊、非好友直聊不计入（服务端只在 Friend 上暴露 `unread_count`）。
+- **桌面通知**：`web/src/notifications.ts` 直接消费 `chat.message` 信号，因此**非好友的一对一会话也能弹**。只有「别人发的、权限已授予、偏好已开启、且页面不可见或当前不在该会话」时才弹；`hello`/`resync`、自己发的消息、正在看的会话都不弹。通知只写「新消息」，点击后 `window.focus()` 并跳到 `#/chat/{id}`，正文由会话页照常拉取。同一会话用 `tag` 合并，同一 `message_id` 去重。
+- 权限申请必须在用户手势里：顶栏账号菜单或「用户信息」页的开关按钮调用 `Notification.requestPermission()`，偏好存在 `localStorage`（`taskgame.web.desktopNotifications`）。浏览器拒绝或不支持时，角标仍然可用。
+- 展示层是纯前端，**没有新增后端接口或协议字段**，`api/openapi.yaml` 与 SDK 不变。
+- 边界：页面完全关闭后收不到通知（那需要 Web Push / Service Worker + VAPID）；当前实现不弹浏览器窗口内的 toast，也不做声音提示。
+
 ## 运行
 
 需要 Go 1.26（见 `go.mod`）、`python3`（`scripts/smoke.sh` 用来读 JSON）和 `curl`。不需要 C 编译器：SQLite 驱动是 `modernc.org/sqlite`。下面的命令都在仓库根目录执行。

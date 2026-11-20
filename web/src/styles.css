@@ -144,6 +144,43 @@ code.mono, .mono { font-family: var(--mono); font-size: 0.86em; }
 .topbar-menu a:hover, .topbar-menu button:hover { background: var(--p-soft); color: var(--p-orange); text-decoration: none; }
 .topbar-menu-signout { border-top: 1px solid var(--p-line); margin-top: 4px; color: var(--bad) !important; }
 
+/* Global unread bell: visible on every page, not just the friends screen. */
+.topbar-bell {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--p-line);
+  border-radius: 8px;
+  color: var(--p-blue-dark);
+  background: #fff;
+  text-decoration: none;
+}
+.topbar-bell:hover { color: var(--p-orange); border-color: var(--p-orange); background: var(--p-soft); text-decoration: none; }
+.topbar-bell-badge {
+  position: absolute;
+  top: -7px;
+  right: -8px;
+  min-width: 1.2rem;
+  height: 1.2rem;
+  padding: 0 0.3rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #d0432f;
+  color: #fff;
+  border: 2px solid #fff;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.topbar-menu-notify { border-top: 1px solid var(--p-line); margin-top: 4px; }
+.topbar-menu-note { margin: 2px 10px 8px; color: var(--p-muted); font-size: 0.76rem; line-height: 1.45; }
+
 .main { flex: 1; width: 100%; padding: 24px 32px 64px; }
 .home-main { max-width: 1240px; margin-inline: auto; }
 .main > .screen { max-width: 1080px; margin-inline: auto; }

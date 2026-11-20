@@ -1,12 +1,26 @@
 const CHANNEL = "taskgame-direct-read";
+export const UNREAD_REFRESH_EVENT = "taskgame:unread-refresh";
 
 interface DirectReadNotice {
   userId: string;
   chatId: string;
 }
 
-/** Tell this browser's other tabs that the signed-in user marked a direct chat read. */
+/** Ask every listener in this tab (top-bar badge included) to recompute unread counts. */
+export function notifyUnreadRefresh(): void {
+  window.dispatchEvent(new Event(UNREAD_REFRESH_EVENT));
+}
+
+export function subscribeUnreadRefresh(handler: () => void): () => void {
+  window.addEventListener(UNREAD_REFRESH_EVENT, handler);
+  return () => window.removeEventListener(UNREAD_REFRESH_EVENT, handler);
+}
+
+/** Tell this tab and this browser's other tabs that a direct chat was marked read. */
 export function notifyDirectRead(userId: string, chatId: string): void {
+  // BroadcastChannel only reaches *other* tabs, so the local listeners need a
+  // separate event or the top-bar badge would stay stale in the tab that read.
+  notifyUnreadRefresh();
   if (!userId || typeof BroadcastChannel === "undefined") return;
   try {
     const channel = new BroadcastChannel(CHANNEL);

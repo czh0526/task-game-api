@@ -1,9 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { isSignedIn } from "./client";
 import { useApp } from "./context";
 import { openEventStream } from "./eventStream";
 import { LoginGate } from "./LoginGate";
+import { startDesktopNotifications } from "./notifications";
 import { CHAT_ERROR_EVENT } from "./openChat";
+import { useUnreadTotal } from "./useUnread";
 import { TopBar } from "./TopBar";
 import { href, isProtectedRoute, useRoute, type Route } from "./route";
 import { AuthScreen } from "./screens/AuthScreen";
@@ -33,13 +35,16 @@ const TITLES: Record<string, string> = {
 };
 
 export function App() {
-  const { settings, health } = useApp();
+  const { settings, health, client } = useApp();
   const signedIn = isSignedIn(settings);
   const route = useRoute();
   // Navigation follows the URL only. A protected page opened while signed out
   // keeps its URL and shows a login modal on top; signing in reveals the page.
   const gateOpen = !signedIn && isProtectedRoute(route);
   const [chatError, setChatError] = useState<string | null>(null);
+  const unreadTotal = useUnreadTotal(client, settings.userId, signedIn);
+  const routeRef = useRef(route);
+  routeRef.current = route;
 
   // One stream per signed-in session. Screens subscribe to its signals and
   // keep a slow fallback poll for the case a frame is lost.
@@ -47,6 +52,17 @@ export function App() {
     if (!signedIn) return;
     return openEventStream(settings);
   }, [signedIn, settings.baseUrl, settings.authMode, settings.apiKey, settings.bearerToken, settings.userId]);
+
+  // Desktop notifications are a global concern: they must also fire while the
+  // user is on the home page or a task detail, where no screen owns the thread.
+  useEffect(() => {
+    if (!signedIn) return;
+    return startDesktopNotifications(() => ({
+      myUserId: settings.userId,
+      visible: document.visibilityState === "visible" && document.hasFocus(),
+      activeChatId: routeRef.current.name === "conversation" ? routeRef.current.id : null,
+    }));
+  }, [signedIn, settings.userId]);
 
   useEffect(() => {
     const onError = (event: Event) => {
@@ -68,7 +84,7 @@ export function App() {
 
   return (
     <div className="app">
-      <TopBar route={route} health={health} />
+      <TopBar route={route} health={health} unreadTotal={unreadTotal} />
 
       <main className={cx("main", route.name === "auth" && "auth-main", route.name === "home" && "home-main")}>
         <ErrorNote message={chatError} />
