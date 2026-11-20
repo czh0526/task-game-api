@@ -1,9 +1,12 @@
 import { useEffect, useState } from "react";
 import type { TaskKind } from "taskgame-client";
 
+/** Which panel of the auth screen is showing. The hash is the source of truth. */
+export type AuthMode = "login" | "register";
+
 export type Route =
   | { name: "home" }
-  | { name: "auth" }
+  | { name: "auth"; mode: AuthMode }
   | { name: "tasks"; kind?: TaskKind }
   | { name: "new" }
   | { name: "task"; id: string }
@@ -18,6 +21,8 @@ const KINDS: TaskKind[] = ["exclusive", "competitive", "collaborative"];
 export const href = {
   home: "#/home",
   login: "#/login",
+  /** Auth screen with the 注册 tab selected. `tab` is omitted for 登录. */
+  register: "#/login?tab=register",
   tasks: "#/tasks",
   tasksByKind: (kind: TaskKind) => `#/tasks?kind=${encodeURIComponent(kind)}`,
   newTask: "#/tasks/new",
@@ -39,7 +44,7 @@ export function parseRoute(hash: string): Route {
   const head = parts[0];
   if (!head) return { name: "home" };
   if (head === "home") return { name: "home" };
-  if (head === "login") return { name: "auth" };
+  if (head === "login") return { name: "auth", mode: authModeFromQuery(query) };
   if (head === "tasks" && parts[1] === "new") return { name: "new" };
   if (head === "tasks" && parts[1]) return { name: "task", id: safeDecode(parts[1]) };
   if (head === "tasks") return { name: "tasks", kind: parseKind(query?.get("kind")) };
@@ -79,13 +84,20 @@ export function isProtectedRoute(route: Route): boolean {
  * ignored to avoid open redirects. Defaults to the public home.
  */
 export function afterLoginHash(hash: string = window.location.hash): string {
-  const raw = hash.startsWith("#") ? hash.slice(1) : hash;
-  const question = raw.indexOf("?");
-  if (question >= 0) {
-    const next = new URLSearchParams(raw.slice(question + 1)).get("next");
-    if (next && next.startsWith("#/") && !next.startsWith("//")) return next;
-  }
-  return href.home;
+  return safeNext(hash) ?? href.home;
+}
+
+/**
+ * Hash for the auth screen on `mode`, keeping a safe `next` from `hash`.
+ * Tab switches write this so refresh and back/forward stay on the same tab.
+ */
+export function authHref(mode: AuthMode, hash = ""): string {
+  const params = new URLSearchParams();
+  const next = hash ? safeNext(hash) : null;
+  if (next) params.set("next", next);
+  if (mode === "register") params.set("tab", "register");
+  const text = params.toString();
+  return text ? `${href.login}?${text}` : href.login;
 }
 
 export function useRoute(): Route {
@@ -106,6 +118,20 @@ export function useRoute(): Route {
     return () => window.removeEventListener("hashchange", onChange);
   }, []);
   return route;
+}
+
+function authModeFromQuery(query: URLSearchParams | null): AuthMode {
+  return query?.get("tab") === "register" ? "register" : "login";
+}
+
+/** Same-app `next` hash, or null when missing or unsafe (open-redirect guard). */
+function safeNext(hash: string): string | null {
+  const raw = hash.startsWith("#") ? hash.slice(1) : hash;
+  const question = raw.indexOf("?");
+  if (question < 0) return null;
+  const next = new URLSearchParams(raw.slice(question + 1)).get("next");
+  if (next && next.startsWith("#/") && !next.startsWith("//")) return next;
+  return null;
 }
 
 function parseKind(value: string | null | undefined): TaskKind | undefined {

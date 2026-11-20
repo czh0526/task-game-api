@@ -5,21 +5,38 @@ import { useApp } from "./context";
 import { formatError } from "./format";
 import { DevIdentity } from "./identity";
 import { nicknameError, nicknameServerError } from "./person";
-import { afterLoginHash } from "./route";
+import { afterLoginHash, type AuthMode } from "./route";
 import type { Settings } from "./settings";
 import { Button, ErrorNote, Field } from "./ui";
-
-type Mode = "login" | "register";
 
 /**
  * Reusable login / register form. Used by the standalone auth screen and by
  * the login gate modal. On success it persists the session; `onSuccess` lets
  * the caller react (e.g. close a modal), otherwise it navigates to the
  * post-login route.
+ *
+ * On the auth screen, `mode` follows the hash (`#/login` or
+ * `#/login?tab=register`) so refresh and back/forward keep the same tab.
+ * The gate leaves `mode` unset and keeps the choice in local state, so
+ * switching tabs there does not navigate away from the protected page.
  */
-export function LoginForm({ onSuccess }: { onSuccess?: () => void }) {
+export function LoginForm({
+  onSuccess,
+  mode: modeProp,
+  onModeChange,
+}: {
+  onSuccess?: () => void;
+  mode?: AuthMode;
+  onModeChange?: (mode: AuthMode) => void;
+}) {
   const { settings, setSettings, patchSettings, clientError } = useApp();
-  const [mode, setMode] = useState<Mode>("login");
+  const [modeState, setModeState] = useState<AuthMode>("login");
+  const mode = modeProp ?? modeState;
+
+  function selectMode(next: AuthMode) {
+    if (modeProp === undefined) setModeState(next);
+    onModeChange?.(next);
+  }
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [nickname, setNickname] = useState("");
@@ -75,10 +92,10 @@ export function LoginForm({ onSuccess }: { onSuccess?: () => void }) {
   return (
     <>
       <div className="tabs auth-switch" role="group" aria-label="登录或注册">
-        <button type="button" className={mode === "login" ? "tab on" : "tab"} onClick={() => setMode("login")}>
+        <button type="button" className={mode === "login" ? "tab on" : "tab"} aria-pressed={mode === "login"} onClick={() => selectMode("login")}>
           登录
         </button>
-        <button type="button" className={mode === "register" ? "tab on" : "tab"} onClick={() => setMode("register")}>
+        <button type="button" className={mode === "register" ? "tab on" : "tab"} aria-pressed={mode === "register"} onClick={() => selectMode("register")}>
           注册
         </button>
       </div>
