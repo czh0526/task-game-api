@@ -2,6 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import { Avatar } from "./Avatar";
 import { isSignedIn } from "./client";
 import { useApp } from "./context";
+import {
+  notificationPermission,
+  notificationStatus,
+  notificationsEnabled,
+  subscribeNotificationPref,
+  toggleDesktopNotifications,
+  type NotifyPermission,
+} from "./notifications";
+import { badgeLabel } from "./notificationView";
 import { PROFILE_EVENT, rememberNickname } from "./names";
 import { personLabel } from "./person";
 import { href, type Route } from "./route";
@@ -15,12 +24,34 @@ import { cx } from "./ui";
  * their profile,常用入口 and sign-out. The URL stays the only source of truth
  * for which page is shown.
  */
-export function TopBar({ route, health }: { route: Route; health: "checking" | "ok" | "down" }) {
+export function TopBar({
+  route,
+  health,
+  unreadTotal,
+}: {
+  route: Route;
+  health: "checking" | "ok" | "down";
+  /** Global unread direct-chat count, shown on every page. */
+  unreadTotal: number;
+}) {
   const { client, settings, setSettings } = useApp();
   const signedIn = isSignedIn(settings);
   const [nickname, setNickname] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
+  const [notifyEnabled, setNotifyEnabled] = useState(notificationsEnabled);
+  const [notifyPermission, setNotifyPermission] = useState<NotifyPermission>(notificationPermission);
+  const [notifyNote, setNotifyNote] = useState<string | null>(null);
+  const [notifyBusy, setNotifyBusy] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(
+    () =>
+      subscribeNotificationPref((enabled) => {
+        setNotifyEnabled(enabled);
+        setNotifyPermission(notificationPermission());
+      }),
+    [],
+  );
 
   // Load the current nickname for the account chip, and keep it in sync when
   // the settings screen (or any other screen) updates the profile.
@@ -74,6 +105,20 @@ export function TopBar({ route, health }: { route: Route; health: "checking" | "
   ];
 
   const label = personLabel(nickname, settings.userId);
+  const badge = badgeLabel(unreadTotal);
+  const notifyState = notificationStatus(notifyPermission, notifyEnabled);
+
+  async function onToggleNotifications() {
+    setNotifyBusy(true);
+    setNotifyNote(null);
+    try {
+      setNotifyNote(await toggleDesktopNotifications());
+      setNotifyEnabled(notificationsEnabled());
+      setNotifyPermission(notificationPermission());
+    } finally {
+      setNotifyBusy(false);
+    }
+  }
 
   return (
     <header className="topbar">
@@ -106,6 +151,20 @@ export function TopBar({ route, health }: { route: Route; health: "checking" | "
             {health === "checking" ? "连接中" : health === "ok" ? "已连接" : "未连接"}
           </span>
           {signedIn ? (
+            <a
+              className="topbar-bell"
+              href={href.friends}
+              title={badge ? `${unreadTotal} 条未读消息 · ${notifyState}` : `暂无未读消息 · ${notifyState}`}
+              aria-label={badge ? `消息，${unreadTotal} 条未读` : "消息，暂无未读"}
+            >
+              <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" />
+                <path d="M13.7 21a2 2 0 0 1-3.4 0" />
+              </svg>
+              {badge ? <span className="topbar-bell-badge">{badge}</span> : null}
+            </a>
+          ) : null}
+          {signedIn ? (
             <div className="topbar-account" ref={menuRef}>
               <button
                 type="button"
@@ -128,6 +187,17 @@ export function TopBar({ route, health }: { route: Route; health: "checking" | "
                   <a role="menuitem" href={href.friends}>好友</a>
                   <a role="menuitem" href={href.invites}>邀请</a>
                   <a role="menuitem" href={href.scores}>积分</a>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="topbar-menu-notify"
+                    disabled={notifyBusy}
+                    title={notifyState}
+                    onClick={() => void onToggleNotifications()}
+                  >
+                    {notifyEnabled ? "关闭桌面通知" : "开启桌面通知"}
+                  </button>
+                  {notifyNote ? <p className="topbar-menu-note">{notifyNote}</p> : null}
                   <button
                     type="button"
                     role="menuitem"

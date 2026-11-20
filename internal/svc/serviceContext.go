@@ -10,6 +10,7 @@ import (
 	"taskgame/internal/engine"
 	"taskgame/internal/id"
 	"taskgame/internal/middleware"
+	"taskgame/internal/notify"
 	"taskgame/internal/store"
 	"taskgame/internal/store/mysql"
 	"taskgame/internal/store/sqlite"
@@ -27,6 +28,7 @@ type ServiceContext struct {
 	Accounts   *account.Service
 	Store      store.Store
 	Dispatcher *webhook.Dispatcher
+	Notifier   *notify.Broker
 }
 
 // NewServiceContext opens the store and wires the engine, auth, and webhook worker.
@@ -51,6 +53,9 @@ func NewServiceContext(c config.Config) (*ServiceContext, error) {
 	if err != nil {
 		return nil, err
 	}
+	// One broker per process. A multi-instance deployment needs a shared
+	// pub/sub instead; see the SSE section in README.md.
+	notifier := notify.New()
 	return &ServiceContext{
 		Config: c,
 		Auth:   middleware.NewAuthMiddleware(c.Auth).Handle,
@@ -62,9 +67,11 @@ func NewServiceContext(c config.Config) (*ServiceContext, error) {
 				WinnerSelectHours: c.AutoSettle.WinnerSelectHours,
 			}),
 			engine.WithArbiters(c.Escrow.ArbiterUserIds),
+			engine.WithSignalNotifier(notifier),
 		),
 		Accounts: account.New(st, c.Auth.JwtSecret, c.Auth.TokenTTL),
 		Store:    st,
+		Notifier: notifier,
 		Dispatcher: webhook.NewDispatcher(st, webhook.Config{
 			Mode:        c.Webhook.Mode,
 			Timeout:     c.Webhook.Timeout,

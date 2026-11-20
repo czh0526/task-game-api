@@ -5,6 +5,15 @@ import { AVATAR_SIZE, fileToAvatarDataUrl, notifyAvatar } from "../avatarUtils";
 import { useApp } from "../context";
 import { formatError, isAbort } from "../format";
 import { DevIdentity } from "../identity";
+import {
+  notificationPermission,
+  notificationStatus,
+  notificationsEnabled,
+  permissionLabel,
+  subscribeNotificationPref,
+  toggleDesktopNotifications,
+  type NotifyPermission,
+} from "../notifications";
 import { notifyProfile } from "../names";
 import { nicknameError, nicknameServerError } from "../person";
 import { loggedOut } from "../settings";
@@ -23,6 +32,31 @@ export function Settings() {
   const [avatarBusy, setAvatarBusy] = useState(false);
   const [avatarError, setAvatarError] = useState<string | null>(null);
   const [avatarNote, setAvatarNote] = useState<string | null>(null);
+  const [notifyEnabled, setNotifyEnabled] = useState(notificationsEnabled);
+  const [notifyPermission, setNotifyPermission] = useState<NotifyPermission>(notificationPermission);
+  const [notifyBusy, setNotifyBusy] = useState(false);
+  const [notifyNote, setNotifyNote] = useState<string | null>(null);
+
+  useEffect(
+    () =>
+      subscribeNotificationPref((enabled) => {
+        setNotifyEnabled(enabled);
+        setNotifyPermission(notificationPermission());
+      }),
+    [],
+  );
+
+  async function onToggleNotifications() {
+    setNotifyBusy(true);
+    setNotifyNote(null);
+    try {
+      setNotifyNote(await toggleDesktopNotifications());
+      setNotifyEnabled(notificationsEnabled());
+      setNotifyPermission(notificationPermission());
+    } finally {
+      setNotifyBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (!client) return;
@@ -209,6 +243,32 @@ export function Settings() {
             退出登录
           </Button>
         </div>
+      </section>
+
+      <section className="settings-block">
+        <h2>桌面通知</h2>
+        <p className="hint">
+          开启后，别人给你发消息时会在系统桌面弹出提示；点击提示会跳到对应会话。
+          页面不可见或不在该会话时才弹，正在看的会话不会打扰你。通知只带提示，消息正文仍是打开会话后从接口读取。
+        </p>
+        <p className="hint">
+          浏览器权限：{permissionLabel(notifyPermission)} · {notificationStatus(notifyPermission, notifyEnabled)}
+        </p>
+        <p className="hint">
+          页面完全关闭后无法接收通知（那需要 Web Push / Service Worker）；顶栏的未读角标只统计好友的一对一会话。
+        </p>
+        <div className="who-actions">
+          <Button
+            type="button"
+            kind={notifyEnabled ? "secondary" : "primary"}
+            pending={notifyBusy}
+            disabled={notifyBusy || notifyPermission === "unsupported"}
+            onClick={() => void onToggleNotifications()}
+          >
+            {notifyEnabled ? "关闭桌面通知" : "开启桌面通知"}
+          </Button>
+        </div>
+        <OkNote message={notifyNote} />
       </section>
 
       <section className="settings-block">

@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	chat "taskgame/internal/handler/chat"
+	events "taskgame/internal/handler/events"
 	friend "taskgame/internal/handler/friend"
 	health "taskgame/internal/handler/health"
 	session "taskgame/internal/handler/session"
@@ -298,5 +299,23 @@ func RegisterHandlers(server *rest.Server, serverCtx *svc.ServiceContext) {
 			}...,
 		),
 		rest.WithPrefix("/v1"),
+	)
+
+	// SSE is a separate route group: WithSSE() clears the write deadline and
+	// sets the stream headers for every route in the group, so it must not be
+	// mixed with the regular JSON endpoints. The Auth middleware still applies.
+	server.AddRoutes(
+		rest.WithMiddlewares(
+			[]rest.Middleware{serverCtx.Auth},
+			[]rest.Route{
+				{
+					Method:  http.MethodGet,
+					Path:    "/events/stream",
+					Handler: events.StreamHandler(serverCtx),
+				},
+			}...,
+		),
+		rest.WithPrefix("/v1"),
+		rest.WithSSE(),
 	)
 }

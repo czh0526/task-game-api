@@ -3,6 +3,7 @@ import { createIdempotencyKey, type Chat, type Message } from "taskgame-client";
 import { Avatar } from "../Avatar";
 import { useApp } from "../context";
 import { asStickerChar, EMOJI_STICKERS, insertAtCaret, stickerLabel } from "../emojis";
+import { subscribeSignal } from "../eventStream";
 import { formatError, formatTime, isAbort } from "../format";
 import { SenderName, UserRef, useNickname } from "../names";
 import { personLabel } from "../person";
@@ -12,6 +13,8 @@ import { Button, cx, ErrorNote, IdText, Screen } from "../ui";
 
 const PAGE = 100;
 const MAX_PAGES = 20;
+/** Safety net for a lost SSE frame; normal refreshes are signal-driven. */
+const FALLBACK_POLL_MS = 45_000;
 
 export function Conversation({
   id,
@@ -98,11 +101,15 @@ export function Conversation({
         setError(formatError(err));
       });
     };
-    const timer = window.setInterval(refresh, 5000);
+    // SSE signals drive normal refreshes; this slow timer only covers a
+    // dropped frame or a stream that cannot be established at all.
+    const timer = window.setInterval(refresh, FALLBACK_POLL_MS);
     document.addEventListener("visibilitychange", refresh);
+    const stop = subscribeSignal(() => refresh());
     return () => {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", refresh);
+      stop();
     };
   }, [client, error, load]);
 

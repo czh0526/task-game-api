@@ -28,6 +28,11 @@ export function notifyProfile(userId: string, nickname: string): void {
   window.dispatchEvent(new CustomEvent(PROFILE_EVENT, { detail: { userId, nickname } }));
 }
 
+/** Synchronous lookup for non-React consumers (e.g. a desktop notification title). */
+export function peekNickname(userId: string): string | undefined {
+  return userId ? nicknames.get(userId) : undefined;
+}
+
 export function PersonName({
   nickname,
   userId,

@@ -15,6 +15,7 @@ import {
 } from "taskgame-client";
 import { Avatar as SharedAvatar } from "../Avatar";
 import { useApp } from "../context";
+import { subscribeSignal } from "../eventStream";
 import { formatError, formatTime, isAbort, validUserId } from "../format";
 import { friendSections, placementChanged, requestPerson } from "../friendsView";
 import { PersonName, rememberNickname } from "../names";
@@ -39,7 +40,8 @@ interface ActiveChat {
   chatId: string;
 }
 
-const FRIEND_POLL_MS = 5000;
+/** Safety net for a lost SSE frame; normal refreshes are signal-driven. */
+const FRIEND_FALLBACK_POLL_MS = 45_000;
 
 export function Friends() {
   const { client, clientError, settings } = useApp();
@@ -97,22 +99,25 @@ export function Friends() {
       });
     };
     run();
+    // Slow safety net only; SSE signals trigger the normal re-reads.
     const timer = window.setInterval(() => {
       if (document.visibilityState !== "visible") return;
       run();
-    }, FRIEND_POLL_MS);
+    }, FRIEND_FALLBACK_POLL_MS);
     const onShow = () => {
       if (document.visibilityState === "visible") run();
     };
     document.addEventListener("visibilitychange", onShow);
     window.addEventListener("focus", onShow);
     const stop = subscribeDirectRead(settings.userId, run);
+    const stopSignals = subscribeSignal(onShow);
     return () => {
       ac.abort();
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onShow);
       window.removeEventListener("focus", onShow);
       stop();
+      stopSignals();
     };
   }, [client, reload, settings.userId]);
 

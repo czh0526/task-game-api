@@ -36,6 +36,27 @@ Sample development keys (see `etc/taskgame.yaml`):
 
 Mint a dev JWT with `make token` (subject defaults to `usr_publisher`).
 
+## 浏览器实时信号（SSE）
+
+`GET /v1/events/stream` 是给浏览器 UI 用的**出站信号通道**，不属于 `api/openapi.yaml` 描述的对外 JSON 协议，因此没有对应的 SDK 方法（`taskgame-client` 不消费流）。它用 `text/event-stream` 单向推送轻量提示，**不带消息正文**：客户端收到后仍用 `GET /chats/{id}/messages`、`GET /friends` 拉数据。好友页和会话页因此不再依赖 5 秒轮询来感知新消息。
+
+- 认证沿用 `Authorization: Bearer` 或 `X-Api-Key`。`EventSource` 不能自定义请求头，所以前端用 `fetch` + `ReadableStream` 读取（`web/src/eventStream.ts`）。
+- 请求必须带精确的 `Accept: text/event-stream`；go-zero 的 `rest.WithSSE()` 会清掉服务端写超时，超时中间件也会对该请求放行，所以不用改全局 `Timeout`。
+- 连接建立时发 `hello`；带 `Last-Event-ID` 重连时改发 `resync`。两种帧都让前端重新拉一次，覆盖断线期间漏掉的消息；每 15 秒另发 `: ping` 注释帧保活。
+- `POST /chats/{id}/messages` 在事务**提交之后**才广播 `chat.message`（只含 `chat_id` / `message_id` / `sender_id`）。幂等重放不会重复通知。它和 `chat.message.created` webhook 是两条独立链路：webhook 面向第三方 URL 且在事务内入队，SSE 面向当前登录用户的浏览器。
+- 前端保留 45 秒兜底轮询，防止信号丢失或流连不上；不可见标签页依旧不发请求。
+- 订阅表在进程内存里（`internal/notify`），**只在单进程部署下有效**；多实例需要换成 Redis pub/sub 或让客户端退回轮询。反向代理需禁用响应缓冲（服务端已发 `X-Accel-Buffering: no`）。
+
+## 展示层：全局未读角标与桌面通知
+
+只靠 SSE，用户停在首页或任务详情页时仍然看不到新消息。为此前端在 `App.tsx` 挂了两个**全局**消费者，与具体页面无关：
+
+- **未读角标**：`web/src/useUnread.ts` 汇总 `GET /v1/friends` 的 `unread_count`，`TopBar` 上的铃铛在任何页面显示总数（>99 显示 `99+`），点击跳转好友页。SSE 信号、`hello`/`resync`、标已读（同标签事件 + 跨标签 `BroadcastChannel`）、切回可见、45 秒兜底轮询都会触发重算。**口径与好友页一致：只统计好友的一对一会话**，任务会话、群聊、非好友直聊不计入（服务端只在 Friend 上暴露 `unread_count`）。
+- **桌面通知**：`web/src/notifications.ts` 直接消费 `chat.message` 信号，因此**非好友的一对一会话也能弹**。只有「别人发的、权限已授予、偏好已开启、且页面不可见或当前不在该会话」时才弹；`hello`/`resync`、自己发的消息、正在看的会话都不弹。通知只写「新消息」，点击后 `window.focus()` 并跳到 `#/chat/{id}`，正文由会话页照常拉取。同一会话用 `tag` 合并，同一 `message_id` 去重。
+- 权限申请必须在用户手势里：顶栏账号菜单或「用户信息」页的开关按钮调用 `Notification.requestPermission()`，偏好存在 `localStorage`（`taskgame.web.desktopNotifications`）。浏览器拒绝或不支持时，角标仍然可用。
+- 展示层是纯前端，**没有新增后端接口或协议字段**，`api/openapi.yaml` 与 SDK 不变。
+- 边界：页面完全关闭后收不到通知（那需要 Web Push / Service Worker + VAPID）；当前实现不弹浏览器窗口内的 toast，也不做声音提示。
+
 ## 运行
 
 需要 Go 1.26（见 `go.mod`）、`python3`（`scripts/smoke.sh` 用来读 JSON）和 `curl`。不需要 C 编译器：SQLite 驱动是 `modernc.org/sqlite`。下面的命令都在仓库根目录执行。
