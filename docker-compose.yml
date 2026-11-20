@@ -5,17 +5,15 @@ services:
   mysql:
     image: mysql:8.0
     environment:
-      MYSQL_ROOT_PASSWORD: taskgame
+      MYSQL_ROOT_PASSWORD: "123456"
       MYSQL_DATABASE: taskgame
-      MYSQL_USER: taskgame
-      MYSQL_PASSWORD: taskgame
     ports:
       - "3306:3306"
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-ptaskgame"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p123456"]
       interval: 5s
       timeout: 5s
       retries: 20

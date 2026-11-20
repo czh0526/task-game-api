@@ -22,14 +22,14 @@ Auth:
     - Key: dev-arbiter-key
       UserId: usr_arbiter
 
-# MySQL 8.0.19+. Matches docker-compose.yml (user taskgame, database taskgame).
+# MySQL 8.0.19+. Matches docker-compose.yml (user root, password 123456, database taskgame).
 # Open() turns on clientFoundRows and utf8mb4 when the DSN leaves them unset.
 # Several API processes can share this DSN. Each process runs auto-settle and
 # webhook delivery; claims and row locks keep those loops from double-paying
 # or double-delivering.
 Store:
   Driver: mysql
-  DSN: "taskgame:taskgame@tcp(127.0.0.1:3306)/taskgame?charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=false"
+  DSN: "root:123456@tcp(127.0.0.1:3306)/taskgame?charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=false"
 
 Escrow:
   InitialBalance: 1000000

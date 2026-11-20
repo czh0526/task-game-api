@@ -11,14 +11,12 @@ jobs:
       mysql:
         image: mysql:8.0
         env:
-          MYSQL_ROOT_PASSWORD: taskgame
+          MYSQL_ROOT_PASSWORD: "123456"
           MYSQL_DATABASE: taskgame
-          MYSQL_USER: taskgame
-          MYSQL_PASSWORD: taskgame
         ports:
           - 3306:3306
         options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -ptaskgame"
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -p123456"
           --health-interval=5s
           --health-timeout=5s
           --health-retries=30
@@ -31,7 +29,7 @@ jobs:
         env:
           CGO_ENABLED: "0"
           TASKGAME_MYSQL_REQUIRED: "1"
-          TASKGAME_MYSQL_DSN: root:taskgame@tcp(127.0.0.1:3306)/taskgame?charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=false
+          TASKGAME_MYSQL_DSN: root:123456@tcp(127.0.0.1:3306)/taskgame?charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=false
         run: go test ./...
       - name: smoke against MySQL
         env:

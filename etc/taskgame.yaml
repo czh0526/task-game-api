@@ -31,7 +31,7 @@ Store:
   Driver: sqlite
   DSN: "file:data/taskgame.db?mode=rwc&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_txlock=immediate"
   # Driver: mysql
-  # DSN: "taskgame:taskgame@tcp(127.0.0.1:3306)/taskgame?charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=false"
+  # DSN: "root:123456@tcp(127.0.0.1:3306)/taskgame?charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=false"
 
 # Simulated credits. InitialBalance is granted the first time a user is seen.
 # ArbiterUserIds may POST /v1/tasks/{taskId}/arbitrate. They are not the publisher or the executor.

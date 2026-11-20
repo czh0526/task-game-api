@@ -65,12 +65,12 @@ docker compose up -d
 CGO_ENABLED=0 go run . -f etc/taskgame.mysql.yaml
 ```
 
-`etc/taskgame.mysql.yaml` 的 DSN 是 `taskgame:taskgame@tcp(127.0.0.1:3306)/taskgame`，与 `docker-compose.yml` 里的账号和库一致。驱动是 `github.com/go-sql-driver/mysql`。`Open` 会补上 `clientFoundRows=true` 和 `utf8mb4`（DSN 里已经写了就保持原样）。多个进程可以共用这一份 DSN。每个进程仍然跑自动结算和 webhook 投递；任务行和托管行在事务里加锁，托管的 `held`/`frozen` 按版本做比较并交换，webhook 先把行认领为 `delivering` 再 POST。接收方仍应按 `X-Event-Id` 去重：worker 在 POST 成功之后、写回 `delivered` 之前崩溃时，租约到期会再投一次。SQLite 仍是单连接，不要把两个进程指到同一个 SQLite 文件。
+`etc/taskgame.mysql.yaml` 的 DSN 是 `root:123456@tcp(127.0.0.1:3306)/taskgame`，与 `docker-compose.yml` 的 root 密码和库名一致。驱动是 `github.com/go-sql-driver/mysql`。`Open` 会补上 `clientFoundRows=true` 和 `utf8mb4`（DSN 里已经写了就保持原样）。多个进程可以共用这一份 DSN。每个进程仍然跑自动结算和 webhook 投递；任务行和托管行在事务里加锁，托管的 `held`/`frozen` 按版本做比较并交换，webhook 先把行认领为 `delivering` 再 POST。接收方仍应按 `X-Event-Id` 去重：worker 在 POST 成功之后、写回 `delivered` 之前崩溃时，租约到期会再投一次。SQLite 仍是单连接，不要把两个进程指到同一个 SQLite 文件。如果本机 compose 数据卷是用以前的 root 密码初始化的，新密码不会写进已有数据，需要重建容器和卷：`docker compose down -v && docker compose up -d`。这会清空该 MySQL 数据卷。
 
 需要 MySQL 的测试（并发自动结算、并发席位超时退款、并发 webhook 投递、超过 50 条的超时扫描）在设置了 `TASKGAME_MYSQL_DSN` 时运行。账号要能 `CREATE DATABASE`。compose 里的 root 可以：
 
 ```bash
-export TASKGAME_MYSQL_DSN='root:taskgame@tcp(127.0.0.1:3306)/taskgame?charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=false'
+export TASKGAME_MYSQL_DSN='root:123456@tcp(127.0.0.1:3306)/taskgame?charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=false'
 export TASKGAME_MYSQL_REQUIRED=1
 CGO_ENABLED=0 go test ./...
 # 或
@@ -178,12 +178,12 @@ docker compose up -d
 CGO_ENABLED=0 go run . -f etc/taskgame.mysql.yaml
 ```
 
-`etc/taskgame.mysql.yaml` uses `taskgame:taskgame@tcp(127.0.0.1:3306)/taskgame`, the same account and database as `docker-compose.yml`. The driver is `github.com/go-sql-driver/mysql`. `Open` sets `clientFoundRows=true` and `utf8mb4` when the DSN does not already say so. Several processes can share that DSN. Each process still runs auto-settle and webhook delivery. Task and escrow rows are locked inside the transaction, escrow `held`/`frozen` updates compare-and-swap on a version, and a webhook row is claimed as `delivering` before the POST. Receivers should still dedupe on `X-Event-Id`: if a worker crashes after the POST and before it marks the row delivered, the lease expires and another worker sends the event again. SQLite stays single-connection. Do not point two processes at one SQLite file.
+`etc/taskgame.mysql.yaml` uses `root:123456@tcp(127.0.0.1:3306)/taskgame`, the same root password and database as `docker-compose.yml`. The driver is `github.com/go-sql-driver/mysql`. `Open` sets `clientFoundRows=true` and `utf8mb4` when the DSN does not already say so. Several processes can share that DSN. Each process still runs auto-settle and webhook delivery. Task and escrow rows are locked inside the transaction, escrow `held`/`frozen` updates compare-and-swap on a version, and a webhook row is claimed as `delivering` before the POST. Receivers should still dedupe on `X-Event-Id`: if a worker crashes after the POST and before it marks the row delivered, the lease expires and another worker sends the event again. SQLite stays single-connection. Do not point two processes at one SQLite file. If a compose volume was already initialized with the previous root password, recreate the container and volume so the new password applies: `docker compose down -v && docker compose up -d`. That deletes the MySQL data volume.
 
 Tests that need MySQL (concurrent auto-settle, concurrent per-seat timeout refund, concurrent webhook delivery, and the timeout sweep past 50 rows) run when `TASKGAME_MYSQL_DSN` is set. The account must be allowed to `CREATE DATABASE`. The compose root user can:
 
 ```bash
-export TASKGAME_MYSQL_DSN='root:taskgame@tcp(127.0.0.1:3306)/taskgame?charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=false'
+export TASKGAME_MYSQL_DSN='root:123456@tcp(127.0.0.1:3306)/taskgame?charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=false'
 export TASKGAME_MYSQL_REQUIRED=1
 CGO_ENABLED=0 go test ./...
 # or
