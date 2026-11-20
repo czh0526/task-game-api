@@ -460,8 +460,10 @@ th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line
 .bubble { padding: 10px 12px; max-width: min(100%, 42rem); }
 .bubble header, .bubble footer { display: flex; justify-content: space-between; gap: 8px; color: var(--ink-soft); font-size: 0.8rem; }
 .bubble p { margin: 6px 0; white-space: pre-wrap; }
-.bubble.mine { margin-left: auto; background: #3d2a24; color: #fff8f4; border-color: #3d2a24; }
-.bubble.mine .en, .bubble.mine header, .bubble.mine footer, .bubble.mine code { color: #f0d7cc; }
+/* My own messages: WeChat-style green bubble with black text. */
+.bubble.mine { margin-left: auto; background: #95ec69; color: #111111; border-color: #7ad653; }
+.bubble.mine .en, .bubble.mine header, .bubble.mine footer, .bubble.mine code { color: #1a1a1a; }
+.bubble.mine a { color: #0b4a1c; }
 .composer { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; margin-top: 12px; }
 .composer-input { position: relative; display: grid; gap: 6px; min-width: 0; }
 .emoji-bar { display: flex; align-items: center; }
@@ -510,7 +512,7 @@ th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line
 .bubble .sticker { display: grid; justify-items: center; gap: 2px; margin: 6px 0; }
 .sticker-face { font-size: 3.2rem; line-height: 1.15; }
 .sticker-label { color: var(--ink-soft); font-size: 0.78rem; }
-.bubble.mine .sticker-label { color: #f0d7cc; }
+.bubble.mine .sticker-label { color: #1a1a1a; }
 
 .friend-row {
   display: flex;
