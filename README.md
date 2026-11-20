@@ -48,7 +48,7 @@ CGO_ENABLED=0 go build ./...
 
 `Makefile` 会导出 `CGO_ENABLED=0`（也可在命令行覆盖），所以测试和构建等价于 `make tidy`、`make test`、`make build`。
 
-`make run` 使用 `etc/taskgame.mysql.yaml`，连本机 MySQL（`root` / `123456`，库 `taskgame`，`127.0.0.1:3306`）。先启动数据库：
+`make run` 使用 `etc/taskgame.mysql.yaml`，连本机 MySQL（镜像 `mysql:8.4.11`，`root` / `123456`，库 `taskgame`，`127.0.0.1:3306`）。先启动数据库：
 
 ```bash
 docker compose up -d
@@ -168,7 +168,7 @@ CGO_ENABLED=0 go build ./...
 
 The `Makefile` exports `CGO_ENABLED=0` (override it from the environment or the command line), so test and build are `make tidy`, `make test`, and `make build`.
 
-`make run` loads `etc/taskgame.mysql.yaml` and connects to local MySQL (`root` / `123456`, database `taskgame`, `127.0.0.1:3306`). Start the database first:
+`make run` loads `etc/taskgame.mysql.yaml` and connects to local MySQL (image `mysql:8.4.11`, `root` / `123456`, database `taskgame`, `127.0.0.1:3306`). Start the database first:
 
 ```bash
 docker compose up -d
