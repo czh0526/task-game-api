@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { idSuffix, nicknameError, personLabel } from "../src/person.ts";
+import { idSuffix, nicknameError, personLabel, senderDisplayName } from "../src/person.ts";
 
 test("a nickname and the last 6 id characters share one line", () => {
   const id = "usr_ab12cd34ef56ab12cda1b2c3";
@@ -18,6 +18,16 @@ test("a missing nickname is the last 6 characters, on one line", () => {
   assert.equal(personLabel("", "usr_publisher"), "...lisher");
   assert.equal(personLabel("阿宁", "ab"), "阿宁(...ab)");
   assert.equal(personLabel("", ""), "未命名");
+});
+
+test("chat bubble sender names show the nickname without an id suffix", () => {
+  const id = "usr_ab12cd34ef56ab12cda1b2c3";
+  assert.equal(senderDisplayName("李娜", id), "李娜");
+  assert.equal(senderDisplayName("  李娜  ", id), "李娜");
+  assert.equal(senderDisplayName("", id), "...a1b2c3");
+  assert.equal(senderDisplayName(undefined, id), "...a1b2c3");
+  assert.equal(senderDisplayName(null, ""), "未命名");
+  assert.equal(senderDisplayName("张伟", ""), "张伟");
 });
 
 test("nickname validation is visible in Chinese", () => {

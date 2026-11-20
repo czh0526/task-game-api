@@ -4,7 +4,7 @@ import { Avatar } from "../Avatar";
 import { useApp } from "../context";
 import { asStickerChar, EMOJI_STICKERS, insertAtCaret, stickerLabel } from "../emojis";
 import { formatError, formatTime, isAbort } from "../format";
-import { UserRef, useNickname } from "../names";
+import { SenderName, UserRef, useNickname } from "../names";
 import { personLabel } from "../person";
 import { notifyDirectRead } from "../readSync";
 import { href } from "../route";
@@ -197,7 +197,10 @@ export function Conversation({
             {messages.map((message) => (
               <article key={message.id} className={message.sender_id === settings.userId ? "bubble mine" : "bubble"}>
                 <header>
-                  <Avatar userId={message.sender_id} className="bubble-avatar" />
+                  <span className="bubble-sender">
+                    <Avatar userId={message.sender_id} className="bubble-avatar" />
+                    <SenderName userId={message.sender_id} />
+                  </span>
                   <time dateTime={message.created_at}>{formatTime(message.created_at)}</time>
                 </header>
                 {message.type === "sticker" ? (

@@ -19,7 +19,7 @@ import {
   isAbort,
 } from "../format";
 import { FriendPicker, appendUserId } from "../friends";
-import { UserRef } from "../names";
+import { SenderName, UserRef } from "../names";
 import { href } from "../route";
 import {
   confirmTaskBody,
@@ -887,6 +887,7 @@ export function TaskDetail({ id }: { id: string }) {
                 <li key={message.id}>
                   <div className="chat-inline-head">
                     <Avatar userId={message.sender_id} className="bubble-avatar" />
+                    <SenderName userId={message.sender_id} />
                     <time dateTime={message.created_at}>{formatTime(message.created_at)}</time>
                   </div>
                   <div>{message.text || message.attachment_ref}</div>

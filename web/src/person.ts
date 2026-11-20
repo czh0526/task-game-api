@@ -17,6 +17,17 @@ export function personLabel(nickname: string | null | undefined, userId: string)
   return "未命名";
 }
 
+/**
+ * Sender name inside a chat bubble: the nickname on its own (no id suffix),
+ * falling back to the short id when no nickname is known yet.
+ */
+export function senderDisplayName(nickname: string | null | undefined, userId: string): string {
+  const name = nickname?.trim();
+  if (name) return name;
+  const suffix = idSuffix(userId);
+  return suffix ? `...${suffix}` : "未命名";
+}
+
 /** Client-side check matching the server: trimmed, 1–32 characters, no control characters. */
 export function nicknameError(raw: string): string | null {
   const name = raw.trim();

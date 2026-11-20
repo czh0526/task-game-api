@@ -1174,9 +1174,14 @@ button.portal-cat-name:hover, .portal-cat.on .portal-cat-name { color: var(--p-o
 .avatar-lg { width: 64px; height: 64px; border-radius: 8px; font-size: 1.7rem; }
 .wx-rail-avatar-img { width: 100%; height: 100%; border-radius: 6px; }
 
-/* Chat bubbles: avatar replaces the sender name. */
+/* Chat bubbles: avatar + sender nickname, time on the right. */
 .bubble header { align-items: center; }
-.bubble-avatar { width: 26px; height: 26px; border-radius: 50%; font-size: 0.72rem; }
+.bubble-sender { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.bubble-avatar { width: 26px; height: 26px; border-radius: 50%; font-size: 0.72rem; flex: none; }
+.bubble header > time, .chat-inline-head > time {
+  margin-left: auto; white-space: nowrap; flex-shrink: 0;
+}
+.chat-inline { list-style: none; padding-left: 0; }
 .chat-inline-head {
   display: flex; align-items: center; gap: 8px;
   margin-bottom: 4px; color: var(--ink-soft); font-size: 0.8rem;
