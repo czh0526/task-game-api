@@ -8,7 +8,8 @@
 
 ```bash
 make run
-# http://127.0.0.1:8891
+# etc/taskgame.mysql.yaml → MySQL 127.0.0.1:3306，API http://127.0.0.1:8891
+# SQLite：make run-sqlite（etc/taskgame.yaml）
 ```
 
 终端 2：
@@ -82,6 +83,7 @@ make token USER_ID=usr_extra
 
 ```bash
 make run
+# MySQL via etc/taskgame.mysql.yaml. SQLite: make run-sqlite (etc/taskgame.yaml)
 cd web && npm install && npm run dev
 ```
 

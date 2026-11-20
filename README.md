@@ -44,21 +44,28 @@ Mint a dev JWT with `make token` (subject defaults to `usr_publisher`).
 go mod tidy
 CGO_ENABLED=0 go test ./...
 CGO_ENABLED=0 go build ./...
-CGO_ENABLED=0 go run . -f etc/taskgame.yaml
 ```
 
-`Makefile` 会导出 `CGO_ENABLED=0`（也可在命令行覆盖），所以等价于：
+`Makefile` 会导出 `CGO_ENABLED=0`（也可在命令行覆盖），所以测试和构建等价于 `make tidy`、`make test`、`make build`。
+
+`make run` 使用 `etc/taskgame.mysql.yaml`，连本机 MySQL（`root` / `123456`，库 `taskgame`，`127.0.0.1:3306`）。先启动数据库：
 
 ```bash
-make tidy
-make test
-make build
+docker compose up -d
 make run
 ```
 
-进程监听 `http://0.0.0.0:8891`。探活是 `GET /health`（响应 `{"status":"ok"}`）。业务路径都在 `/v1` 下。SQLite 文件是 `data/taskgame.db`（已在 `.gitignore` 中），目录会在启动时创建。
+`etc/taskgame.yaml` 的 `Store.Driver` 仍是 `sqlite`。要用那个文件：
 
-MySQL 是可选的共享库，不是默认。本机：
+```bash
+make run-sqlite
+# 或
+CGO_ENABLED=0 go run . -f etc/taskgame.yaml
+```
+
+进程监听 `http://0.0.0.0:8891`。探活是 `GET /health`（响应 `{"status":"ok"}`）。业务路径都在 `/v1` 下。SQLite 文件是 `data/taskgame.db`（已在 `.gitignore` 中），只在 `make run-sqlite` 时创建。
+
+MySQL 配置在 `etc/taskgame.mysql.yaml`。直接启动：
 
 ```bash
 docker compose up -d
@@ -157,21 +164,28 @@ Requires Go 1.26 (see `go.mod`), `python3` (the smoke script reads JSON with it)
 go mod tidy
 CGO_ENABLED=0 go test ./...
 CGO_ENABLED=0 go build ./...
-CGO_ENABLED=0 go run . -f etc/taskgame.yaml
 ```
 
-The `Makefile` exports `CGO_ENABLED=0` (override it from the environment or the command line), so the same steps are:
+The `Makefile` exports `CGO_ENABLED=0` (override it from the environment or the command line), so test and build are `make tidy`, `make test`, and `make build`.
+
+`make run` loads `etc/taskgame.mysql.yaml` and connects to local MySQL (`root` / `123456`, database `taskgame`, `127.0.0.1:3306`). Start the database first:
 
 ```bash
-make tidy
-make test
-make build
+docker compose up -d
 make run
 ```
 
-The process listens on `http://0.0.0.0:8891`. Liveness is `GET /health` (`{"status":"ok"}`). Protocol routes are under `/v1`. The SQLite file is `data/taskgame.db` (gitignored); the directory is created on startup.
+`Store.Driver` in `etc/taskgame.yaml` stays `sqlite`. To use that file:
 
-MySQL is an optional shared database. It is not the default.
+```bash
+make run-sqlite
+# or
+CGO_ENABLED=0 go run . -f etc/taskgame.yaml
+```
+
+The process listens on `http://0.0.0.0:8891`. Liveness is `GET /health` (`{"status":"ok"}`). Protocol routes are under `/v1`. The SQLite file is `data/taskgame.db` (gitignored) and is created only by `make run-sqlite`.
+
+The MySQL config is `etc/taskgame.mysql.yaml`. Start it directly with:
 
 ```bash
 docker compose up -d
