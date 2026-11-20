@@ -1,26 +1,41 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createIdempotencyKey, type Chat, type Message } from "taskgame-client";
 import { useApp } from "../context";
+import { asStickerChar, EMOJI_STICKERS, insertAtCaret, stickerLabel } from "../emojis";
 import { formatError, formatTime, isAbort } from "../format";
 import { UserRef, useNickname } from "../names";
 import { personLabel } from "../person";
 import { notifyDirectRead } from "../readSync";
 import { href } from "../route";
-import { Button, ErrorNote, IdText, Screen } from "../ui";
+import { Button, cx, ErrorNote, IdText, Screen } from "../ui";
 
 const PAGE = 100;
 const MAX_PAGES = 20;
 
-export function Conversation({ id }: { id: string }) {
+export function Conversation({
+  id,
+  embedded = false,
+  onRead,
+}: {
+  id: string;
+  /** Render without the page title so the thread fits inside the friends detail pane. */
+  embedded?: boolean;
+  /** Called after a direct chat is marked read, so the host can refresh unread counts. */
+  onRead?: () => void;
+}) {
   const { client, clientError, settings } = useApp();
+  const onReadRef = useRef(onRead);
+  onReadRef.current = onRead;
   const [chat, setChat] = useState<Chat | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [truncated, setTruncated] = useState(false);
   const [text, setText] = useState("");
+  const [emojiOpen, setEmojiOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [loading, setLoading] = useState(true);
   const seenCursor = useRef<string | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const load = useCallback(
     async (signal?: AbortSignal) => {
@@ -49,7 +64,10 @@ export function Conversation({ id }: { id: string }) {
       await client.markChatRead(id, seen ? { message_id: seen } : {}, { signal });
       if (signal?.aborted) return;
       seenCursor.current = seen;
-      if (meta.type === "direct") notifyDirectRead(settings.userId, id);
+      if (meta.type === "direct") {
+        notifyDirectRead(settings.userId, id);
+        onReadRef.current?.();
+      }
     },
     [client, id, settings.userId],
   );
@@ -87,20 +105,20 @@ export function Conversation({ id }: { id: string }) {
     };
   }, [client, error, load]);
 
-  async function onPost() {
-    if (!client) return;
-    const body = text.trim();
-    if (!body) return;
+  async function post(body: string, type: "text" | "sticker") {
+    body = body.trim();
+    if (!client || !body || pending) return;
     setPending(true);
     setError(null);
     try {
       const message = await client.postMessage(
         id,
-        { type: "text", text: body },
+        { type, text: body },
         { idempotencyKey: createIdempotencyKey("msg") },
       );
       setMessages((prev) => (prev.some((item) => item.id === message.id) ? prev : [...prev, message]));
       setText("");
+      setEmojiOpen(false);
     } catch (err) {
       setError(formatError(err));
     } finally {
@@ -108,26 +126,41 @@ export function Conversation({ id }: { id: string }) {
     }
   }
 
+  async function onPost() {
+    const body = text.trim();
+    const sticker = asStickerChar(body);
+    await post(body, sticker ? "sticker" : "text");
+  }
+
+  function addEmoji(char: string) {
+    const el = textareaRef.current;
+    const start = el?.selectionStart ?? text.length;
+    const end = el?.selectionEnd ?? text.length;
+    const next = insertAtCaret(text, char, start, end);
+    setText(next.text);
+    requestAnimationFrame(() => {
+      el?.focus();
+      el?.setSelectionRange(next.caret, next.caret);
+    });
+  }
+
   const peer = chat ? otherMember(chat, settings.userId) : "";
   const peerNick = useNickname(peer);
   const peerLabel = personLabel(peerNick, peer);
 
   if (!client) {
-    return (
-      <Screen title="会话">
-        <ErrorNote message={clientError} />
-      </Screen>
-    );
+    const body = <ErrorNote message={clientError} />;
+    return embedded ? <div className="chat-embedded">{body}</div> : <Screen title="会话">{body}</Screen>;
   }
   const title = !chat ? "会话" : chat.type === "direct" ? `与 ${peerLabel} 的会话` : chat.type === "task" ? "任务会话" : "会话";
   const lede = ledeFor(chat);
 
-  return (
-    <Screen title={title} lede={lede}>
+  const content = (
+    <>
       <ErrorNote message={error} />
       {loading && !chat ? <p className="hint">正在读取会话…</p> : null}
       {chat ? (
-        <div className="thread">
+        <div className={cx("thread", embedded && "thread-embedded")}>
           <p className="hint">
             <span className="pill kind">{kindLabel(chat.type)}</span> <IdText value={chat.id} />
             {chat.task_id ? (
@@ -166,7 +199,14 @@ export function Conversation({ id }: { id: string }) {
                   <UserRef userId={message.sender_id} />
                   <time dateTime={message.created_at}>{formatTime(message.created_at)}</time>
                 </header>
-                <p>{message.text || message.attachment_ref}</p>
+                {message.type === "sticker" ? (
+                  <p className="sticker" title={stickerLabel(message.text ?? "")}>
+                    <span className="sticker-face" aria-hidden="true">{message.text}</span>
+                    <span className="sticker-label">{stickerLabel(message.text ?? "")}</span>
+                  </p>
+                ) : (
+                  <p>{message.text || message.attachment_ref}</p>
+                )}
               </article>
             ))}
           </div>
@@ -178,19 +218,58 @@ export function Conversation({ id }: { id: string }) {
               void onPost();
             }}
           >
-            <textarea
-              rows={3}
-              maxLength={8000}
-              value={text}
-              placeholder="发送文字"
-              onChange={(event) => setText(event.target.value)}
-            />
+            <div className="composer-input">
+              <textarea
+                ref={textareaRef}
+                rows={3}
+                maxLength={8000}
+                value={text}
+                placeholder="写消息，点表情可插入文字中；只发一个表情会显示为大表情包"
+                onChange={(event) => setText(event.target.value)}
+              />
+              <div className="emoji-bar">
+                <button
+                  type="button"
+                  className={emojiOpen ? "emoji-toggle on" : "emoji-toggle"}
+                  aria-expanded={emojiOpen}
+                  disabled={pending}
+                  onClick={() => setEmojiOpen((open) => !open)}
+                >
+                  😀 表情
+                </button>
+                {emojiOpen ? (
+                  <div className="emoji-panel" role="group" aria-label="插入表情到消息">
+                    {EMOJI_STICKERS.map((sticker) => (
+                      <button
+                        type="button"
+                        key={sticker.char}
+                        className="emoji-option"
+                        title={sticker.label}
+                        aria-label={`插入表情 ${sticker.label}`}
+                        disabled={pending}
+                        onClick={() => addEmoji(sticker.char)}
+                      >
+                        <span aria-hidden="true">{sticker.char}</span>
+                        <small>{sticker.label}</small>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </div>
             <Button type="submit" kind="primary" pending={pending} disabled={pending || !text.trim()}>
               发送
             </Button>
           </form>
         </div>
       ) : null}
+    </>
+  );
+
+  if (embedded) return <div className="chat-embedded">{content}</div>;
+  return (
+    <Screen title={title} lede={lede}>
+      {content}
     </Screen>
   );
 }

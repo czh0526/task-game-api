@@ -32,14 +32,17 @@ export function PersonName({
   nickname,
   userId,
   chat = true,
+  label: customLabel,
 }: {
   nickname?: string | null;
   userId: string;
   /** When false, the name is plain text. Use that inside a control that already opens or selects the user. */
   chat?: boolean;
+  /** Optional display override, e.g. a nickname without the id suffix in a contact list. */
+  label?: string;
 }) {
   const { client, settings } = useApp();
-  const label = personLabel(nickname, userId);
+  const label = customLabel ?? personLabel(nickname, userId);
   const self = Boolean(userId) && userId === settings.userId;
   if (!chat || !client || !userId || self) {
     return (

@@ -391,7 +391,9 @@ func (e *Engine) ListMessages(ctx context.Context, userID string, req *types.Lis
 	return &types.MessageList{Items: items, NextCursor: next}, nil
 }
 
-// PostMessage appends a text or attachment_ref message from a member.
+// PostMessage appends a text, sticker, or attachment_ref message from a member.
+// A sticker carries an emoji (or short emoticon phrase) in the text field so it
+// needs no attachment upload and renders as an enlarged emoji in clients.
 func (e *Engine) PostMessage(ctx context.Context, userID string, req *types.PostMessageReq) (*types.Message, error) {
 	return call(e, ctx, userID, http.MethodPost, "/v1/chats/"+req.ChatId+"/messages", req.IdempotencyKey, req, func(ctx context.Context, r store.Repos) (*types.Message, error) {
 		if !id.ValidChatID(req.ChatId) {
@@ -410,7 +412,7 @@ func (e *Engine) PostMessage(ctx context.Context, userID string, req *types.Post
 		text := trim(req.Text)
 		ref := trim(req.AttachmentRef)
 		switch req.Type {
-		case "text":
+		case "text", "sticker":
 			if text == "" {
 				return nil, biz.Invalid("text is required")
 			}
@@ -422,7 +424,7 @@ func (e *Engine) PostMessage(ctx context.Context, userID string, req *types.Post
 				return nil, biz.Invalid("attachment_ref is required")
 			}
 		default:
-			return nil, biz.Invalid("type must be text or attachment_ref")
+			return nil, biz.Invalid("type must be text, sticker or attachment_ref")
 		}
 		if len(text) > 8000 || len(ref) > 500 {
 			return nil, biz.Invalid("message is too long")
