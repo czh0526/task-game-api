@@ -36,6 +36,17 @@ Sample development keys (see `etc/taskgame.yaml`):
 
 Mint a dev JWT with `make token` (subject defaults to `usr_publisher`).
 
+## 浏览器实时信号（SSE）
+
+`GET /v1/events/stream` 是给浏览器 UI 用的**出站信号通道**，不属于 `api/openapi.yaml` 描述的对外 JSON 协议，因此没有对应的 SDK 方法（`taskgame-client` 不消费流）。它用 `text/event-stream` 单向推送轻量提示，**不带消息正文**：客户端收到后仍用 `GET /chats/{id}/messages`、`GET /friends` 拉数据。好友页和会话页因此不再依赖 5 秒轮询来感知新消息。
+
+- 认证沿用 `Authorization: Bearer` 或 `X-Api-Key`。`EventSource` 不能自定义请求头，所以前端用 `fetch` + `ReadableStream` 读取（`web/src/eventStream.ts`）。
+- 请求必须带精确的 `Accept: text/event-stream`；go-zero 的 `rest.WithSSE()` 会清掉服务端写超时，超时中间件也会对该请求放行，所以不用改全局 `Timeout`。
+- 连接建立时发 `hello`；带 `Last-Event-ID` 重连时改发 `resync`。两种帧都让前端重新拉一次，覆盖断线期间漏掉的消息；每 15 秒另发 `: ping` 注释帧保活。
+- `POST /chats/{id}/messages` 在事务**提交之后**才广播 `chat.message`（只含 `chat_id` / `message_id` / `sender_id`）。幂等重放不会重复通知。它和 `chat.message.created` webhook 是两条独立链路：webhook 面向第三方 URL 且在事务内入队，SSE 面向当前登录用户的浏览器。
+- 前端保留 45 秒兜底轮询，防止信号丢失或流连不上；不可见标签页依旧不发请求。
+- 订阅表在进程内存里（`internal/notify`），**只在单进程部署下有效**；多实例需要换成 Redis pub/sub 或让客户端退回轮询。反向代理需禁用响应缓冲（服务端已发 `X-Accel-Buffering: no`）。
+
 ## 运行
 
 需要 Go 1.26（见 `go.mod`）、`python3`（`scripts/smoke.sh` 用来读 JSON）和 `curl`。不需要 C 编译器：SQLite 驱动是 `modernc.org/sqlite`。下面的命令都在仓库根目录执行。

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { isSignedIn } from "./client";
 import { useApp } from "./context";
+import { openEventStream } from "./eventStream";
 import { LoginGate } from "./LoginGate";
 import { CHAT_ERROR_EVENT } from "./openChat";
 import { TopBar } from "./TopBar";
@@ -39,6 +40,13 @@ export function App() {
   // keeps its URL and shows a login modal on top; signing in reveals the page.
   const gateOpen = !signedIn && isProtectedRoute(route);
   const [chatError, setChatError] = useState<string | null>(null);
+
+  // One stream per signed-in session. Screens subscribe to its signals and
+  // keep a slow fallback poll for the case a frame is lost.
+  useEffect(() => {
+    if (!signedIn) return;
+    return openEventStream(settings);
+  }, [signedIn, settings.baseUrl, settings.authMode, settings.apiKey, settings.bearerToken, settings.userId]);
 
   useEffect(() => {
     const onError = (event: Event) => {

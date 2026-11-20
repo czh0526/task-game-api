@@ -52,6 +52,7 @@ type Engine struct {
 	deferred sync.Map
 	timeouts TimeoutConfig
 	arbiters map[string]struct{}
+	notifier SignalNotifier
 }
 
 // Option configures an Engine.

@@ -395,7 +395,11 @@ func (e *Engine) ListMessages(ctx context.Context, userID string, req *types.Lis
 // A sticker carries an emoji (or short emoticon phrase) in the text field so it
 // needs no attachment upload and renders as an enlarged emoji in clients.
 func (e *Engine) PostMessage(ctx context.Context, userID string, req *types.PostMessageReq) (*types.Message, error) {
-	return call(e, ctx, userID, http.MethodPost, "/v1/chats/"+req.ChatId+"/messages", req.IdempotencyKey, req, func(ctx context.Context, r store.Repos) (*types.Message, error) {
+	// memberIDs is populated only when fn actually runs. An idempotent replay
+	// returns the cached response without entering the transaction, and must
+	// not notify the chat members a second time.
+	var memberIDs []string
+	posted, err := call(e, ctx, userID, http.MethodPost, "/v1/chats/"+req.ChatId+"/messages", req.IdempotencyKey, req, func(ctx context.Context, r store.Repos) (*types.Message, error) {
 		if !id.ValidChatID(req.ChatId) {
 			return nil, biz.Invalid("chatId must match ^cht_")
 		}
@@ -441,8 +445,16 @@ func (e *Engine) PostMessage(ctx context.Context, userID string, req *types.Post
 		if err := e.emit(ctx, r, chat.MemberIDs, model.EventChatMessageCreated, map[string]any{"message": out}); err != nil {
 			return nil, err
 		}
+		memberIDs = chat.MemberIDs
 		return out, nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	// Notify only after the transaction committed. A client that re-reads the
+	// thread as soon as it receives the hint must be able to see the new row.
+	e.publishChatMessage(memberIDs, posted.ChatId, posted.Id, posted.SenderId)
+	return posted, nil
 }
 
 // GetUserScores returns integrity and ability. Unknown users are zeros, not an error.
