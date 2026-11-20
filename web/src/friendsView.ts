@@ -32,11 +32,16 @@ export function avatarColor(seed: string): string {
   return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
 }
 
-/** Build the contact sections, optionally narrowed by a nickname/user-id query. */
+/**
+ * Build the contact sections, optionally narrowed by a nickname/user-id query.
+ * With `includeEmpty` every group (and the ungrouped bucket) is returned even
+ * when it has no matching friends, so a drag can target an empty folder.
+ */
 export function friendSections(
   groups: FriendGroupWithFriends[],
   ungrouped: Friend[],
   query: string,
+  includeEmpty = false,
 ): FriendSectionView[] {
   const needle = query.trim().toLocaleLowerCase();
   const matches = (friend: Friend): boolean =>
@@ -51,7 +56,12 @@ export function friendSections(
       friends: group.friends.filter(matches),
     })),
   ];
-  return sections.filter((section) => section.friends.length > 0);
+  return includeEmpty ? sections : sections.filter((section) => section.friends.length > 0);
+}
+
+/** Whether dropping a friend on a group would actually change its placement. */
+export function placementChanged(currentGroupId: string, targetGroupId: string): boolean {
+  return (currentGroupId || "") !== (targetGroupId || "");
 }
 
 /** The other person in a friend request, relative to the signed-in user. */

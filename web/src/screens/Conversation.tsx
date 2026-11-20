@@ -7,13 +7,25 @@ import { UserRef, useNickname } from "../names";
 import { personLabel } from "../person";
 import { notifyDirectRead } from "../readSync";
 import { href } from "../route";
-import { Button, ErrorNote, IdText, Screen } from "../ui";
+import { Button, cx, ErrorNote, IdText, Screen } from "../ui";
 
 const PAGE = 100;
 const MAX_PAGES = 20;
 
-export function Conversation({ id }: { id: string }) {
+export function Conversation({
+  id,
+  embedded = false,
+  onRead,
+}: {
+  id: string;
+  /** Render without the page title so the thread fits inside the friends detail pane. */
+  embedded?: boolean;
+  /** Called after a direct chat is marked read, so the host can refresh unread counts. */
+  onRead?: () => void;
+}) {
   const { client, clientError, settings } = useApp();
+  const onReadRef = useRef(onRead);
+  onReadRef.current = onRead;
   const [chat, setChat] = useState<Chat | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [truncated, setTruncated] = useState(false);
@@ -52,7 +64,10 @@ export function Conversation({ id }: { id: string }) {
       await client.markChatRead(id, seen ? { message_id: seen } : {}, { signal });
       if (signal?.aborted) return;
       seenCursor.current = seen;
-      if (meta.type === "direct") notifyDirectRead(settings.userId, id);
+      if (meta.type === "direct") {
+        notifyDirectRead(settings.userId, id);
+        onReadRef.current?.();
+      }
     },
     [client, id, settings.userId],
   );
@@ -134,21 +149,18 @@ export function Conversation({ id }: { id: string }) {
   const peerLabel = personLabel(peerNick, peer);
 
   if (!client) {
-    return (
-      <Screen title="会话">
-        <ErrorNote message={clientError} />
-      </Screen>
-    );
+    const body = <ErrorNote message={clientError} />;
+    return embedded ? <div className="chat-embedded">{body}</div> : <Screen title="会话">{body}</Screen>;
   }
   const title = !chat ? "会话" : chat.type === "direct" ? `与 ${peerLabel} 的会话` : chat.type === "task" ? "任务会话" : "会话";
   const lede = ledeFor(chat);
 
-  return (
-    <Screen title={title} lede={lede}>
+  const content = (
+    <>
       <ErrorNote message={error} />
       {loading && !chat ? <p className="hint">正在读取会话…</p> : null}
       {chat ? (
-        <div className="thread">
+        <div className={cx("thread", embedded && "thread-embedded")}>
           <p className="hint">
             <span className="pill kind">{kindLabel(chat.type)}</span> <IdText value={chat.id} />
             {chat.task_id ? (
@@ -251,6 +263,13 @@ export function Conversation({ id }: { id: string }) {
           </form>
         </div>
       ) : null}
+    </>
+  );
+
+  if (embedded) return <div className="chat-embedded">{content}</div>;
+  return (
+    <Screen title={title} lede={lede}>
+      {content}
     </Screen>
   );
 }

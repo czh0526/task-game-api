@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { avatarColor, avatarInitial, friendSections, requestPerson } from "../src/friendsView.ts";
+import { avatarColor, avatarInitial, friendSections, placementChanged, requestPerson } from "../src/friendsView.ts";
 
 const friend = (userId, nickname, unread_count = 0) => ({
   user_id: userId,
@@ -47,6 +47,29 @@ test("contact sections keep group order and filter by name or id", () => {
     ["未分组"],
   );
   assert.deepEqual(friendSections(groups, ungrouped, "nobody"), []);
+});
+
+test("drag mode keeps empty groups and the ungrouped bucket as drop targets", () => {
+  const groups = [
+    { id: "grp_1", name: "同事", sort_order: 1, friends: [friend("usr_a", "Alice")] },
+    { id: "grp_2", name: "家人", sort_order: 2, friends: [] },
+  ];
+  const sections = friendSections(groups, [], "", true);
+  assert.deepEqual(
+    sections.map((section) => [section.key, section.title, section.friends.length]),
+    [
+      ["", "未分组", 0],
+      ["grp_1", "同事", 1],
+      ["grp_2", "家人", 0],
+    ],
+  );
+});
+
+test("placementChanged ignores no-op drops but catches real moves", () => {
+  assert.equal(placementChanged("grp_1", "grp_1"), false);
+  assert.equal(placementChanged("", ""), false);
+  assert.equal(placementChanged("grp_1", ""), true);
+  assert.equal(placementChanged("", "grp_2"), true);
 });
 
 test("request person is the other side of the request", () => {

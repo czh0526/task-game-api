@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent as ReactDragEvent,
+  type ReactNode,
+} from "react";
 import {
   createIdempotencyKey,
   type Friend,
@@ -7,13 +15,14 @@ import {
 } from "taskgame-client";
 import { useApp } from "../context";
 import { formatError, formatTime, isAbort, validUserId } from "../format";
-import { avatarColor, avatarInitial, friendSections, requestPerson } from "../friendsView";
+import { avatarColor, avatarInitial, friendSections, placementChanged, requestPerson } from "../friendsView";
 import { PersonName, rememberNickname } from "../names";
 import { openDirectChat } from "../openChat";
 import { personLabel } from "../person";
 import { subscribeDirectRead } from "../readSync";
 import { href } from "../route";
 import { Button, cx, ErrorNote, OkNote } from "../ui";
+import { Conversation } from "./Conversation";
 
 interface GroupDraft {
   name: string;
@@ -21,7 +30,13 @@ interface GroupDraft {
 }
 
 type Panel = "contacts" | "requests" | "groups";
+type DetailView = "chat" | "profile";
 type IconName = "contacts" | "requests" | "groups" | "settings" | "search";
+
+interface ActiveChat {
+  userId: string;
+  chatId: string;
+}
 
 const FRIEND_POLL_MS = 5000;
 
@@ -36,6 +51,11 @@ export function Friends() {
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [selectedRequestId, setSelectedRequestId] = useState<string | null>(null);
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+  const [detailView, setDetailView] = useState<DetailView>("chat");
+  const [activeChat, setActiveChat] = useState<ActiveChat | null>(null);
+  const [chatBusy, setChatBusy] = useState(false);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dragOverKey, setDragOverKey] = useState<string | null>(null);
   const [userId, setUserId] = useState("");
   const [groupName, setGroupName] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -43,6 +63,7 @@ export function Friends() {
   const [pending, setPending] = useState<string | null>(null);
   const opening = useRef(false);
   const openedAt = useRef(0);
+  const chatRequest = useRef(0);
 
   const reload = useCallback(
     async (signal?: AbortSignal) => {
@@ -110,6 +131,12 @@ export function Friends() {
     [list, groups],
   );
   const sections = useMemo(() => friendSections(groups, list?.ungrouped ?? [], query), [groups, list, query]);
+  // While dragging, show every group (including empty ones) as a drop target,
+  // and ignore the search box so a filtered-out folder is still reachable.
+  const visibleSections = useMemo(
+    () => (draggingId ? friendSections(groups, list?.ungrouped ?? [], "", true) : sections),
+    [draggingId, groups, list, sections],
+  );
   const groupNameById = useMemo(() => {
     const map = new Map<string, string>();
     for (const group of groups) for (const friend of group.friends) map.set(friend.user_id, group.name);
@@ -134,16 +161,14 @@ export function Friends() {
   const selectedRequestPerson = selectedRequest ? requestPerson(selectedRequest.request, settings.userId) : null;
 
   useEffect(() => {
-    if (panel === "contacts" && !selectedUserId && allFriends.length > 0) {
-      setSelectedUserId(allFriends[0].user_id);
-    }
-  }, [panel, selectedUserId, allFriends]);
-
-  useEffect(() => {
     if (selectedUserId && !allFriends.some((friend) => friend.user_id === selectedUserId)) {
       setSelectedUserId(null);
+      setActiveChat(null);
     }
-  }, [allFriends, selectedUserId]);
+    if (activeChat && !allFriends.some((friend) => friend.user_id === activeChat.userId)) {
+      setActiveChat(null);
+    }
+  }, [allFriends, selectedUserId, activeChat]);
 
   useEffect(() => {
     if (selectedGroupId && groups.length > 0 && !selectedGroup) setSelectedGroupId(null);
@@ -169,6 +194,40 @@ export function Friends() {
     setPanel(next);
     setError(null);
     setNote(null);
+  }
+
+  /** Select a contact and open (or reuse) the 1:1 chat directly in the right pane. */
+  async function selectFriend(friend: Friend) {
+    if (!client) return;
+    // Only the latest click may decide which conversation the right pane shows.
+    const seq = ++chatRequest.current;
+    setSelectedUserId(friend.user_id);
+    setDetailView("chat");
+    setError(null);
+    setNote(null);
+    if (activeChat?.userId === friend.user_id) return;
+    setActiveChat(null);
+    setChatBusy(true);
+    try {
+      let chatId = friend.direct_chat_id ?? null;
+      if (!chatId) {
+        const chat = await client.createChat(
+          { type: "direct", user_id: friend.user_id },
+          { idempotencyKey: createIdempotencyKey("direct-chat") },
+        );
+        chatId = chat.id;
+      }
+      if (chatRequest.current !== seq) return;
+      setActiveChat({ userId: friend.user_id, chatId });
+      // Refresh so the list picks up direct_chat_id and clears the unread badge.
+      void reload().catch(() => {});
+    } catch (err) {
+      if (chatRequest.current !== seq) return;
+      setError(formatError(err));
+      setDetailView("profile");
+    } finally {
+      if (chatRequest.current === seq) setChatBusy(false);
+    }
   }
 
   async function openConversation(friend: Friend) {
@@ -200,6 +259,13 @@ export function Friends() {
     });
   }
 
+  function moveFriendById(userId: string, groupId: string) {
+    const friend = allFriends.find((item) => item.user_id === userId);
+    if (!friend) return;
+    if (!placementChanged(groupIdById.get(userId) ?? "", groupId)) return;
+    moveFriend(friend, groupId);
+  }
+
   function unfriend(friend: Friend) {
     if (!window.confirm(`解除后双方都不再是好友，这一对的分组也会清掉。确定解除与 ${personLabel(friend.nickname, friend.user_id)} 的好友关系吗？`)) {
       return;
@@ -208,6 +274,17 @@ export function Friends() {
       await client!.unfriend(friend.user_id, { idempotencyKey: createIdempotencyKey("unfriend") });
       return "已解除好友。";
     });
+  }
+
+  function onDragStart(event: ReactDragEvent<HTMLButtonElement>, friend: Friend) {
+    event.dataTransfer.setData("text/plain", friend.user_id);
+    event.dataTransfer.effectAllowed = "move";
+    setDraggingId(friend.user_id);
+  }
+
+  function onDragEnd() {
+    setDraggingId(null);
+    setDragOverKey(null);
   }
 
   if (!client) {
@@ -230,6 +307,8 @@ export function Friends() {
   };
   const visibleIncoming = incoming.filter(matchesRequest);
   const visibleOutgoing = outgoing.filter(matchesRequest);
+  const displayName = (friend: Friend): string =>
+    friend.nickname?.trim() || personLabel(friend.nickname, friend.user_id);
 
   const addFriendForm = (
     <form
@@ -271,12 +350,129 @@ export function Friends() {
     </form>
   );
 
+  function renderProfile(friend: Friend) {
+    return (
+      <div className="wx-profile">
+        <div className="wx-detail-title">
+          <h2>联系人资料</h2>
+          <button type="button" className="wx-text-btn" onClick={() => setDetailView("chat")}>
+            返回聊天
+          </button>
+        </div>
+        <div className="wx-profile-head">
+          <Avatar userId={friend.user_id} name={friend.nickname} large />
+          <div className="wx-profile-title">
+            <h2>
+              <PersonName
+                nickname={friend.nickname}
+                userId={friend.user_id}
+                label={displayName(friend)}
+              />
+            </h2>
+            <p className="wx-id mono">{friend.user_id}</p>
+            <span className="wx-chip">{groupNameById.get(friend.user_id) ?? "未分组"}</span>
+          </div>
+        </div>
+        <dl className="wx-profile-fields">
+          <div>
+            <dt>诚信</dt>
+            <dd>{friend.integrity}</dd>
+          </div>
+          <div>
+            <dt>能力</dt>
+            <dd>{friend.ability}</dd>
+          </div>
+          <div>
+            <dt>成为好友</dt>
+            <dd>{formatTime(friend.since)}</dd>
+          </div>
+          <div>
+            <dt>未读消息</dt>
+            <dd>{friend.unread_count > 0 ? `${friend.unread_count} 条` : "无"}</dd>
+          </div>
+        </dl>
+        <div className="wx-profile-actions">
+          <Button
+            type="button"
+            kind="primary"
+            pending={pending === `chat-${friend.user_id}`}
+            disabled={pending !== null}
+            onClick={() => void openConversation(friend)}
+          >
+            在新标签打开会话
+          </Button>
+          <label className="wx-inline-field">
+            <span>所在分组</span>
+            <select
+              value={groupIdById.get(friend.user_id) ?? ""}
+              disabled={pending !== null}
+              onChange={(event) => {
+                if (event.target.value !== (groupIdById.get(friend.user_id) ?? "")) {
+                  moveFriend(friend, event.target.value);
+                }
+              }}
+            >
+              <option value="">未分组</option>
+              {groups.map((group) => (
+                <option key={group.id} value={group.id}>
+                  {group.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <Button type="button" kind="danger" disabled={pending !== null} onClick={() => unfriend(friend)}>
+            解除好友
+          </Button>
+        </div>
+        <p className="wx-footnote">点击昵称可查看公开资料卡；也可以把左侧联系人拖到分组标题来移动。</p>
+      </div>
+    );
+  }
+
+  function renderChat(friend: Friend, chat: ActiveChat) {
+    return (
+      <>
+        <div className="wx-chat-head">
+          <Avatar userId={friend.user_id} name={friend.nickname} />
+          <div className="wx-chat-title">
+            <strong>{displayName(friend)}</strong>
+            <small>
+              {groupNameById.get(friend.user_id) ?? "未分组"} · {friend.user_id}
+            </small>
+          </div>
+          <button type="button" className="wx-chat-action" onClick={() => setDetailView("profile")}>
+            资料
+          </button>
+          <button
+            type="button"
+            className="wx-chat-action"
+            title="在新标签打开会话"
+            aria-label="在新标签打开会话"
+            onClick={() => void openConversation(friend)}
+          >
+            ↗
+          </button>
+        </div>
+        <Conversation
+          key={chat.chatId}
+          id={chat.chatId}
+          embedded
+          onRead={() => {
+            void reload().catch(() => {});
+          }}
+        />
+      </>
+    );
+  }
+
+  const chatOpen = panel === "contacts" && detailView === "chat" && Boolean(activeChat);
+
   return (
     <section className="screen wx-friends">
       <header className="wx-head">
         <div>
           <h1>通讯录</h1>
-          <p>好友是双方的关系，分组只属于你自己。点击左侧联系人查看资料；红色数字是对方发来、你还没看过的消息。</p>
+          <p>点击左侧联系人，右侧直接聊天；把联系人拖到分组标题即可调整分组。红色数字是还没看过的消息。</p>
         </div>
         <div className="wx-head-meta">
           <span className="wx-total">{allFriends.length} 位好友</span>
@@ -335,6 +531,10 @@ export function Friends() {
             />
           </div>
 
+          {panel === "contacts" && draggingId ? (
+            <div className="wx-drag-tip">把联系人拖到下面的分组，松手即可移动</div>
+          ) : null}
+
           {panel === "contacts" ? (
             <>
               <button type="button" className="wx-entry" onClick={() => switchPanel("requests")}>
@@ -349,23 +549,73 @@ export function Friends() {
                 <RailGlyph name="groups" />
                 <span className="wx-entry-text">
                   <strong>分组管理</strong>
-                  <small>{groups.length} 个分组</small>
+                  <small>{groups.length} 个分组 · 也可拖动联系人</small>
                 </span>
               </button>
               <div className="wx-list-scroll">
-                {sections.length === 0 ? <p className="wx-empty-list">没有匹配的好友</p> : null}
-                {sections.map((section) => (
+                {!draggingId && visibleSections.length === 0 ? (
+                  <p className="wx-empty-list">没有匹配的好友</p>
+                ) : null}
+                {visibleSections.map((section) => (
                   <div key={section.key || "ungrouped"} className="wx-list-section">
-                    <div className="wx-list-section-title">
+                    <div
+                      className={cx(
+                        "wx-list-section-title",
+                        draggingId && "wx-drop-target",
+                        dragOverKey === section.key && "wx-drop-over",
+                      )}
+                      onDragOver={
+                        draggingId
+                          ? (event) => {
+                              event.preventDefault();
+                              event.dataTransfer.dropEffect = "move";
+                              if (dragOverKey !== section.key) setDragOverKey(section.key);
+                            }
+                          : undefined
+                      }
+                      onDragLeave={
+                        draggingId
+                          ? (event) => {
+                              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                                setDragOverKey(null);
+                              }
+                            }
+                          : undefined
+                      }
+                      onDrop={
+                        draggingId
+                          ? (event) => {
+                              event.preventDefault();
+                              const dragged = event.dataTransfer.getData("text/plain") || draggingId;
+                              setDraggingId(null);
+                              setDragOverKey(null);
+                              if (dragged) moveFriendById(dragged, section.key);
+                            }
+                          : undefined
+                      }
+                    >
                       {section.title} <span>{section.friends.length}</span>
+                      {draggingId ? (
+                        <em className="wx-drop-hint">
+                          {section.key ? `放这里 → 移入「${section.title}」` : "放这里 → 移出分组"}
+                        </em>
+                      ) : null}
                     </div>
                     {section.friends.map((friend) => (
                       <button
                         key={friend.user_id}
                         type="button"
-                        className={cx("wx-contact", selectedUserId === friend.user_id && "on")}
+                        draggable
+                        className={cx(
+                          "wx-contact",
+                          selectedUserId === friend.user_id && "on",
+                          draggingId === friend.user_id && "dragging",
+                        )}
                         aria-current={selectedUserId === friend.user_id ? "true" : undefined}
-                        onClick={() => setSelectedUserId(friend.user_id)}
+                        title="点击开始聊天；拖到分组标题可移动"
+                        onDragStart={(event) => onDragStart(event, friend)}
+                        onDragEnd={onDragEnd}
+                        onClick={() => void selectFriend(friend)}
                       >
                         <Avatar userId={friend.user_id} name={friend.nickname} />
                         <span className="wx-contact-main">
@@ -374,7 +624,7 @@ export function Friends() {
                               nickname={friend.nickname}
                               userId={friend.user_id}
                               chat={false}
-                              label={friend.nickname?.trim() || personLabel(friend.nickname, friend.user_id)}
+                              label={displayName(friend)}
                             />
                           </strong>
                           <small>
@@ -475,79 +725,21 @@ export function Friends() {
           ) : null}
         </aside>
 
-        <section className="wx-detail-pane">
+        <section className={cx("wx-detail-pane", chatOpen && "wx-detail-pane-chat")}>
           {panel === "contacts" ? (
-            selectedFriend ? (
-              <div className="wx-profile">
-                <div className="wx-profile-head">
-                  <Avatar userId={selectedFriend.user_id} name={selectedFriend.nickname} large />
-                  <div className="wx-profile-title">
-                    <h2>
-                      <PersonName
-                        nickname={selectedFriend.nickname}
-                        userId={selectedFriend.user_id}
-                        label={selectedFriend.nickname?.trim() || personLabel(selectedFriend.nickname, selectedFriend.user_id)}
-                      />
-                    </h2>
-                    <p className="wx-id mono">{selectedFriend.user_id}</p>
-                    <span className="wx-chip">{groupNameById.get(selectedFriend.user_id) ?? "未分组"}</span>
-                  </div>
-                </div>
-                <dl className="wx-profile-fields">
-                  <div>
-                    <dt>诚信</dt>
-                    <dd>{selectedFriend.integrity}</dd>
-                  </div>
-                  <div>
-                    <dt>能力</dt>
-                    <dd>{selectedFriend.ability}</dd>
-                  </div>
-                  <div>
-                    <dt>成为好友</dt>
-                    <dd>{formatTime(selectedFriend.since)}</dd>
-                  </div>
-                  <div>
-                    <dt>未读消息</dt>
-                    <dd>{selectedFriend.unread_count > 0 ? `${selectedFriend.unread_count} 条` : "无"}</dd>
-                  </div>
-                </dl>
-                <div className="wx-profile-actions">
-                  <Button
-                    type="button"
-                    kind="primary"
-                    pending={pending === `chat-${selectedFriend.user_id}`}
-                    disabled={pending !== null}
-                    onClick={() => void openConversation(selectedFriend)}
-                  >
-                    发消息
-                  </Button>
-                  <label className="wx-inline-field">
-                    <span>所在分组</span>
-                    <select
-                      value={groupIdById.get(selectedFriend.user_id) ?? ""}
-                      disabled={pending !== null}
-                      onChange={(event) => {
-                        if (event.target.value !== (groupIdById.get(selectedFriend.user_id) ?? "")) {
-                          moveFriend(selectedFriend, event.target.value);
-                        }
-                      }}
-                    >
-                      <option value="">未分组</option>
-                      {groups.map((group) => (
-                        <option key={group.id} value={group.id}>
-                          {group.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <Button type="button" kind="danger" disabled={pending !== null} onClick={() => unfriend(selectedFriend)}>
-                    解除好友
-                  </Button>
-                </div>
-                <p className="wx-footnote">点击昵称可查看公开资料卡；「发消息」会在新标签打开一对一会话。</p>
-              </div>
+            !selectedFriend ? (
+              <EmptyState title="选择一位联系人开始聊天" hint="点击左侧任意联系人，右侧会直接打开你们的一对一会话。" />
+            ) : detailView === "profile" ? (
+              renderProfile(selectedFriend)
+            ) : chatBusy ? (
+              <div className="wx-chat-loading">正在打开会话…</div>
+            ) : activeChat && activeChat.userId === selectedFriend.user_id ? (
+              renderChat(selectedFriend, activeChat)
             ) : (
-              <EmptyState title="选择一位好友" hint="从左侧列表中选择联系人，查看资料、分组和会话入口。" />
+              <EmptyState
+                title="会话还没打开"
+                hint="点一下左侧这位联系人，或切到资料面板。"
+              />
             )
           ) : null}
 
@@ -801,7 +993,7 @@ function EmptyState({ title, hint }: { title: string; hint: string }) {
   return (
     <div className="wx-empty">
       <span className="wx-empty-mark" aria-hidden="true">
-        👤
+        💬
       </span>
       <strong>{title}</strong>
       <p>{hint}</p>
