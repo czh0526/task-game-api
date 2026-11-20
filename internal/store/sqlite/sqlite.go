@@ -145,6 +145,13 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			return fmt.Errorf("migrate users.nickname: %w", err)
 		}
 	}
+	// Avatar columns are additive, so older database files get them on startup.
+	if err := addColumns(ctx, db, "users", map[string]string{
+		"avatar":            "BLOB",
+		"avatar_updated_at": "TEXT NOT NULL DEFAULT ''",
+	}); err != nil {
+		return err
+	}
 	_, err = db.ExecContext(ctx, `
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email
 		ON users (email) WHERE email IS NOT NULL AND email != ''`)

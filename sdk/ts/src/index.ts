@@ -64,6 +64,8 @@ export type {
   EscrowEntry,
   EscrowEntryType,
   AuthSession,
+  AvatarSummary,
+  AvatarUpload,
   HealthStatus,
   ListMessagesQuery,
   ListTasksQuery,

@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { createIdempotencyKey, type Message, type ResolutionOutcome, type Task } from "taskgame-client";
+import { Avatar } from "../Avatar";
 import { isSignedIn } from "../client";
 import { useApp } from "../context";
 import {
@@ -18,7 +19,7 @@ import {
   isAbort,
 } from "../format";
 import { FriendPicker, appendUserId } from "../friends";
-import { UserRef } from "../names";
+import { SenderName, UserRef } from "../names";
 import { href } from "../route";
 import {
   confirmTaskBody,
@@ -881,10 +882,14 @@ export function TaskDetail({ id }: { id: string }) {
               注资时自动绑定。接受的执行者会加入。 <IdText value={task.chat_id} />
             </p>
             {chatNote ? <p className="hint">{chatNote}</p> : null}
-            <ul className="plain">
+            <ul className="plain chat-inline">
               {messages.map((message) => (
                 <li key={message.id}>
-                  <UserRef userId={message.sender_id} /> · {formatTime(message.created_at)}
+                  <div className="chat-inline-head">
+                    <Avatar userId={message.sender_id} className="bubble-avatar" />
+                    <SenderName userId={message.sender_id} />
+                    <time dateTime={message.created_at}>{formatTime(message.created_at)}</time>
+                  </div>
                   <div>{message.text || message.attachment_ref}</div>
                 </li>
               ))}

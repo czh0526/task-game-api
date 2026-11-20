@@ -307,6 +307,19 @@ type (
 	PatchMeReq {
 		Nickname string `json:"nickname,optional"`
 	}
+	PutMeAvatarReq {
+		Image string `json:"image"`
+	}
+	AvatarSummary {
+		UserId    string `json:"user_id"`
+		AvatarUrl string `json:"avatar_url"`
+		Width     int    `json:"width"`
+		Height    int    `json:"height"`
+		UpdatedAt string `json:"updated_at"`
+	}
+	GetUserAvatarReq {
+		UserId string `path:"userId" json:"-"`
+	}
 	AuthSession {
 		AccessToken string      `json:"access_token"`
 		ExpiresIn   int64       `json:"expires_in"`
@@ -523,8 +536,15 @@ service taskgame {
 	@handler declineInvite
 	post /invites/:inviteId/decline (DeclineInviteReq) returns (Invite)
 
+	@handler putMeAvatar
+	put /me/avatar (PutMeAvatarReq) returns (AvatarSummary)
+
 	@handler getUserScores
 	get /users/:userId/scores (GetUserScoresReq) returns (UserScores)
+
+	// Returns image/jpeg bytes, not JSON. AvatarSummary is a schema placeholder.
+	@handler getUserAvatar
+	get /users/:userId/avatar (GetUserAvatarReq) returns (AvatarSummary)
 }
 
 @server (

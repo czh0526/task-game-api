@@ -13,9 +13,10 @@ import {
   type FriendList,
   type FriendRequest,
 } from "taskgame-client";
+import { Avatar as SharedAvatar } from "../Avatar";
 import { useApp } from "../context";
 import { formatError, formatTime, isAbort, validUserId } from "../format";
-import { avatarColor, avatarInitial, friendSections, placementChanged, requestPerson } from "../friendsView";
+import { friendSections, placementChanged, requestPerson } from "../friendsView";
 import { PersonName, rememberNickname } from "../names";
 import { openDirectChat } from "../openChat";
 import { personLabel } from "../person";
@@ -492,12 +493,15 @@ export function Friends() {
             className="wx-rail-avatar"
             title="个人设置"
             aria-label="个人设置"
-            style={{ backgroundColor: avatarColor(settings.userId || "me") }}
             onClick={() => {
               window.location.hash = href.settings;
             }}
           >
-            {avatarInitial(settings.email || settings.userId || "我", "我")}
+            <SharedAvatar
+              userId={settings.userId || "me"}
+              name={settings.email || settings.userId || "我"}
+              className="wx-rail-avatar-img"
+            />
           </button>
           <RailButton name="contacts" label="联系人" active={panel === "contacts"} onClick={() => switchPanel("contacts")} />
           <RailButton
@@ -960,6 +964,7 @@ export function Friends() {
   );
 }
 
+/** Contact-list avatars keep the WeChat tile size but show the uploaded picture. */
 function Avatar({
   userId,
   name,
@@ -969,15 +974,7 @@ function Avatar({
   name?: string | null;
   large?: boolean;
 }) {
-  return (
-    <span
-      className={cx("wx-avatar", large && "large")}
-      style={{ backgroundColor: avatarColor(userId) }}
-      aria-hidden="true"
-    >
-      {avatarInitial(name || userId)}
-    </span>
-  );
+  return <SharedAvatar userId={userId} name={name} large={large} className="wx-avatar" />;
 }
 
 function UnreadBadge({ count }: { count: number }) {

@@ -322,6 +322,14 @@ type User struct {
 	CreatedAt    time.Time
 }
 
+// UserAvatar is the stored 720x720 JPEG plus its upload timestamp. The image
+// is kept in a dedicated column so ordinary user reads never load the blob.
+type UserAvatar struct {
+	UserID    string
+	Data      []byte
+	UpdatedAt string
+}
+
 type ScoreEvent struct {
 	ID             string
 	UserID         string

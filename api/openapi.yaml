@@ -26,6 +26,7 @@ info:
     - Additive in v0.1, mutual friends and personal groups. POST /friends/requests {user_id} asks an existing user. You cannot friend yourself. Already friends, or a pending request you already sent, is 409 and does not insert a second row. If the other user already has a pending request toward you, that call accepts the existing request (200, status accepted) instead of opening another one. The recipient can accept or decline. The requester can cancel a pending outgoing request; cancel does not emit a webhook. Either friend can unfriend, which ends the relationship for both sides and clears both users' group membership for that pair. A later request is allowed. GET /friends is only the caller's list: groups are personal folders (a friend is in at most one of the owner's groups, or ungrouped). Deleting a group does not unfriend. Caps: 50 groups per user, 500 friends per user, 100 pending outgoing requests, group names 1–32 characters after trim and unique per owner, sort_order from -1000000 to 1000000. Friend objects expose user_id, nickname, integrity, ability, and since — the same public scores as GET /users/{userId}/scores — and never email, balance, or password. nickname is empty when unset and is not unique. Webhook events friend.requested, friend.accepted, friend.declined, and friend.removed are delivered to the other party's existing webhook subscriptions (owner-scoped, same HMAC delivery as score.updated). They are not task-scoped.
     - Additive in v0.1, public market listing: GET /tasks without credentials is allowed so the web landing page can show task categories before sign-in. GET /tasks/{taskId} is also public so a visitor can open a task's detail from the listing before signing in. GET /users/{userId}/scores is public so a visitor can open a user's profile card before signing in; friend actions still require auth and the web UI prompts for login. `assignable=me` still requires auth. Task mutations and all other routes remain protected.
     - Additive in v0.1, chat stickers: POST /chats/{chatId}/messages accepts `type: sticker`, which carries an emoji (or short emoticon phrase) in `text` with no `attachment_ref`. Stickers are stored and echoed like text messages and the web UI renders them enlarged. No new field or upload is required.
+    - Additive in v0.1, avatars: PUT /me/avatar accepts a base64 JPEG, PNG, or GIF (optionally a data URL) and stores a 720x720 JPEG for the caller. The server centre-crops to a square, resamples to 720x720, and composites transparency on white, so clients may send any aspect ratio. GET /users/{userId}/avatar is public and returns the raw image/jpeg bytes with an ETag; 404 means no avatar is stored and clients fall back to a generated initial tile. Avatars are not part of UserSummary and do not change nickname, email, or tokens.
 servers:
   - url: https://api.example.com/v1
 security:
@@ -1214,6 +1215,76 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/UserScores'
+  /me/avatar:
+    put:
+      tags: [Users]
+      summary: Set the caller's avatar
+      operationId: putMeAvatar
+      description: |
+        Requires Bearer or X-Api-Key. `image` is a base64-encoded JPEG, PNG, or GIF,
+        optionally as a `data:image/...;base64,` URL. The server centre-crops the
+        picture to a square, resamples it to 720x720, composites transparency on
+        white, and stores the result as JPEG. Any previous avatar is replaced.
+        Input is limited to 12 MiB and 8000x8000 pixels; empty, corrupt, or
+        oversized images are 400. The stored image is public at
+        GET /users/{userId}/avatar. Email, nickname, and the access token are
+        unchanged. This route does not take an Idempotency-Key.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AvatarUpload'
+      responses:
+        '200':
+          description: Stored avatar
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AvatarSummary'
+        '400':
+          description: Image is missing, invalid, or too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /users/{userId}/avatar:
+    get:
+      tags: [Users]
+      summary: Read a stored avatar
+      operationId: getUserAvatar
+      security: []
+      description: |
+        Public. Returns the raw image/jpeg bytes of the stored 720x720 avatar.
+        404 when the user does not exist or has never uploaded an avatar; clients
+        fall back to a generated initial tile. ETag is the upload timestamp and
+        Cache-Control is no-cache, so a replaced avatar is never served stale.
+        Credentials, when supplied, are still validated.
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 720x720 JPEG avatar
+          content:
+            image/jpeg:
+              schema: { type: string, format: binary }
+        '304':
+          description: Not modified (If-None-Match matched the ETag)
+        '404':
+          description: No avatar stored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 components:
   securitySchemes:
     bearerAuth:
@@ -1267,6 +1338,30 @@ components:
               description: |
                 Optional display name. Omit the field to leave it unset.
                 Trimmed to 1–32 characters. Not unique. Empty or whitespace-only is 400 and does not create the user.
+    AvatarUpload:
+      type: object
+      required: [image]
+      properties:
+        image:
+          type: string
+          description: |
+            Base64-encoded JPEG, PNG, or GIF, optionally prefixed with a
+            `data:image/...;base64,` URL. The server always normalizes it to a
+            720x720 JPEG, so the aspect ratio and size of the input do not matter.
+    AvatarSummary:
+      type: object
+      required: [user_id, avatar_url, width, height, updated_at]
+      properties:
+        user_id: { type: string }
+        avatar_url:
+          type: string
+          description: Public URL of the stored image, e.g. `/v1/users/usr_x/avatar`.
+        width: { type: integer, const: 720 }
+        height: { type: integer, const: 720 }
+        updated_at:
+          type: string
+          format: date-time
+          description: Upload timestamp, also used as the image ETag.
     ProfileUpdate:
       type: object
       required: [nickname]

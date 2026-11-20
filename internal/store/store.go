@@ -51,6 +51,12 @@ type UserRepo interface {
 	GetByEmail(ctx context.Context, email string) (model.User, error)
 	// SetNickname stores a display name. Empty is allowed and means unset. ErrNotFound when the user row is missing.
 	SetNickname(ctx context.Context, id, nickname string) error
+	// SetAvatar stores a normalized 720x720 JPEG and its upload timestamp.
+	// ErrNotFound when the user row is missing.
+	SetAvatar(ctx context.Context, id string, jpeg []byte, updatedAt string) error
+	// GetAvatar returns the stored JPEG and its version. ErrNotFound when the
+	// user does not exist or has never uploaded an avatar.
+	GetAvatar(ctx context.Context, id string) (model.UserAvatar, error)
 	AddBalance(ctx context.Context, id string, delta int64) error
 	ApplyScore(ctx context.Context, id string, deltaIntegrity, deltaAbility int64) error
 	AddScoreEvent(ctx context.Context, ev model.ScoreEvent) error

@@ -126,6 +126,35 @@ func TestUserScoresStillValidatesSuppliedCredentials(t *testing.T) {
 	}
 }
 
+func TestUserAvatarIsPublicWithoutCredentials(t *testing.T) {
+	m := NewAuthMiddleware(config.AuthConf{})
+	for _, path := range []string{"/v1/users/usr_123/avatar", "/v1/users/usr_123/avatar/"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		called := false
+		m.Handle(func(w http.ResponseWriter, r *http.Request) {
+			called = true
+			w.WriteHeader(http.StatusOK)
+		})(rec, req)
+		if !called || rec.Code != http.StatusOK {
+			t.Fatalf("anonymous avatar %s: called=%v status=%d", path, called, rec.Code)
+		}
+	}
+}
+
+func TestAvatarUploadRequiresAuth(t *testing.T) {
+	m := NewAuthMiddleware(config.AuthConf{})
+	req := httptest.NewRequest(http.MethodPut, "/v1/me/avatar", nil)
+	rec := httptest.NewRecorder()
+	called := false
+	m.Handle(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+	})(rec, req)
+	if called || rec.Code == http.StatusOK {
+		t.Fatalf("anonymous upload: called=%v status=%d", called, rec.Code)
+	}
+}
+
 func TestFriendRoutesStillRequireAuth(t *testing.T) {
 	m := NewAuthMiddleware(config.AuthConf{})
 	for _, path := range []string{"/v1/friends", "/v1/friends/requests"} {

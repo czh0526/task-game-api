@@ -28,8 +28,9 @@ func NewAuthMiddleware(cfg config.AuthConf) *AuthMiddleware {
 }
 
 // Handle rejects unauthenticated calls before the handler runs.
-// The task market listing, individual task details, and a user's public scores
-// are readable without sign-in; credentials, when supplied, are still validated.
+// The task market listing, individual task details, a user's public scores,
+// and stored avatars are readable without sign-in; credentials, when supplied,
+// are still validated.
 func (m *AuthMiddleware) Handle(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if isPublicRead(r) && !hasCredentials(r) {
@@ -46,9 +47,10 @@ func (m *AuthMiddleware) Handle(next http.HandlerFunc) http.HandlerFunc {
 }
 
 // isPublicRead reports GET requests that only read public data: the market
-// listing (GET /v1/tasks), a single task detail (GET /v1/tasks/{taskId}), and
-// a user's public scores (GET /v1/users/{userId}/scores). Mutations and all
-// other routes stay protected.
+// listing (GET /v1/tasks), a single task detail (GET /v1/tasks/{taskId}), a
+// user's public scores (GET /v1/users/{userId}/scores), and that user's stored
+// avatar (GET /v1/users/{userId}/avatar). Mutations and all other routes stay
+// protected.
 func isPublicRead(r *http.Request) bool {
 	if r.Method != http.MethodGet {
 		return false
@@ -66,10 +68,10 @@ func isPublicRead(r *http.Request) bool {
 	}
 	const usersPrefix = "/v1/users/"
 	if strings.HasPrefix(path, usersPrefix) {
-		// Exactly /v1/users/{userId}/scores is public; other user routes and
-		// trailing sub-paths stay protected.
+		// Exactly /v1/users/{userId}/scores and /v1/users/{userId}/avatar are
+		// public; other user routes and trailing sub-paths stay protected.
 		parts := strings.Split(strings.TrimPrefix(path, usersPrefix), "/")
-		return len(parts) == 2 && parts[0] != "" && parts[1] == "scores"
+		return len(parts) == 2 && parts[0] != "" && (parts[1] == "scores" || parts[1] == "avatar")
 	}
 	return false
 }

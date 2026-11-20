@@ -7,6 +7,8 @@ export const protocolOperations = [
   "login",
   "me",
   "updateMe",
+  "putMeAvatar",
+  "getUserAvatar",
   "listTasks",
   "createTask",
   "getTask",

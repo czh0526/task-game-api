@@ -101,6 +101,41 @@ func (r *userRepo) SetNickname(ctx context.Context, id, nickname string) error {
 	return nil
 }
 
+func (r *userRepo) SetAvatar(ctx context.Context, id string, jpeg []byte, updatedAt string) error {
+	res, err := r.q.ExecContext(ctx, `
+		UPDATE users SET avatar = ?, avatar_updated_at = ? WHERE id = ?`, jpeg, updatedAt, id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+func (r *userRepo) GetAvatar(ctx context.Context, id string) (model.UserAvatar, error) {
+	var data []byte
+	var updated string
+	err := r.q.QueryRowContext(ctx, `
+		SELECT avatar, COALESCE(avatar_updated_at, '')
+		FROM users WHERE id = ? AND avatar IS NOT NULL AND length(avatar) > 0`, id).
+		Scan(&data, &updated)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.UserAvatar{}, store.ErrNotFound
+	}
+	if err != nil {
+		return model.UserAvatar{}, err
+	}
+	if len(data) == 0 {
+		return model.UserAvatar{}, store.ErrNotFound
+	}
+	return model.UserAvatar{UserID: id, Data: data, UpdatedAt: updated}, nil
+}
+
 func isEmailConflict(err error) bool {
 	if err == nil {
 		return false

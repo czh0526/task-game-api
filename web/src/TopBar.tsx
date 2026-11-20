@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Avatar } from "./Avatar";
 import { isSignedIn } from "./client";
 import { useApp } from "./context";
 import { PROFILE_EVENT, rememberNickname } from "./names";
@@ -113,7 +114,7 @@ export function TopBar({ route, health }: { route: Route; health: "checking" | "
                 aria-expanded={menuOpen}
                 onClick={() => setMenuOpen((open) => !open)}
               >
-                <span className="topbar-avatar" aria-hidden="true">{nickname.trim().charAt(0).toUpperCase() || "我"}</span>
+                <Avatar userId={settings.userId} name={nickname || settings.userId} className="topbar-avatar" />
                 <span className="topbar-account-name">{label}</span>
                 <span className="topbar-caret" aria-hidden="true">▾</span>
               </button>

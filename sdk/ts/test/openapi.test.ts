@@ -52,6 +52,7 @@ describe("OpenAPI parity", () => {
       "/invites/{inviteId}/decline",
       "/login",
       "/me",
+      "/me/avatar",
       "/me/invites",
       "/register",
       "/tasks",
@@ -68,6 +69,7 @@ describe("OpenAPI parity", () => {
       "/tasks/{taskId}/revise",
       "/tasks/{taskId}/start",
       "/tasks/{taskId}/submit",
+      "/users/{userId}/avatar",
       "/users/{userId}/scores",
       "/webhooks",
     ]);

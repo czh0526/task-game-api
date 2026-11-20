@@ -1,5 +1,7 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState, type ChangeEvent, type FormEvent } from "react";
 import { isTaskGameError } from "taskgame-client";
+import { Avatar } from "../Avatar";
+import { AVATAR_SIZE, fileToAvatarDataUrl, notifyAvatar } from "../avatarUtils";
 import { useApp } from "../context";
 import { formatError, isAbort } from "../format";
 import { DevIdentity } from "../identity";
@@ -17,6 +19,10 @@ export function Settings() {
   const [note, setNote] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState(false);
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+  const [avatarBusy, setAvatarBusy] = useState(false);
+  const [avatarError, setAvatarError] = useState<string | null>(null);
+  const [avatarNote, setAvatarNote] = useState<string | null>(null);
 
   useEffect(() => {
     if (!client) return;
@@ -67,6 +73,41 @@ export function Settings() {
     }
   }
 
+  async function onPickAvatar(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    // Allow choosing the same file again after a failed attempt.
+    event.target.value = "";
+    if (!file) return;
+    setAvatarError(null);
+    setAvatarNote(null);
+    setAvatarBusy(true);
+    try {
+      setAvatarPreview(await fileToAvatarDataUrl(file));
+    } catch (err) {
+      setAvatarPreview(null);
+      setAvatarError(err instanceof Error ? err.message : formatError(err));
+    } finally {
+      setAvatarBusy(false);
+    }
+  }
+
+  async function onSaveAvatar() {
+    if (!client || !avatarPreview) return;
+    setAvatarBusy(true);
+    setAvatarError(null);
+    setAvatarNote(null);
+    try {
+      const result = await client.putMeAvatar({ image: avatarPreview });
+      notifyAvatar(result.user_id);
+      setAvatarPreview(null);
+      setAvatarNote(`已保存为 ${result.width}×${result.height} 头像，好友列表和聊天里会立即更新。`);
+    } catch (err) {
+      setAvatarError(formatError(err));
+    } finally {
+      setAvatarBusy(false);
+    }
+  }
+
   if (!client) {
     return (
       <Screen title="用户信息">
@@ -107,6 +148,58 @@ export function Settings() {
           {saved ? "更新" : "保存"}
         </Button>
       </form>
+
+      <section className="settings-block">
+        <h2>头像</h2>
+        <p className="hint">
+          上传后会居中裁剪成正方形，并统一转换为 {AVATAR_SIZE}×{AVATAR_SIZE} 的 JPEG。
+          好友列表、资料卡和聊天消息都会显示这张图片；没有上传时显示昵称首字。
+        </p>
+        <div className="avatar-editor">
+          {avatarPreview ? (
+            <img className="avatar-editor-preview" src={avatarPreview} alt="头像预览" />
+          ) : (
+            <Avatar userId={settings.userId} name={saved || settings.userId} large />
+          )}
+          <div className="avatar-editor-actions">
+            <label className="btn secondary">
+              选择图片
+              <input
+                type="file"
+                accept="image/*"
+                hidden
+                disabled={avatarBusy}
+                onChange={onPickAvatar}
+              />
+            </label>
+            <Button
+              type="button"
+              kind="primary"
+              pending={avatarBusy}
+              disabled={avatarBusy || !avatarPreview}
+              onClick={onSaveAvatar}
+            >
+              保存头像
+            </Button>
+            {avatarPreview ? (
+              <Button
+                type="button"
+                kind="ghost"
+                disabled={avatarBusy}
+                onClick={() => {
+                  setAvatarPreview(null);
+                  setAvatarNote(null);
+                }}
+              >
+                取消
+              </Button>
+            ) : null}
+            <small className="hint">支持 JPG / PNG / GIF。大图会先在本地裁剪压缩再上传。</small>
+          </div>
+        </div>
+        <ErrorNote message={avatarError} />
+        <OkNote message={avatarNote} />
+      </section>
 
       <section className="settings-block">
         <h2>账号</h2>

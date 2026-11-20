@@ -14,7 +14,11 @@ CREATE TABLE IF NOT EXISTS users (
     email TEXT,
     password_hash TEXT,
     -- Display name. Empty means unset. Not unique, and not a login handle.
-    nickname TEXT NOT NULL DEFAULT ''
+    nickname TEXT NOT NULL DEFAULT '',
+    -- 720x720 JPEG set by PUT /v1/me/avatar. NULL means no avatar uploaded yet.
+    avatar BLOB,
+    -- RFC3339 timestamp of the last upload, used as an ETag / cache version.
+    avatar_updated_at TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS tasks (

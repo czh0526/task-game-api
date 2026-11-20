@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import type { TaskGameClient } from "taskgame-client";
 import { isSignedIn } from "./client";
 import { useApp } from "./context";
-import { personLabel } from "./person";
+import { personLabel, senderDisplayName } from "./person";
 import { openUserCard } from "./userCard";
 
 const nicknames = new Map<string, string>();
@@ -71,6 +71,16 @@ export function PersonName({
 export function UserRef({ userId }: { userId: string }): ReactNode {
   const nickname = useNickname(userId);
   return <PersonName nickname={nickname} userId={userId} />;
+}
+
+/**
+ * Sender label inside a chat bubble: shows only the nickname (no id suffix),
+ * with a short-id fallback while the nickname is unknown. Clicking it still
+ * opens the user's public profile card.
+ */
+export function SenderName({ userId }: { userId: string }): ReactNode {
+  const nickname = useNickname(userId);
+  return <PersonName nickname={nickname} userId={userId} label={senderDisplayName(nickname, userId)} />;
 }
 
 export function useNickname(userId: string): string | undefined {
