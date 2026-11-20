@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"taskgame/internal/model"
@@ -13,32 +14,42 @@ import (
 // sweepTimeouts closes recruiting, unstarted unified tasks, idle executors, open per-seat
 // shares, and competitive reviews whose winner was never chosen.
 func (e *Engine) sweepTimeouts(ctx context.Context) (int, error) {
-	rows, err := e.store.Tasks().List(ctx, model.TaskFilter{
-		Statuses: []string{model.StatusOpen, model.StatusActive, model.StatusInReview},
-		Limit:    50,
-		Offset:   0,
-	})
-	if err != nil {
-		return 0, err
-	}
 	n := 0
-	for _, row := range rows {
-		changed := false
-		err := e.store.InTx(ctx, func(ctx context.Context, r store.Repos) error {
-			t, err := r.Tasks().Get(ctx, row.ID)
-			if err != nil {
-				return err
-			}
-			ok, err := e.applyTimeout(ctx, r, t)
-			changed = ok
-			return err
-		})
+	afterCreated, afterID := "", ""
+	for pages := 0; pages < 10000; pages++ {
+		rows, err := e.store.Tasks().ListSweep(ctx, afterCreated, afterID, 50)
 		if err != nil {
-			logx.Errorf("timeout %s: %v", row.ID, err)
-			continue
+			return n, err
 		}
-		if changed {
-			n++
+		if len(rows) == 0 {
+			break
+		}
+		for _, row := range rows {
+			afterCreated = model.FormatTime(row.CreatedAt)
+			afterID = row.ID
+			changed := false
+			err := e.store.InTx(ctx, func(ctx context.Context, r store.Repos) error {
+				t, err := r.Tasks().TryLock(ctx, row.ID)
+				if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrBusy) {
+					return nil
+				}
+				if err != nil {
+					return err
+				}
+				ok, err := e.applyTimeout(ctx, r, t)
+				changed = ok
+				return err
+			})
+			if err != nil {
+				logx.Errorf("timeout %s: %v", row.ID, err)
+				continue
+			}
+			if changed {
+				n++
+			}
+		}
+		if len(rows) < 50 {
+			break
 		}
 	}
 	return n, nil
@@ -108,7 +119,7 @@ func (e *Engine) timeoutOpenSeats(ctx context.Context, r store.Repos, t model.Ta
 	if t.DisputeRoleID == "" && t.Status == model.StatusDisputed {
 		return false, nil
 	}
-	acc, err := r.Escrow().GetByTask(ctx, t.ID)
+	acc, err := r.Escrow().LockByTask(ctx, t.ID)
 	if err != nil {
 		return false, err
 	}
@@ -148,7 +159,7 @@ func (e *Engine) timeoutOpenSeats(ctx context.Context, r store.Repos, t model.Ta
 		}
 		role.Status = model.RoleRefunded
 	}
-	if err := r.Escrow().Update(ctx, acc); err != nil {
+	if err := saveEscrow(ctx, r, acc); err != nil {
 		return false, err
 	}
 	e.syncCollaborativeProgress(&t)

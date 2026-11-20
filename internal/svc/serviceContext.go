@@ -11,6 +11,7 @@ import (
 	"taskgame/internal/id"
 	"taskgame/internal/middleware"
 	"taskgame/internal/store"
+	"taskgame/internal/store/mysql"
 	"taskgame/internal/store/sqlite"
 	"taskgame/internal/webhook"
 
@@ -43,13 +44,10 @@ func NewServiceContext(c config.Config) (*ServiceContext, error) {
 		}
 		seen[key.Key] = struct{}{}
 	}
-	if c.Store.Driver != "sqlite" {
-		return nil, fmt.Errorf("unsupported store driver %q", c.Store.Driver)
-	}
 	if c.Store.DSN == "" {
 		return nil, fmt.Errorf("Store.DSN is required")
 	}
-	st, err := sqlite.Open(c.Store.DSN, c.Escrow.InitialBalance)
+	st, err := openStore(c)
 	if err != nil {
 		return nil, err
 	}
@@ -73,6 +71,17 @@ func NewServiceContext(c config.Config) (*ServiceContext, error) {
 			MaxAttempts: c.Webhook.MaxAttempts,
 		}),
 	}, nil
+}
+
+func openStore(c config.Config) (store.Store, error) {
+	switch c.Store.Driver {
+	case "", "sqlite":
+		return sqlite.Open(c.Store.DSN, c.Escrow.InitialBalance)
+	case "mysql":
+		return mysql.Open(c.Store.DSN, c.Escrow.InitialBalance)
+	default:
+		return nil, fmt.Errorf("unsupported store driver %q", c.Store.Driver)
+	}
 }
 
 // Close releases the store.

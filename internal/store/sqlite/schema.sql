@@ -1,5 +1,5 @@
 -- SQLite schema for Task Game Open Protocol v0.1.
--- JSON columns are TEXT. A Postgres port can use jsonb and keep the same names.
+-- JSON columns are TEXT. The MySQL store keeps the same text columns.
 -- INTEGER amounts are simulated credits. Timestamps are UTC, fixed-width RFC3339.
 
 CREATE TABLE IF NOT EXISTS users (
@@ -85,7 +85,9 @@ CREATE TABLE IF NOT EXISTS escrow_accounts (
     task_id TEXT NOT NULL UNIQUE,
     held INTEGER NOT NULL,
     frozen INTEGER NOT NULL,
-    currency TEXT NOT NULL
+    currency TEXT NOT NULL,
+    -- Compare-and-swap token. Updates match the version they read.
+    version INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS escrow_entries (
@@ -119,10 +121,15 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
     status TEXT NOT NULL,
     attempts INTEGER NOT NULL,
     last_error TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    -- claim_token identifies the worker that moved the row to delivering.
+    -- claimed_until is the lease. A crashed worker is retried after it passes.
+    claim_token TEXT NOT NULL DEFAULT '',
+    claimed_until TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_deliveries_status ON webhook_deliveries (status, created_at);
+CREATE INDEX IF NOT EXISTS idx_deliveries_claim ON webhook_deliveries (status, claimed_until, created_at, id);
 
 -- type is task (bound to task_id), direct (one row per friend pair), or group
 -- (free-form member_ids, a new row on each POST). pair_low and pair_high are

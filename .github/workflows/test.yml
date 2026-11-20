@@ -1,0 +1,55 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: taskgame
+          MYSQL_DATABASE: taskgame
+          MYSQL_USER: taskgame
+          MYSQL_PASSWORD: taskgame
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -ptaskgame"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: unit and MySQL tests
+        env:
+          CGO_ENABLED: "0"
+          TASKGAME_MYSQL_REQUIRED: "1"
+          TASKGAME_MYSQL_DSN: root:taskgame@tcp(127.0.0.1:3306)/taskgame?charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=false
+        run: go test ./...
+      - name: smoke against MySQL
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          go run . -f etc/taskgame.mysql.yaml > /tmp/taskgame.log 2>&1 &
+          echo $! > /tmp/taskgame.pid
+          ok=0
+          for _ in $(seq 1 40); do
+            if curl -sf http://127.0.0.1:8891/health >/dev/null; then
+              ok=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ok" != 1 ]; then
+            cat /tmp/taskgame.log
+            exit 1
+          fi
+          bash scripts/smoke.sh
+          kill "$(cat /tmp/taskgame.pid)" || true

@@ -7,12 +7,13 @@ import (
 	"time"
 
 	"taskgame/internal/model"
+	"taskgame/internal/store/sqlstore"
 )
 
 func f64(v float64) *float64 { return &v }
 
 // seedFilterTasks inserts a few tasks around Beijing with known coordinates.
-func seedFilterTasks(t *testing.T, st *DB) {
+func seedFilterTasks(t *testing.T, st *sqlstore.DB) {
 	t.Helper()
 	ctx := context.Background()
 	now := time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC)

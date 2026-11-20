@@ -20,6 +20,13 @@ build:
 test:
 	go test ./...
 
+# MySQL 8 tests, including the concurrent settle, timeout, and webhook cases.
+# Start MySQL first: docker compose up -d
+# The account needs CREATE DATABASE (the compose root user does).
+test-mysql:
+	TASKGAME_MYSQL_DSN="$${TASKGAME_MYSQL_DSN:-root:taskgame@tcp(127.0.0.1:3306)/taskgame?charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=false}" \
+	TASKGAME_MYSQL_REQUIRED=1 go test ./...
+
 run:
 	go run . -f etc/taskgame.yaml
 

@@ -31,9 +31,10 @@ type ApiKeyConf struct {
 	UserId string
 }
 
-// StoreConf selects the Store implementation. v0.1 ships sqlite only.
+// StoreConf selects the Store implementation.
+// sqlite is the single-writer default. mysql is the shared database for more than one API process.
 type StoreConf struct {
-	Driver string `json:",default=sqlite,options=sqlite"`
+	Driver string `json:",default=sqlite,options=sqlite|mysql"`
 	DSN    string
 }
 

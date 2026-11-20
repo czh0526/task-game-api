@@ -1,9 +1,8 @@
 // Package store is the persistence boundary.
 //
-// sqlite.Open implements Store. A later Postgres implementation should satisfy
-// the same interface and can live in internal/store/postgres without changing
-// handlers. Schema comments in internal/store/sqlite/schema.sql call out the
-// dialect-shaped bits (JSON text columns map cleanly onto jsonb).
+// sqlite.Open is the default Store. mysql.Open is the shared-database Store
+// used when several API processes sit in front of one MySQL 8 database.
+// Handlers depend only on this interface.
 package store
 
 import (
@@ -18,6 +17,8 @@ var (
 	ErrNotFound     = errors.New("not found")
 	ErrInsufficient = errors.New("insufficient credits")
 	ErrConflict     = errors.New("conflict")
+	// ErrBusy means another transaction holds the row (MySQL SKIP LOCKED).
+	ErrBusy = errors.New("busy")
 )
 
 // Store is a process-wide database handle.
@@ -67,9 +68,20 @@ type TaskRepo interface {
 	Insert(ctx context.Context, t model.Task) error
 	Update(ctx context.Context, t model.Task) error
 	Get(ctx context.Context, id string) (model.Task, error)
+	// Lock reads the task and holds the row until the surrounding transaction ends.
+	// SQLite serializes writers without a row lock. MySQL uses SELECT ... FOR UPDATE.
+	Lock(ctx context.Context, id string) (model.Task, error)
+	// TryLock is Lock, except a row already locked by another transaction returns ErrBusy.
+	TryLock(ctx context.Context, id string) (model.Task, error)
+	// ClaimDueReview locks one in_review task whose review_deadline has passed.
+	// exclude omits ids already considered in this pass. An empty id means none remain.
+	// The caller must be inside a transaction so the MySQL lock is held through settlement.
+	ClaimDueReview(ctx context.Context, now time.Time, exclude []string) (string, error)
+	// ListSweep pages tasks in open, active, or in_review. The cursor is (created_at, id)
+	// in ascending order. Empty afterCreated starts at the beginning.
+	ListSweep(ctx context.Context, afterCreated, afterID string, limit int) ([]model.Task, error)
 	List(ctx context.Context, f model.TaskFilter) ([]model.Task, error)
 	Count(ctx context.Context, f model.TaskFilter) (int64, error)
-	ListDueReview(ctx context.Context, now time.Time, limit int) ([]string, error)
 }
 
 type SubmissionRepo interface {
@@ -83,6 +95,8 @@ type EscrowRepo interface {
 	Update(ctx context.Context, a model.EscrowAccount) error
 	InsertEntry(ctx context.Context, e model.EscrowEntry) error
 	GetByTask(ctx context.Context, taskID string) (model.EscrowAccount, error)
+	// LockByTask is GetByTask plus a row lock held until the transaction ends.
+	LockByTask(ctx context.Context, taskID string) (model.EscrowAccount, error)
 }
 
 type WebhookRepo interface {
@@ -93,7 +107,13 @@ type WebhookRepo interface {
 type DeliveryRepo interface {
 	Insert(ctx context.Context, d model.Delivery) error
 	ListPending(ctx context.Context, maxAttempts, limit int) ([]model.Delivery, error)
-	Update(ctx context.Context, id string, attempts int, status, lastError string) error
+	// ClaimPending marks up to limit rows as delivering, increments attempts, and
+	// returns the claimed rows. Expired delivering leases are eligible again.
+	// Each claim commits before HTTP so two workers cannot both POST the same row
+	// while the lease is held.
+	ClaimPending(ctx context.Context, maxAttempts, limit int, now, until time.Time) ([]model.Delivery, error)
+	// Finish writes the outcome only when claimToken still owns the row.
+	Finish(ctx context.Context, id, claimToken, status, lastError string) error
 }
 
 type ChatRepo interface {
@@ -158,5 +178,8 @@ type FriendRepo interface {
 
 type IdemRepo interface {
 	Get(ctx context.Context, userID, method, path, key string) (*model.IdemRecord, error)
+	// GetLocked is Get plus a row lock when the driver supports it.
+	// Use it inside the transaction that may insert the same key.
+	GetLocked(ctx context.Context, userID, method, path, key string) (*model.IdemRecord, error)
 	Put(ctx context.Context, rec model.IdemRecord) error
 }

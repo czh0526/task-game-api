@@ -1,0 +1,52 @@
+Name: taskgame-api
+Host: 0.0.0.0
+Port: 8891
+Mode: dev
+Timeout: 10000
+CpuThreshold: 0
+Log:
+  Mode: console
+  Encoding: plain
+  Level: info
+  Stat: false
+
+# Same development keys as etc/taskgame.yaml so scripts/smoke.sh can target this process.
+Auth:
+  JwtSecret: dev-jwt-secret-change-me-32b
+  TokenTTL: 24h
+  ApiKeys:
+    - Key: dev-publisher-key
+      UserId: usr_publisher
+    - Key: dev-executor-key
+      UserId: usr_executor
+    - Key: dev-arbiter-key
+      UserId: usr_arbiter
+
+# MySQL 8.0.19+. Matches docker-compose.yml (user taskgame, database taskgame).
+# Open() turns on clientFoundRows and utf8mb4 when the DSN leaves them unset.
+# Several API processes can share this DSN. Each process runs auto-settle and
+# webhook delivery; claims and row locks keep those loops from double-paying
+# or double-delivering.
+Store:
+  Driver: mysql
+  DSN: "taskgame:taskgame@tcp(127.0.0.1:3306)/taskgame?charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=false"
+
+Escrow:
+  InitialBalance: 1000000
+  Currency: credits
+  ArbiterUserIds:
+    - usr_arbiter
+
+Webhook:
+  Mode: log
+  Interval: 2s
+  Timeout: 5s
+  MaxAttempts: 3
+
+AutoSettle:
+  Enabled: true
+  Interval: 30s
+  OpenTimeout: 72h
+  StartTimeout: 72h
+  SeatTimeout: 72h
+  WinnerSelectHours: 72

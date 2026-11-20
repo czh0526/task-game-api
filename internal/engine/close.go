@@ -286,7 +286,7 @@ func (e *Engine) disputeSeat(ctx context.Context, r store.Repos, t model.Task, u
 	if userID != t.PublisherID && role.AssigneeUserID != userID {
 		return nil, biz.Forbidden("only the publisher or that seat's executor can dispute")
 	}
-	acc, err := r.Escrow().GetByTask(ctx, t.ID)
+	acc, err := r.Escrow().LockByTask(ctx, t.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -309,7 +309,7 @@ func (e *Engine) disputeSeat(ctx context.Context, r store.Repos, t model.Task, u
 			return nil, err
 		}
 		acc.Frozen = amount
-		if err := r.Escrow().Update(ctx, acc); err != nil {
+		if err := saveEscrow(ctx, r, acc); err != nil {
 			return nil, err
 		}
 	}
@@ -374,7 +374,7 @@ func (e *Engine) cancelRefundAll(ctx context.Context, r store.Repos, t model.Tas
 	}
 	var refund *model.EscrowEntry
 	if t.EscrowID != "" {
-		acc, err := r.Escrow().GetByTask(ctx, t.ID)
+		acc, err := r.Escrow().LockByTask(ctx, t.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -389,7 +389,7 @@ func (e *Engine) cancelRefundAll(ctx context.Context, r store.Repos, t model.Tas
 			}
 			refund = &ent
 		}
-		if err := r.Escrow().Update(ctx, acc); err != nil {
+		if err := saveEscrow(ctx, r, acc); err != nil {
 			return nil, err
 		}
 	}
@@ -415,7 +415,7 @@ func (e *Engine) cancelPerSeatRemainder(ctx context.Context, r store.Repos, t mo
 	if t.EscrowID == "" {
 		return nil, biz.Conflict("task has no escrow")
 	}
-	acc, err := r.Escrow().GetByTask(ctx, t.ID)
+	acc, err := r.Escrow().LockByTask(ctx, t.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -469,7 +469,7 @@ func (e *Engine) cancelPerSeatRemainder(ctx context.Context, r store.Repos, t mo
 			}
 		}
 	}
-	if err := r.Escrow().Update(ctx, acc); err != nil {
+	if err := saveEscrow(ctx, r, acc); err != nil {
 		return nil, err
 	}
 	terminal := true
@@ -557,7 +557,7 @@ func (e *Engine) applyDisputeOutcome(ctx context.Context, r store.Repos, t model
 	if t.EscrowID == "" {
 		return nil, biz.Conflict("task has no escrow")
 	}
-	acc, err := r.Escrow().GetByTask(ctx, t.ID)
+	acc, err := r.Escrow().LockByTask(ctx, t.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -628,7 +628,7 @@ func (e *Engine) applyDisputeOutcome(ctx context.Context, r store.Repos, t model
 	default:
 		return nil, biz.Invalid("outcome must be pay_executor, refund_publisher, or split")
 	}
-	if err := r.Escrow().Update(ctx, acc); err != nil {
+	if err := saveEscrow(ctx, r, acc); err != nil {
 		return nil, err
 	}
 	paidSomeone := len(paid) > 0
@@ -891,7 +891,7 @@ func disputeAmount(ctx context.Context, r store.Repos, t model.Task) (int64, err
 	if t.EscrowID == "" {
 		return 0, biz.Conflict("task has no escrow")
 	}
-	acc, err := r.Escrow().GetByTask(ctx, t.ID)
+	acc, err := r.Escrow().LockByTask(ctx, t.ID)
 	if err != nil {
 		return 0, err
 	}

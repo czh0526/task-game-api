@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"taskgame/internal/biz"
 	"taskgame/internal/id"
 	"taskgame/internal/model"
 	"taskgame/internal/store"
@@ -39,6 +40,9 @@ type TimeoutConfig struct {
 
 // errAutoDeferred means the 72h hook will not guess an outcome.
 var errAutoDeferred = errors.New("auto-settle deferred")
+
+// errNoDue ends one auto-settle pass when no in_review task is waiting.
+var errNoDue = errors.New("no due review")
 
 // Engine is safe for concurrent use. Mutations run inside store transactions.
 type Engine struct {
@@ -124,6 +128,14 @@ func New(st store.Store, currency string, opts ...Option) *Engine {
 		opt(e)
 	}
 	return e
+}
+
+func saveEscrow(ctx context.Context, r store.Repos, acc model.EscrowAccount) error {
+	err := r.Escrow().Update(ctx, acc)
+	if errors.Is(err, store.ErrConflict) {
+		return biz.Conflict("escrow changed concurrently")
+	}
+	return err
 }
 
 func taskPath(id, action string) string {
@@ -239,25 +251,46 @@ func (e *Engine) recordScore(ctx context.Context, r store.Repos, userID, taskID,
 // winner_take_all will not guess a winner. A later winner_select_deadline
 // refunds that pool if the publisher still has not chosen.
 func (e *Engine) AutoSettleDue(ctx context.Context) (int, error) {
-	ids, err := e.store.Tasks().ListDueReview(ctx, e.now(), 50)
-	if err != nil {
-		return 0, err
-	}
 	n := 0
-	for _, taskID := range ids {
+	var skip []string
+	for {
+		var taskID string
 		err := e.store.InTx(ctx, func(ctx context.Context, r store.Repos) error {
-			_, err := e.confirm(ctx, r, confirmInput{TaskID: taskID, Auto: true})
+			id, err := r.Tasks().ClaimDueReview(ctx, e.now(), skip)
+			if err != nil {
+				return err
+			}
+			if id == "" {
+				return errNoDue
+			}
+			taskID = id
+			_, err = e.confirm(ctx, r, confirmInput{TaskID: id, Auto: true})
 			return err
 		})
 		switch {
 		case err == nil:
 			n++
+		case errors.Is(err, errNoDue):
+			timed, terr := e.sweepTimeouts(ctx)
+			if terr != nil {
+				return n, terr
+			}
+			return n + timed, nil
 		case errors.Is(err, errAutoDeferred):
+			if taskID != "" {
+				skip = append(skip, taskID)
+			}
 			if _, loaded := e.deferred.LoadOrStore(taskID, true); !loaded {
 				logx.Infof("auto-settle deferred %s: left in review (winner_take_all will not guess a winner)", taskID)
 			}
 		default:
 			logx.Errorf("auto-settle %s: %v", taskID, err)
+			if taskID != "" {
+				skip = append(skip, taskID)
+			}
+		}
+		if len(skip) > 10000 {
+			break
 		}
 	}
 	timed, err := e.sweepTimeouts(ctx)

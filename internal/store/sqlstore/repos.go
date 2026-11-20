@@ -1,4 +1,4 @@
-package sqlite
+package sqlstore
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"taskgame/internal/id"
 	"taskgame/internal/model"
 	"taskgame/internal/store"
 )
@@ -15,13 +16,11 @@ import (
 type userRepo struct {
 	q       querier
 	initial int64
+	d       Dialect
 }
 
 func (r *userRepo) Ensure(ctx context.Context, id string, now time.Time) (model.User, error) {
-	_, err := r.q.ExecContext(ctx, `
-		INSERT INTO users (id, balance, integrity, ability, created_at)
-		VALUES (?, ?, 0, 0, ?)
-		ON CONFLICT(id) DO NOTHING`, id, r.initial, model.FormatTime(now))
+	_, err := r.q.ExecContext(ctx, r.d.UserInsertIgnore(), id, r.initial, model.FormatTime(now))
 	if err != nil {
 		return model.User{}, err
 	}
@@ -54,7 +53,7 @@ func (r *userRepo) InsertRegistered(ctx context.Context, id, email, passwordHash
 		VALUES (?, ?, 0, 0, ?, ?, ?)`,
 		id, r.initial, model.FormatTime(now), email, passwordHash)
 	if err != nil {
-		if isEmailConflict(err) {
+		if r.d.IsEmailConflict(err) {
 			return model.User{}, store.ErrConflict
 		}
 		return model.User{}, err
@@ -136,15 +135,6 @@ func (r *userRepo) GetAvatar(ctx context.Context, id string) (model.UserAvatar, 
 	return model.UserAvatar{UserID: id, Data: data, UpdatedAt: updated}, nil
 }
 
-func isEmailConflict(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "UNIQUE constraint failed") &&
-		(strings.Contains(msg, "users.email") || strings.Contains(msg, "idx_users_email"))
-}
-
 func (r *userRepo) AddBalance(ctx context.Context, id string, delta int64) error {
 	res, err := r.q.ExecContext(ctx, `
 		UPDATE users SET balance = balance + ? WHERE id = ? AND balance + ? >= 0`, delta, id, delta)
@@ -214,7 +204,10 @@ func (r *userRepo) ListScoreEvents(ctx context.Context, userID string, limit int
 	return out, rows.Err()
 }
 
-type taskRepo struct{ q querier }
+type taskRepo struct {
+	q querier
+	d Dialect
+}
 
 const taskCols = `id, kind, title, description, keywords, attributes, status, publisher_id, payment_mode, payment_amount, payment_conditions, milestones, acceptance_deadline, acceptance_quality, acceptance_constraints, review_hours, assignee_policy, competitive, collaborative, executor_ids, winning_submission_id, review_deadline, escrow_id, dispute_reason, cancel_reason, cancel_code, cancelled_at, chat_id, funded_at, start_deadline, winner_select_deadline, dispute_role_id, resolve_json, max_revisions, created_at, updated_at`
 
@@ -253,7 +246,33 @@ func (r *taskRepo) Update(ctx context.Context, t model.Task) error {
 }
 
 func (r *taskRepo) Get(ctx context.Context, id string) (model.Task, error) {
-	row := r.q.QueryRowContext(ctx, `SELECT `+taskCols+` FROM tasks WHERE id = ?`, id)
+	return r.get(ctx, id, LockNone)
+}
+
+// Lock reads the task and holds the row until the transaction ends.
+func (r *taskRepo) Lock(ctx context.Context, id string) (model.Task, error) {
+	return r.get(ctx, id, LockUpdate)
+}
+
+// TryLock is Lock, except MySQL uses FOR UPDATE SKIP LOCKED.
+// ErrBusy means another transaction already holds the row.
+func (r *taskRepo) TryLock(ctx context.Context, id string) (model.Task, error) {
+	t, err := r.get(ctx, id, LockSkipLocked)
+	if err == nil || !r.d.SupportsSkipLocked() || !errors.Is(err, store.ErrNotFound) {
+		return t, err
+	}
+	_, plain := r.get(ctx, id, LockNone)
+	if errors.Is(plain, store.ErrNotFound) {
+		return model.Task{}, store.ErrNotFound
+	}
+	if plain != nil {
+		return model.Task{}, plain
+	}
+	return model.Task{}, store.ErrBusy
+}
+
+func (r *taskRepo) get(ctx context.Context, id string, mode LockMode) (model.Task, error) {
+	row := r.q.QueryRowContext(ctx, `SELECT `+taskCols+` FROM tasks WHERE id = ?`+r.d.LockSuffix(mode), id)
 	t, err := scanTask(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Task{}, store.ErrNotFound
@@ -261,10 +280,64 @@ func (r *taskRepo) Get(ctx context.Context, id string) (model.Task, error) {
 	return t, err
 }
 
+// ClaimDueReview locks one in_review task whose review_deadline has passed.
+// exclude skips ids this pass already considered. An empty id means nothing is left.
+// Call it inside a transaction; MySQL keeps FOR UPDATE SKIP LOCKED until commit.
+func (r *taskRepo) ClaimDueReview(ctx context.Context, now time.Time, exclude []string) (string, error) {
+	q := `SELECT id FROM tasks WHERE status = ? AND review_deadline IS NOT NULL AND review_deadline != '' AND review_deadline <= ?`
+	args := []any{model.StatusInReview, model.FormatTime(now)}
+	if len(exclude) > 0 {
+		q += ` AND id NOT IN (` + placeholders(len(exclude)) + `)`
+		for _, id := range exclude {
+			args = append(args, id)
+		}
+	}
+	mode := LockUpdate
+	if r.d.SupportsSkipLocked() {
+		mode = LockSkipLocked
+	}
+	q += ` ORDER BY review_deadline ASC, id ASC LIMIT 1` + r.d.LockSuffix(mode)
+	var id string
+	err := r.q.QueryRowContext(ctx, q, args...).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
+}
+
+// ListSweep pages open, active, and in_review tasks in (created_at, id) order.
+// Empty afterCreated starts at the beginning. The cursor walks every row, including
+// past the old fixed page of 50.
+func (r *taskRepo) ListSweep(ctx context.Context, afterCreated, afterID string, limit int) ([]model.Task, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	q := `SELECT ` + taskCols + ` FROM tasks WHERE status IN (?, ?, ?) AND (? = '' OR created_at > ? OR (created_at = ? AND id > ?)) ORDER BY created_at ASC, id ASC LIMIT ?`
+	rows, err := r.q.QueryContext(ctx, q,
+		model.StatusOpen, model.StatusActive, model.StatusInReview,
+		afterCreated, afterCreated, afterCreated, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.Task
+	for rows.Next() {
+		t, err := scanTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	if out == nil {
+		out = []model.Task{}
+	}
+	return out, rows.Err()
+}
+
 // taskWhere builds the shared WHERE clause and arguments for List and Count.
-// It uses SQLite JSON1 to filter keywords/attributes, and the Haversine
-// formula to filter by distance from a coordinate when one is supplied.
-func taskWhere(f model.TaskFilter) (string, []any) {
+// Keyword and attribute predicates are dialect-specific. The Haversine
+// formula filters by distance from a coordinate when one is supplied.
+func (r *taskRepo) taskWhere(f model.TaskFilter) (string, []any) {
 	q := ` WHERE 1 = 1`
 	var args []any
 	if f.Status != "" {
@@ -286,23 +359,23 @@ func taskWhere(f model.TaskFilter) (string, []any) {
 		// needle literally, so %, _ and \ in user input need no escaping.
 		q += ` AND (instr(lower(tasks.title), lower(?)) > 0` +
 			` OR instr(lower(tasks.description), lower(?)) > 0` +
-			` OR EXISTS (SELECT 1 FROM json_each(tasks.keywords) WHERE instr(lower(value), lower(?)) > 0))`
+			` OR ` + r.d.KeywordSearchSQL() + `)`
 		args = append(args, f.Q, f.Q, f.Q)
 	}
 	if f.Keyword != "" {
-		q += ` AND EXISTS (SELECT 1 FROM json_each(tasks.keywords) WHERE value = ?)`
+		q += r.d.KeywordEqualsSQL()
 		args = append(args, f.Keyword)
 	}
 	if f.Urgency != "" {
-		q += ` AND json_extract(tasks.attributes, '$.urgency') = ?`
+		q += ` AND ` + r.d.AttrExpr("$.urgency") + ` = ?`
 		args = append(args, f.Urgency)
 	}
 	if f.Recurrence != "" {
-		q += ` AND json_extract(tasks.attributes, '$.recurrence') = ?`
+		q += ` AND ` + r.d.AttrExpr("$.recurrence") + ` = ?`
 		args = append(args, f.Recurrence)
 	}
 	if f.ExecutorRequirement != "" {
-		q += ` AND EXISTS (SELECT 1 FROM json_each(tasks.attributes, '$.executor_requirements') WHERE value = ?)`
+		q += r.d.ExecutorReqSQL()
 		args = append(args, f.ExecutorRequirement)
 	}
 	if f.MinAmount > 0 {
@@ -314,24 +387,15 @@ func taskWhere(f model.TaskFilter) (string, []any) {
 		args = append(args, f.MaxAmount)
 	}
 	if f.Latitude != nil && f.Longitude != nil {
-		q += ` AND json_extract(tasks.attributes, '$.latitude') IS NOT NULL`
-		q += ` AND json_extract(tasks.attributes, '$.longitude') IS NOT NULL`
-		q += ` AND (` + haversineExpr + `) <= ?`
+		q += ` AND ` + r.d.AttrExpr("$.latitude") + ` IS NOT NULL`
+		q += ` AND ` + r.d.AttrExpr("$.longitude") + ` IS NOT NULL`
+		q += ` AND (` + r.d.HaversineSQL() + `) <= ?`
 		args = append(args, *f.Latitude, *f.Latitude, *f.Longitude, f.RadiusKm)
 	}
 	return q, args
 }
 
-// haversineExpr is the great-circle distance (km) between a task's stored
-// coordinates and a query point. The three placeholders are: center latitude,
-// center latitude (again, for the cosine term), and center longitude.
-const haversineExpr = `6371.0088 * 2 * asin(min(1.0, sqrt(
-	pow(sin(radians(json_extract(tasks.attributes, '$.latitude') - ?) / 2), 2) +
-	cos(radians(?)) * cos(radians(json_extract(tasks.attributes, '$.latitude'))) *
-	pow(sin(radians(json_extract(tasks.attributes, '$.longitude') - ?) / 2), 2)
-)))`
-
-func taskOrderBy(f model.TaskFilter) (string, []any) {
+func (r *taskRepo) taskOrderBy(f model.TaskFilter) (string, []any) {
 	switch f.Sort {
 	case "amount_asc":
 		return ` ORDER BY payment_amount ASC, created_at DESC, id DESC`, nil
@@ -341,15 +405,15 @@ func taskOrderBy(f model.TaskFilter) (string, []any) {
 		return ` ORDER BY acceptance_deadline ASC, created_at DESC, id DESC`, nil
 	case "distance_asc":
 		if f.Latitude != nil && f.Longitude != nil {
-			return ` ORDER BY (` + haversineExpr + `) ASC, created_at DESC`, []any{*f.Latitude, *f.Latitude, *f.Longitude}
+			return ` ORDER BY (` + r.d.HaversineSQL() + `) ASC, created_at DESC`, []any{*f.Latitude, *f.Latitude, *f.Longitude}
 		}
 	}
 	return ` ORDER BY created_at DESC, id DESC`, nil
 }
 
 func (r *taskRepo) List(ctx context.Context, f model.TaskFilter) ([]model.Task, error) {
-	where, args := taskWhere(f)
-	order, orderArgs := taskOrderBy(f)
+	where, args := r.taskWhere(f)
+	order, orderArgs := r.taskOrderBy(f)
 	q := `SELECT ` + taskCols + ` FROM tasks` + where + order + ` LIMIT ? OFFSET ?`
 	args = append(args, orderArgs...)
 	args = append(args, f.Limit, f.Offset)
@@ -373,30 +437,10 @@ func (r *taskRepo) List(ctx context.Context, f model.TaskFilter) ([]model.Task, 
 }
 
 func (r *taskRepo) Count(ctx context.Context, f model.TaskFilter) (int64, error) {
-	where, args := taskWhere(f)
+	where, args := r.taskWhere(f)
 	var n int64
 	err := r.q.QueryRowContext(ctx, `SELECT COUNT(*) FROM tasks`+where, args...).Scan(&n)
 	return n, err
-}
-
-func (r *taskRepo) ListDueReview(ctx context.Context, now time.Time, limit int) ([]string, error) {
-	rows, err := r.q.QueryContext(ctx, `
-		SELECT id FROM tasks
-		WHERE status = ? AND review_deadline IS NOT NULL AND review_deadline <= ?
-		ORDER BY review_deadline ASC LIMIT ?`, model.StatusInReview, model.FormatTime(now), limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
 }
 
 type scanner interface {
@@ -624,13 +668,6 @@ func nilMilestones(s []model.Milestone) []model.Milestone {
 	return s
 }
 
-func placeholders(n int) string {
-	if n <= 0 {
-		return ""
-	}
-	return strings.TrimRight(strings.Repeat("?,", n), ",")
-}
-
 type submissionRepo struct{ q querier }
 
 func (r *submissionRepo) Insert(ctx context.Context, s model.Submission) error {
@@ -695,17 +732,22 @@ func (r *submissionRepo) ListByTask(ctx context.Context, taskID string) ([]model
 	return out, rows.Err()
 }
 
-type escrowRepo struct{ q querier }
+type escrowRepo struct {
+	q querier
+	d Dialect
+}
 
 func (r *escrowRepo) Insert(ctx context.Context, a model.EscrowAccount) error {
 	_, err := r.q.ExecContext(ctx, `
-		INSERT INTO escrow_accounts (id, task_id, held, frozen, currency) VALUES (?, ?, ?, ?, ?)`,
-		a.ID, a.TaskID, a.Held, a.Frozen, a.Currency)
+		INSERT INTO escrow_accounts (id, task_id, held, frozen, currency, version) VALUES (?, ?, ?, ?, ?, ?)`,
+		a.ID, a.TaskID, a.Held, a.Frozen, a.Currency, a.Version)
 	return err
 }
 
 func (r *escrowRepo) Update(ctx context.Context, a model.EscrowAccount) error {
-	res, err := r.q.ExecContext(ctx, `UPDATE escrow_accounts SET held = ?, frozen = ? WHERE id = ?`, a.Held, a.Frozen, a.ID)
+	res, err := r.q.ExecContext(ctx, `
+		UPDATE escrow_accounts SET held = ?, frozen = ?, version = version + 1
+		WHERE id = ? AND version = ?`, a.Held, a.Frozen, a.ID, a.Version)
 	if err != nil {
 		return err
 	}
@@ -714,7 +756,15 @@ func (r *escrowRepo) Update(ctx context.Context, a model.EscrowAccount) error {
 		return err
 	}
 	if n == 0 {
-		return store.ErrNotFound
+		var one int
+		err := r.q.QueryRowContext(ctx, `SELECT 1 FROM escrow_accounts WHERE id = ?`, a.ID).Scan(&one)
+		if errors.Is(err, sql.ErrNoRows) {
+			return store.ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		return store.ErrConflict
 	}
 	return nil
 }
@@ -728,10 +778,19 @@ func (r *escrowRepo) InsertEntry(ctx context.Context, e model.EscrowEntry) error
 }
 
 func (r *escrowRepo) GetByTask(ctx context.Context, taskID string) (model.EscrowAccount, error) {
+	return r.getByTask(ctx, taskID, LockNone)
+}
+
+// LockByTask reads the escrow row and holds it until the transaction ends.
+func (r *escrowRepo) LockByTask(ctx context.Context, taskID string) (model.EscrowAccount, error) {
+	return r.getByTask(ctx, taskID, LockUpdate)
+}
+
+func (r *escrowRepo) getByTask(ctx context.Context, taskID string, mode LockMode) (model.EscrowAccount, error) {
 	var a model.EscrowAccount
 	err := r.q.QueryRowContext(ctx, `
-		SELECT id, task_id, held, frozen, currency FROM escrow_accounts WHERE task_id = ?`, taskID).
-		Scan(&a.ID, &a.TaskID, &a.Held, &a.Frozen, &a.Currency)
+		SELECT id, task_id, held, frozen, currency, version FROM escrow_accounts WHERE task_id = ?`+r.d.LockSuffix(mode), taskID).
+		Scan(&a.ID, &a.TaskID, &a.Held, &a.Frozen, &a.Currency, &a.Version)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.EscrowAccount{}, store.ErrNotFound
 	}
@@ -851,14 +910,100 @@ func (r *deliveryRepo) ListPending(ctx context.Context, maxAttempts, limit int) 
 	return out, rows.Err()
 }
 
-func (r *deliveryRepo) Update(ctx context.Context, id string, attempts int, status, lastError string) error {
+// ClaimPending moves up to limit due rows to delivering and increments attempts.
+// Each claim is its own autocommit statement so the HTTP POST is not inside the lock.
+// A delivering row whose lease has expired can be claimed again.
+func (r *deliveryRepo) ClaimPending(ctx context.Context, maxAttempts, limit int, now, until time.Time) ([]model.Delivery, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	nowText := model.FormatTime(now)
+	untilText := model.FormatTime(until)
+	var out []model.Delivery
+	for len(out) < limit {
+		token := id.New("clm_")
+		res, err := r.q.ExecContext(ctx, `
+			UPDATE webhook_deliveries
+			SET status = ?, claim_token = ?, claimed_until = ?, attempts = attempts + 1
+			WHERE id = (
+				SELECT id FROM (
+					SELECT id FROM webhook_deliveries
+					WHERE attempts < ?
+					  AND (
+					    status = ?
+					    OR (status = ? AND claimed_until IS NOT NULL AND claimed_until <= ?)
+					  )
+					ORDER BY created_at ASC, id ASC
+					LIMIT 1
+				) AS picked
+			)
+			AND attempts < ?
+			AND (
+				status = ?
+				OR (status = ? AND claimed_until IS NOT NULL AND claimed_until <= ?)
+			)`,
+			model.DeliveryDelivering, token, untilText,
+			maxAttempts, model.DeliveryPending, model.DeliveryDelivering, nowText,
+			maxAttempts, model.DeliveryPending, model.DeliveryDelivering, nowText)
+		if err != nil {
+			return nil, err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return nil, err
+		}
+		if n == 0 {
+			break
+		}
+		row, err := r.byToken(ctx, token)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, nil
+}
+
+func (r *deliveryRepo) byToken(ctx context.Context, token string) (model.Delivery, error) {
+	var d model.Delivery
+	var created string
+	err := r.q.QueryRowContext(ctx, `
+		SELECT d.id, d.webhook_id, d.event_id, d.event_type, d.body, d.status, d.attempts, d.last_error, d.created_at, d.claim_token, w.url, w.secret
+		FROM webhook_deliveries d
+		JOIN webhooks w ON w.id = d.webhook_id
+		WHERE d.claim_token = ?`, token).
+		Scan(&d.ID, &d.WebhookID, &d.EventID, &d.EventType, &d.Body, &d.Status, &d.Attempts, &d.LastError, &created, &d.ClaimToken, &d.URL, &d.Secret)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.Delivery{}, store.ErrNotFound
+	}
+	if err != nil {
+		return model.Delivery{}, err
+	}
+	d.CreatedAt, err = model.ParseTime(created)
+	if err != nil {
+		return model.Delivery{}, err
+	}
+	return d, nil
+}
+
+// Finish records the post-attempt status only while claimToken still owns the row.
+// A late worker whose lease was taken does not overwrite the new owner.
+func (r *deliveryRepo) Finish(ctx context.Context, id, claimToken, status, lastError string) error {
+	if len(lastError) > 500 {
+		lastError = lastError[:500]
+	}
 	_, err := r.q.ExecContext(ctx, `
-		UPDATE webhook_deliveries SET attempts = ?, status = ?, last_error = ? WHERE id = ?`,
-		attempts, status, lastError, id)
+		UPDATE webhook_deliveries
+		SET status = ?, last_error = ?, claim_token = '', claimed_until = NULL
+		WHERE id = ? AND claim_token = ?`,
+		status, lastError, id, claimToken)
 	return err
 }
 
-type chatRepo struct{ q querier }
+type chatRepo struct {
+	q querier
+	d Dialect
+}
 
 const chatCols = `id, task_id, member_ids, created_at, type, pair_low, pair_high`
 
@@ -875,7 +1020,7 @@ func (r *chatRepo) InsertChat(ctx context.Context, c model.Chat) error {
 		INSERT INTO chats (id, task_id, member_ids, created_at, type, pair_low, pair_high)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		c.ID, nullString(c.TaskID), members, model.FormatTime(c.CreatedAt), kind, c.PairLow, c.PairHigh)
-	if isUniqueConflict(err) {
+	if r.d.IsUnique(err) {
 		return store.ErrConflict
 	}
 	return err
@@ -898,7 +1043,7 @@ func (r *chatRepo) UpdateChat(ctx context.Context, c model.Chat) error {
 		UPDATE chats SET task_id = ?, member_ids = ?, type = ?, pair_low = ?, pair_high = ? WHERE id = ?`,
 		nullString(c.TaskID), members, kind, c.PairLow, c.PairHigh, c.ID)
 	if err != nil {
-		if isUniqueConflict(err) {
+		if r.d.IsUnique(err) {
 			return store.ErrConflict
 		}
 		return err
@@ -993,7 +1138,7 @@ func (r *chatRepo) ListDirectUnreads(ctx context.Context, userID string) ([]mode
 		         SELECT COUNT(*) FROM messages m
 		         WHERE m.chat_id = c.id
 		           AND m.sender_id != ?
-		           AND m.rowid > COALESCE(
+		           AND m.`+r.d.MessageSeq()+` > COALESCE(
 		             (SELECT cr.last_read_rowid FROM chat_reads cr
 		              WHERE cr.user_id = ? AND cr.chat_id = c.id),
 		             0
@@ -1023,7 +1168,7 @@ func (r *chatRepo) ListDirectUnreads(ctx context.Context, userID string) ([]mode
 func (r *chatRepo) MessageRowID(ctx context.Context, chatID, messageID string) (int64, error) {
 	var rowid int64
 	err := r.q.QueryRowContext(ctx, `
-		SELECT rowid FROM messages WHERE chat_id = ? AND id = ?`, chatID, messageID).Scan(&rowid)
+		SELECT `+r.d.MessageSeq()+` FROM messages WHERE chat_id = ? AND id = ?`, chatID, messageID).Scan(&rowid)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, store.ErrNotFound
 	}
@@ -1034,7 +1179,7 @@ func (r *chatRepo) LatestMessageRow(ctx context.Context, chatID string) (int64, 
 	var rowid int64
 	var messageID string
 	err := r.q.QueryRowContext(ctx, `
-		SELECT rowid, id FROM messages WHERE chat_id = ? ORDER BY rowid DESC LIMIT 1`, chatID).Scan(&rowid, &messageID)
+		SELECT `+r.d.MessageSeq()+`, id FROM messages WHERE chat_id = ? ORDER BY `+r.d.MessageSeq()+` DESC LIMIT 1`, chatID).Scan(&rowid, &messageID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, "", false, nil
 	}
@@ -1050,7 +1195,7 @@ func (r *chatRepo) CountUnread(ctx context.Context, userID, chatID string) (int6
 		SELECT COUNT(*) FROM messages m
 		WHERE m.chat_id = ?
 		  AND m.sender_id != ?
-		  AND m.rowid > COALESCE(
+		  AND m.`+r.d.MessageSeq()+` > COALESCE(
 		    (SELECT cr.last_read_rowid FROM chat_reads cr
 		     WHERE cr.user_id = ? AND cr.chat_id = ?),
 		    0
@@ -1062,16 +1207,7 @@ func (r *chatRepo) AdvanceRead(ctx context.Context, userID, chatID string, rowid
 	if rowid <= 0 {
 		return nil
 	}
-	_, err := r.q.ExecContext(ctx, `
-		INSERT INTO chat_reads (user_id, chat_id, last_read_rowid, updated_at)
-		VALUES (?, ?, ?, ?)
-		ON CONFLICT(user_id, chat_id) DO UPDATE SET
-			last_read_rowid = MAX(chat_reads.last_read_rowid, excluded.last_read_rowid),
-			updated_at = CASE
-				WHEN excluded.last_read_rowid > chat_reads.last_read_rowid THEN excluded.updated_at
-				ELSE chat_reads.updated_at
-			END`,
-		userID, chatID, rowid, model.FormatTime(now))
+	_, err := r.q.ExecContext(ctx, r.d.ChatReadUpsert(), userID, chatID, rowid, model.FormatTime(now))
 	return err
 }
 
@@ -1081,7 +1217,7 @@ func (r *chatRepo) ListMessages(ctx context.Context, chatID string, limit, offse
 	}
 	rows, err := r.q.QueryContext(ctx, `
 		SELECT id, chat_id, sender_id, type, text, attachment_ref, created_at
-		FROM messages WHERE chat_id = ? ORDER BY created_at ASC, rowid ASC LIMIT ? OFFSET ?`,
+		FROM messages WHERE chat_id = ? ORDER BY created_at ASC, `+r.d.MessageSeq()+` ASC LIMIT ? OFFSET ?`,
 		chatID, limit, offset)
 	if err != nil {
 		return nil, err
@@ -1106,13 +1242,13 @@ func (r *chatRepo) ListMessages(ctx context.Context, chatID string, limit, offse
 	return out, rows.Err()
 }
 
-type inviteRepo struct{ q querier }
+type inviteRepo struct {
+	q querier
+	d Dialect
+}
 
 func (r *inviteRepo) Upsert(ctx context.Context, inv model.Invite) error {
-	_, err := r.q.ExecContext(ctx, `
-		INSERT INTO invites (id, task_id, user_id, status, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?)
-		ON CONFLICT(task_id, user_id) DO UPDATE SET status = excluded.status, updated_at = excluded.updated_at`,
+	_, err := r.q.ExecContext(ctx, r.d.InviteUpsert(),
 		inv.ID, inv.TaskID, inv.UserID, inv.Status, model.FormatTime(inv.CreatedAt), model.FormatTime(inv.UpdatedAt))
 	return err
 }
@@ -1201,15 +1337,31 @@ func scanInvite(s scanner) (model.Invite, error) {
 	return inv, nil
 }
 
-type idemRepo struct{ q querier }
+type idemRepo struct {
+	q querier
+	d Dialect
+}
 
 func (r *idemRepo) Get(ctx context.Context, userID, method, path, key string) (*model.IdemRecord, error) {
+	return r.get(ctx, userID, method, path, key, false)
+}
+
+// GetLocked is Get plus a row lock on drivers that support it.
+// Inside a transaction this serializes two writers of the same idempotency key.
+func (r *idemRepo) GetLocked(ctx context.Context, userID, method, path, key string) (*model.IdemRecord, error) {
+	return r.get(ctx, userID, method, path, key, true)
+}
+
+func (r *idemRepo) get(ctx context.Context, userID, method, path, key string, lock bool) (*model.IdemRecord, error) {
+	q := `
+		SELECT user_id, method, path, idem_key, request_hash, response_body, created_at
+		FROM idempotency_keys WHERE user_id = ? AND method = ? AND path = ? AND idem_key = ?`
+	if lock {
+		q += r.d.LockSuffix(LockUpdate)
+	}
 	var rec model.IdemRecord
 	var created string
-	err := r.q.QueryRowContext(ctx, `
-		SELECT user_id, method, path, idem_key, request_hash, response_body, created_at
-		FROM idempotency_keys WHERE user_id = ? AND method = ? AND path = ? AND idem_key = ?`,
-		userID, method, path, key).Scan(&rec.UserID, &rec.Method, &rec.Path, &rec.Key, &rec.RequestHash, &rec.ResponseBody, &created)
+	err := r.q.QueryRowContext(ctx, q, userID, method, path, key).Scan(&rec.UserID, &rec.Method, &rec.Path, &rec.Key, &rec.RequestHash, &rec.ResponseBody, &created)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -1228,7 +1380,7 @@ func (r *idemRepo) Put(ctx context.Context, rec model.IdemRecord) error {
 		INSERT INTO idempotency_keys (user_id, method, path, idem_key, request_hash, response_body, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		rec.UserID, rec.Method, rec.Path, rec.Key, rec.RequestHash, rec.ResponseBody, model.FormatTime(rec.CreatedAt))
-	if err != nil && strings.Contains(strings.ToLower(err.Error()), "unique") {
+	if r.d.IsUnique(err) {
 		return store.ErrConflict
 	}
 	return err
