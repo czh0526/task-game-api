@@ -79,6 +79,8 @@ Store:
   DSN: "root:123456@tcp(127.0.0.1:3306)/taskgame?charset=utf8mb4"
   Shards: 2
   ShardDriver: mysql
+  # db-shard-0 / db-shard-1 只是示意主机名，需能被 DNS 或 /etc/hosts 解析；
+  # 单机演示请直接写 127.0.0.1:3306，见 etc/taskgame.mysql-shards.yaml
   ShardDSNs:
     - "root:123456@tcp(db-shard-0:3306)/taskgame_shard_0?charset=utf8mb4"
     - "root:123456@tcp(db-shard-1:3306)/taskgame_shard_1?charset=utf8mb4"
