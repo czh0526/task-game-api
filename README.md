@@ -88,6 +88,15 @@ Store:
 
 现成示例是 `etc/taskgame.mysql-shards.yaml`（`docker compose up -d` 会用 `etc/mysql-init.d` 建好两个片库；已有数据卷需要 `docker compose down -v` 重建才会执行初始化）。`ShardDSN` 模板在 MySQL 下也可用（同一主机的不同库），但只有列表能表达跨主机拓扑。片库 DSN 会补上 `utf8mb4` / `clientFoundRows`，`messages` 表由服务启动时自建，**库本身需预先存在**。
 
+**C. 一个库一个 MySQL 实例**：`Shards: N` 时共需 **N + 1 个实例**（1 个主库实例 + N 个片库实例），每个实例只持有一个 schema。同一台机器上用**不同端口**就能起多个独立的 mysqld，连接写法与跨机器完全一致：
+
+```bash
+docker compose -f docker-compose.3instances.yml -p taskgame-3inst up -d   # 3307 主 / 3308 片0 / 3309 片1
+CGO_ENABLED=0 go run . -f etc/taskgame.mysql-3instances.yaml
+```
+
+对应配置 `etc/taskgame.mysql-3instances.yaml`：主库 DSN 指 `3307/taskgame`，`ShardDSNs` 依次指 `3308/taskgame_shard_0`、`3309/taskgame_shard_1`。**每个后端进程都连全部 N+1 个实例**（`openStore` 开 1 个主库连接池 + N 个片库连接池），不是 A 连片 0、B 连片 1 这种按进程分工——因为任意请求都可能路由到任意片。所有进程必须使用**同一份、同顺序**的 `ShardDSNs`。实测：三个容器 hostname 各不相同；主库实例只有 `chat_shards` / `message_outbox`（`messages` 表空），两个片实例各只有 `messages` 表且分别持有不同会话的消息，片内 `chat_seq` 独立自增。
+
 - **路由**：`internal/store/shard/router.go`。FNV-1a 纯函数哈希，直聊用有序对 `pair_low#pair_high`、其它会话用 `chat_id`，所有进程与重启后都算出同一个片。建会话时把 `chat_id → shard` 写进主库 `chat_shards` 目录表（与 `chats` 行同一事务）。
 - **写入**：`PostMessage` 在事务内只往主库 `message_outbox` 写一行；事务**提交后**由 `sqlstore.DB.flush` 投影到片库，按 `message_id` 幂等。回滚不会在片里留下消息，且发消息返回前投影已完成，`ListMessages` 立刻可读。崩溃后未投影的行由启动时 `Recover` 补投。
 - **序号**：每个片库有自己的 `chat_seq` 自增列，只保证**会话内有序**；`chat_reads.last_read_rowid` 存的就是它。全局全序从来不需要，跨片序号重复不影响未读判定。
@@ -151,6 +160,15 @@ make test-mysql
 docker compose up -d          # 新卷会自动建 taskgame_shard_0 / taskgame_shard_1
 CGO_ENABLED=0 go run . -f etc/taskgame.mysql-shards.yaml
 ```
+
+**一个库一个实例**（3 个独立 MySQL 容器，各自只持一个库）：
+
+```bash
+docker compose -f docker-compose.3instances.yml -p taskgame-3inst up -d
+CGO_ENABLED=0 go run . -f etc/taskgame.mysql-3instances.yaml
+```
+
+独立项目名 `taskgame-3inst` 不会动到默认的 3306 容器。停掉用 `docker compose -f docker-compose.3instances.yml -p taskgame-3inst down`（加 `-v` 会连数据卷一起删）。
 
 **多个 API 实例**：必须用 `Driver: mysql`（SQLite 是单连接文件，两个进程不能共用一个文件）。两个进程要共用同一份主库 DSN，且 `ShardDSNs` 列表**顺序与内容完全一致**——路由按片序号取模，顺序错了消息会落到错误的库。端口只能靠不同配置文件区分（`conf.MustLoad` 不读环境变量）：
 
@@ -254,6 +272,15 @@ With `Store.Shards > 1`, message bodies leave the primary database and are route
 - Routing (FNV-1a, ordered pair for direct chats), `chat_shards` directory, transactional `message_outbox`, post-commit projection and startup `Recover` are unchanged. Only the `messages` table is sharded; projection is still performed locally by the writing process, with no cross-machine event bus (the SSE `notify.Broker` is process-local too) or 2PC.
 
 MySQL-backed shard tests (`internal/store/shard/mysql_test.go`, `internal/integration/sharded_mysql_messages_test.go`) run when `TASKGAME_MYSQL_DSN` is set and skip otherwise; they create and drop their own temporary databases.
+
+**One MySQL instance per database**: with `Shards: N` you need **N + 1 instances** (one primary plus one per shard), each holding a single schema. Multiple independent mysqld processes can run on one machine on **different ports**; the DSN syntax is identical to a cross-host setup:
+
+```bash
+docker compose -f docker-compose.3instances.yml -p taskgame-3inst up -d   # 3307 primary / 3308 shard0 / 3309 shard1
+CGO_ENABLED=0 go run . -f etc/taskgame.mysql-3instances.yaml
+```
+
+In `etc/taskgame.mysql-3instances.yaml` the primary DSN points at `3307/taskgame` and `ShardDSNs` at `3308/taskgame_shard_0` and `3309/taskgame_shard_1`. **Every API process connects to all N + 1 instances** (`openStore` opens one primary pool plus N shard pools); processes are not split across shards, since any request may route to any shard. All processes must use the same `ShardDSNs` list in the same order. Verified: the three containers have distinct hostnames; the primary instance holds `chat_shards` / `message_outbox` and an empty `messages` table, while each shard instance holds only `messages` for its own chats with an independent `chat_seq`.
 
 **Multiple API instances**: use `Driver: mysql` (SQLite is a single-connection file; never point two processes at one file). Both processes must share the same primary DSN and an identical `ShardDSNs` list in the same order, because routing picks a shard by index. Ports are set per config file (`conf.MustLoad` does not read environment variables):
 
