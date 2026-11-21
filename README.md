@@ -104,6 +104,30 @@ CGO_ENABLED=0 go run . -f etc/taskgame.mysql-3instances.yaml
 - **未改动**：`store.Store` / `Repos` 接口、引擎、handler、OpenAPI、SDK、前端、SSE 与展示层全部不变，API 语义与响应字段保持一致。
 - **边界**：这是**原型**，只分片了消息本体。`chats`、`chat_reads`、幂等键、`webhooks`、任务账本仍在主库；片库现在可以走网络 MySQL，但**投影仍由写入方进程在事务提交后本地执行**（崩溃靠启动时 `Recover` 补投），没有跨机事件总线（SSE 的 `notify.Broker` 同样只在进程内扇出），也没有 2PC；`emit()` 仍在事务内查主库订阅、`idempotency_keys` 仍按 `user_id` 建主键。生产级多机分片还需把 outbox 投递改成共享租约 / 事件总线，并给幂等键加上片维度。
 
+### 调整分片数量（扩容 / 缩容 / 换实例）
+
+**先记住一条**：`chat_shards` 目录表才是权威路由。`Router` 的 `hash % N` **只在建会话时算一次**并写进目录表，之后所有读写都查目录表。因此**加片不需要搬老数据，减片必须搬**。
+
+| 变更 | 是否搬数据 | 操作 |
+|---|---|---|
+| 加片 N → N+1 | **不需要** | 起新实例/建库 → `ShardDSNs` **末尾追加**一个 DSN → `Shards` +1 → 所有进程统一切换 |
+| 换实例（N 不变） | 只搬该片 | 把该片 `messages` 导到新实例 → 只改列表中**对应下标**的 DSN → 目录表不动 |
+| 减片 N → N-1 | 需要，**当前无工具** | 见下 |
+| 关闭分片（`Shards<=1`） | 需要，**当前无工具** | 片库消息不会自动回灌主库 `messages` |
+
+**扩容步骤（2 → 3）**：
+
+1. 新起一个 MySQL 实例（例如 `3310`），`CREATE DATABASE taskgame_shard_2`。服务启动时只自建 `messages` 表，**不建库**。
+2. 改配置：`Shards: 3`，`ShardDSNs` 在**末尾**追加新 DSN。前面两项的顺序与内容**绝对不能变**——列表下标就是片序号，重排等于把老数据指到别的库。
+3. **所有后端进程一起切到这份新配置**，不要滚动混部：老进程的 `Set` 只有 2 个连接池，一旦它处理目录表里 `shard=2` 的会话，`shard.Set.check` 会报 `index 2 out of range`。建议短暂停服切换。
+4. 重启后 `Recover` 按 outbox 行内记录的**旧 `shard` 值**补投未投影消息，不受新 N 影响。
+
+`TestShardScaleOutPreservesExistingChats` 实证了这条：2 片下建的 8 个会话切成 3 片后，目录行不变、消息全部可读；新会话开始落到片 2，且片 2 里没有老会话的消息。注意**老会话永远留在原片**，扩容只把新增会话分散到新片，不会均衡已有数据；要均衡得主动迁移老会话。
+
+**为什么减片麻烦**：目录表里指向被删片的行不会自动消失，`message_outbox.shard` 也存着旧片号，`Recover` 会越界；更麻烦的是 `chat_seq` 是**片内自增**，消息搬到另一片后序号重排，而 `chat_reads.last_read_rowid` 存的正是这个序号，已读位置会错乱。所以缩容需要专门的迁移程序：搬 `messages` → 按新下标 `UPDATE chat_shards` → 修 outbox → 重算/补偿已读游标，并在切换期间停写。当前原型**没有**这套工具，不建议直接减 N；测试里验证了不搬数据就缩回 2 片会直接读失败。
+
+**只换机器/端口**（风险最低）：`Shards` 不变，用 `mysqldump` 或物理备份把该片 `messages` 搬到新实例，只改 `ShardDSNs` 对应下标的 DSN，目录表、`chat_seq`、已读游标全部不动。
+
 ## 运行
 
 需要 Go 1.26（见 `go.mod`）、`python3`（`scripts/smoke.sh` 用来读 JSON）和 `curl`。不需要 C 编译器：SQLite 驱动是 `modernc.org/sqlite`。下面的命令都在仓库根目录执行。
@@ -272,6 +296,19 @@ With `Store.Shards > 1`, message bodies leave the primary database and are route
 - Routing (FNV-1a, ordered pair for direct chats), `chat_shards` directory, transactional `message_outbox`, post-commit projection and startup `Recover` are unchanged. Only the `messages` table is sharded; projection is still performed locally by the writing process, with no cross-machine event bus (the SSE `notify.Broker` is process-local too) or 2PC.
 
 MySQL-backed shard tests (`internal/store/shard/mysql_test.go`, `internal/integration/sharded_mysql_messages_test.go`) run when `TASKGAME_MYSQL_DSN` is set and skip otherwise; they create and drop their own temporary databases.
+
+**Resizing the shard set**: `chat_shards` is the authoritative route. The `hash % N` router runs **only once, when a chat is created**, and the result is stored in the directory; every later read and write looks it up. So **adding a shard needs no data migration, removing one does**.
+
+| Change | Move data? | Action |
+|---|---|---|
+| Add a shard N → N+1 | **No** | Start a new instance/create the database → **append** one DSN to `ShardDSNs` → set `Shards: N+1` → switch all processes together |
+| Replace an instance (N unchanged) | Only that shard | Move its `messages` to the new instance → change only the DSN at that **index** → leave the directory alone |
+| Remove a shard N → N-1 | Yes, **no tooling yet** | See below |
+| Disable sharding (`Shards<=1`) | Yes, **no tooling yet** | Shard rows are not copied back into the primary `messages` table |
+
+To scale 2 → 3: create the new database first (the service only creates the `messages` table, never the schema), append its DSN at the **end** of `ShardDSNs` — the list index *is* the shard number, so never reorder existing entries — and switch **all** API processes to the new config at once. A rolling upgrade is unsafe: an old process has only two shard pools and fails with `index 2 out of range` when it serves a chat whose directory row says shard 2. `Recover` replays unprojected outbox rows using the `shard` value stored in each row, unaffected by the new N. `TestShardScaleOutPreservesExistingChats` verifies that eight chats created with two shards are still readable after switching to three, their directory rows are unchanged, new chats start landing on shard 2, and shard 2 contains no pre-scale-out messages. Note that **existing chats never move**: scaling out only spreads new chats, so it does not rebalance existing load.
+
+Shrinking is harder: directory rows still point at the removed shard, `message_outbox.shard` holds the old index, and `chat_seq` is **per-shard auto-increment** — moving rows renumbers them while `chat_reads.last_read_rowid` stores exactly that sequence, corrupting read cursors. A real shrink needs a migration that moves `messages`, rewrites `chat_shards` and outbox rows, and repairs cursors while writes are paused. The prototype has no such tool; the test confirms that shrinking back without migration fails. **Changing only a host/port at a fixed N** is the safest resize: move that shard's `messages`, edit the one DSN at its index, and leave the directory, sequences and cursors untouched.
 
 **One MySQL instance per database**: with `Shards: N` you need **N + 1 instances** (one primary plus one per shard), each holding a single schema. Multiple independent mysqld processes can run on one machine on **different ports**; the DSN syntax is identical to a cross-host setup:
 
