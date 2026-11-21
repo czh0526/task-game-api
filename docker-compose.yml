@@ -9,6 +9,9 @@ services:
       MYSQL_DATABASE: taskgame
     ports:
       - "3306:3306"
+    volumes:
+      # Creates taskgame_shard_0 / taskgame_shard_1 on a fresh volume.
+      - ./etc/mysql-init.d:/docker-entrypoint-initdb.d:ro
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci

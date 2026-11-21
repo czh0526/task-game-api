@@ -98,11 +98,12 @@ func openStore(c config.Config) (store.Store, error) {
 	if c.Store.Shards <= 1 {
 		return st, nil
 	}
-	if c.Store.ShardDSN == "" {
+	scfg, err := shardConfig(c.Store)
+	if err != nil {
 		_ = st.Close()
-		return nil, fmt.Errorf("Store.ShardDSN is required when Store.Shards > 1")
+		return nil, err
 	}
-	set, err := shard.Open(shard.NewRouter(c.Store.Shards), c.Store.ShardDSN)
+	set, err := shard.OpenConfig(shard.NewRouter(c.Store.Shards), scfg)
 	if err != nil {
 		_ = st.Close()
 		return nil, err
@@ -119,6 +120,27 @@ func openStore(c config.Config) (store.Store, error) {
 		return nil, err
 	}
 	return st, nil
+}
+
+// shardConfig builds one DSN per shard. A list is preferred: MySQL shard
+// databases can live on different hosts and every API process reaches them
+// over the network. A template containing %d remains as a shorthand.
+func shardConfig(c config.StoreConf) (shard.Config, error) {
+	driver := c.ShardDriver
+	if driver == "" {
+		driver = shard.DriverSQLite
+	}
+	if len(c.ShardDSNs) > 0 {
+		return shard.Config{Driver: driver, DSNs: c.ShardDSNs}, nil
+	}
+	if c.ShardDSN == "" {
+		return shard.Config{}, fmt.Errorf("Store.ShardDSNs or Store.ShardDSN is required when Store.Shards > 1")
+	}
+	dsns, err := shard.ExpandTemplate(c.ShardDSN, c.Shards)
+	if err != nil {
+		return shard.Config{}, fmt.Errorf("Store.ShardDSN: %w", err)
+	}
+	return shard.Config{Driver: driver, DSNs: dsns}, nil
 }
 
 // Close releases the store.

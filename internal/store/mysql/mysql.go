@@ -114,7 +114,39 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		}
 	}
 	// Databases migrated before avatar columns existed still need them.
-	return ensureUserAvatarColumns(ctx, conn)
+	if err := ensureUserAvatarColumns(ctx, conn); err != nil {
+		return err
+	}
+	// Version 1 only runs once, so tables appended to schema.sql after a
+	// database was stamped never reach an upgraded database. The shard
+	// directory and outbox are additive, so repair them on every startup.
+	return ensureShardTables(ctx, conn)
+}
+
+// ensureShardTables repairs MySQL databases created before message sharding
+// existed. SQLite re-runs its whole schema on every Open and needs no repair.
+func ensureShardTables(ctx context.Context, conn *sql.Conn) error {
+	const ddl = `
+CREATE TABLE IF NOT EXISTS chat_shards (
+    chat_id VARCHAR(64) NOT NULL,
+    shard INT NOT NULL,
+    created_at VARCHAR(40) NOT NULL,
+    PRIMARY KEY (chat_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS message_outbox (
+    id VARCHAR(64) NOT NULL,
+    chat_id VARCHAR(64) NOT NULL,
+    shard INT NOT NULL,
+    sender_id VARCHAR(128) NOT NULL,
+    type VARCHAR(32) NOT NULL,
+    text MEDIUMTEXT NOT NULL,
+    attachment_ref TEXT NOT NULL,
+    created_at VARCHAR(40) NOT NULL,
+    projected TINYINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (id),
+    KEY idx_outbox_projected (projected)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`
+	return execScript(ctx, conn, ddl)
 }
 
 func ensureUserAvatarColumns(ctx context.Context, conn *sql.Conn) error {

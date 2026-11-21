@@ -59,22 +59,39 @@ Mint a dev JWT with `make token` (subject defaults to `usr_publisher`).
 
 ## 消息分片原型（可选，默认关闭）
 
-`Store.Shards > 1` 时，消息本体不再写入主库，而是按**会话聚合根**路由到 N 个独立 SQLite 文件。`Store.Shards` 为 0 或 1 时仍走原来的单库路径，行为完全一致。在 `etc/taskgame.yaml` 的 `Store` 段加两行即可启用：
+`Store.Shards > 1` 时，消息本体不再写入主库，而是按**会话聚合根**路由到 N 个独立数据库。`Store.Shards` 为 0 或 1 时仍走原来的单库路径，行为完全一致。**片库驱动与主库驱动互相独立**：主库可以是 SQLite 或 MySQL，片库可以是本机 SQLite 文件，也可以是一组网络 MySQL 数据库。
+
+**A. 本机文件分片（默认 `ShardDriver: sqlite`）**，在 `etc/taskgame.yaml` 的 `Store` 段加两行：
 
 ```yaml
 Store:
   Driver: sqlite
   DSN: "file:data/taskgame.db"        # 保留原有 DSN 与其 pragma
   Shards: 2
-  ShardDSN: "file:data/shard-%d.db"   # %d 会被替换为片序号
+  ShardDSN: "file:data/shard-%d.db"   # 模板，%d 替换为片序号
 ```
+
+**B. 网络数据库分片（`ShardDriver: mysql`）**，`ShardDSNs` 按片序号给出**每片一个 DSN**，可以指向不同主机，所有 API 进程都能连到同一批片库：
+
+```yaml
+Store:
+  Driver: mysql
+  DSN: "root:123456@tcp(127.0.0.1:3306)/taskgame?charset=utf8mb4"
+  Shards: 2
+  ShardDriver: mysql
+  ShardDSNs:
+    - "root:123456@tcp(db-shard-0:3306)/taskgame_shard_0?charset=utf8mb4"
+    - "root:123456@tcp(db-shard-1:3306)/taskgame_shard_1?charset=utf8mb4"
+```
+
+现成示例是 `etc/taskgame.mysql-shards.yaml`（`docker compose up -d` 会用 `etc/mysql-init.d` 建好两个片库；已有数据卷需要 `docker compose down -v` 重建才会执行初始化）。`ShardDSN` 模板在 MySQL 下也可用（同一主机的不同库），但只有列表能表达跨主机拓扑。片库 DSN 会补上 `utf8mb4` / `clientFoundRows`，`messages` 表由服务启动时自建，**库本身需预先存在**。
 
 - **路由**：`internal/store/shard/router.go`。FNV-1a 纯函数哈希，直聊用有序对 `pair_low#pair_high`、其它会话用 `chat_id`，所有进程与重启后都算出同一个片。建会话时把 `chat_id → shard` 写进主库 `chat_shards` 目录表（与 `chats` 行同一事务）。
 - **写入**：`PostMessage` 在事务内只往主库 `message_outbox` 写一行；事务**提交后**由 `sqlstore.DB.flush` 投影到片库，按 `message_id` 幂等。回滚不会在片里留下消息，且发消息返回前投影已完成，`ListMessages` 立刻可读。崩溃后未投影的行由启动时 `Recover` 补投。
 - **序号**：每个片库有自己的 `chat_seq` 自增列，只保证**会话内有序**；`chat_reads.last_read_rowid` 存的就是它。全局全序从来不需要，跨片序号重复不影响未读判定。
 - **读取**：`ListMessages` / `MessageRowID` / `LatestMessageRow` / `CountUnread` 先查目录定位片再查；`ListDirectUnreads` 在主库取会话与游标、再逐片查未读数（不再跨片 join）。
 - **未改动**：`store.Store` / `Repos` 接口、引擎、handler、OpenAPI、SDK、前端、SSE 与展示层全部不变，API 语义与响应字段保持一致。
-- **边界**：这是**原型**，只分片了消息本体。`chats`、`chat_reads`、幂等键、`webhooks`、任务账本仍在主库；片库固定为 SQLite 文件；`emit()` 仍在事务内查主库订阅、`idempotency_keys` 仍按 `user_id` 建主键——真正的三域分片需要把这两处改成片内 outbox / 带 shard 维度的 key，并引入事件总线。
+- **边界**：这是**原型**，只分片了消息本体。`chats`、`chat_reads`、幂等键、`webhooks`、任务账本仍在主库；片库现在可以走网络 MySQL，但**投影仍由写入方进程在事务提交后本地执行**（崩溃靠启动时 `Recover` 补投），没有跨机事件总线，也没有 2PC；`emit()` 仍在事务内查主库订阅、`idempotency_keys` 仍按 `user_id` 建主键。生产级多机分片还需把 outbox 投递改成共享租约 / 事件总线，并给幂等键加上片维度。
 
 ## 运行
 
@@ -125,6 +142,13 @@ make test-mysql
 ```
 
 没设置 DSN 时这些用例会跳过，SQLite 测试照常跑。冒烟脚本不关心驱动，服务听在 8891 即可：`bash scripts/smoke.sh`。
+
+**MySQL 分片链路**（主库 MySQL + 每片一个 MySQL DSN）同样在设置 `TASKGAME_MYSQL_DSN` 时跑：`internal/store/shard/mysql_test.go` 验证片库的 SQL 方言、幂等投影、重启恢复与物理隔离；`internal/integration/sharded_mysql_messages_test.go` 起真实 HTTP 服务，验证 API 契约、跨片隔离、outbox 全量投影。测试会自建临时库并在结束时删除，不需要预先建 `taskgame_shard_*`。手动跑完整示例：
+
+```bash
+docker compose up -d          # 新卷会自动建 taskgame_shard_0 / taskgame_shard_1
+CGO_ENABLED=0 go run . -f etc/taskgame.mysql-shards.yaml
+```
 
 开发用的静态密钥在 `etc/taskgame.yaml` 的 `Auth.ApiKeys`：
 
@@ -190,11 +214,22 @@ CGO_ENABLED=0 go test ./internal/engine -run 'TestAutoSettleCompetitiveDoesNotPi
 - `Auth.ApiKeys`：静态 `X-Api-Key` → 用户 id
 - `Store.Driver`：`sqlite`（默认，单连接）或 `mysql`（MySQL 8.0.19+ 连接池）
 - `Store.DSN`：SQLite 文件 DSN，或 go-sql-driver 的 MySQL DSN
+- `Store.Shards`：`> 1` 开启消息分片。`Store.ShardDriver`（`sqlite` / `mysql`）、`Store.ShardDSNs`（每片一个 DSN 的列表）与 `Store.ShardDSN`（含 `%d` 的模板）见「消息分片原型」
 - `Escrow.InitialBalance`：用户第一次出现时记入的模拟积分（开发配置是 1000000）
 - `Webhook.Mode`：`log` 只记录签名，不发 HTTP；`post` 才真正 POST
 - `AutoSettle`：到 `review_deadline` 后自动结算。竞争任务如果有多份提交，不会猜赢家，保持 `in_review`
 
 错误响应是 JSON：`{"code":"...","message":"..."}`。
+
+## Message sharding prototype (opt-in, off by default)
+
+With `Store.Shards > 1`, message bodies leave the primary database and are routed by the **chat aggregate root** to N independent databases. `0` or `1` keeps the original single-database behaviour. The shard driver is independent of the primary driver.
+
+- Default `ShardDriver: sqlite`: `ShardDSN: "file:data/shard-%d.db"` expands into one local file per shard.
+- `ShardDriver: mysql`: `ShardDSNs` gives **one DSN per shard, in shard order**, and may point at different hosts so every API process reaches the same shard databases over the network. See `etc/taskgame.mysql-shards.yaml`; a fresh compose volume creates `taskgame_shard_0/1` via `etc/mysql-init.d`. The service creates the `messages` table but not the databases themselves.
+- Routing (FNV-1a, ordered pair for direct chats), `chat_shards` directory, transactional `message_outbox`, post-commit projection and startup `Recover` are unchanged. Only the `messages` table is sharded; projection is still performed locally by the writing process, with no cross-machine event bus or 2PC.
+
+MySQL-backed shard tests (`internal/store/shard/mysql_test.go`, `internal/integration/sharded_mysql_messages_test.go`) run when `TASKGAME_MYSQL_DSN` is set and skip otherwise; they create and drop their own temporary databases.
 
 ## Run
 
@@ -310,6 +345,7 @@ CGO_ENABLED=0 go test ./internal/engine -run 'TestAutoSettleCompetitiveDoesNotPi
 - `Auth.ApiKeys`: static `X-Api-Key` to user id
 - `Store.Driver`: `sqlite` (default, one connection) or `mysql` (MySQL 8.0.19+ pool)
 - `Store.DSN`: a SQLite file DSN, or a go-sql-driver MySQL DSN
+- `Store.Shards`: `> 1` enables message sharding; see "Message sharding prototype" for `Store.ShardDriver`, `Store.ShardDSNs` and `Store.ShardDSN`
 - `Escrow.InitialBalance`: simulated credits granted the first time a user is seen (1000000 in the dev file)
 - `Webhook.Mode`: `log` records the signature and does not POST; `post` delivers HTTP
 - `AutoSettle`: settles when `review_deadline` passes. A competitive task with more than one submission stays `in_review` until `winner_select_deadline`, then refunds. `OpenTimeout`, `StartTimeout`, and `SeatTimeout` default to 72h
