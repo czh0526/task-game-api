@@ -187,6 +187,27 @@ CREATE TABLE IF NOT EXISTS chat_reads (
     CHECK (last_read_rowid >= 0)
 );
 
+-- Message sharding prototype. Both tables stay empty unless Store.Shards > 1.
+-- chat_shards is the global directory and message_outbox is the
+-- transactional outbox projected to a shard database after commit.
+CREATE TABLE IF NOT EXISTS chat_shards (
+    chat_id TEXT PRIMARY KEY,
+    shard INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS message_outbox (
+    id TEXT PRIMARY KEY,
+    chat_id TEXT NOT NULL,
+    shard INTEGER NOT NULL,
+    sender_id TEXT NOT NULL,
+    type TEXT NOT NULL,
+    text TEXT NOT NULL DEFAULT '',
+    attachment_ref TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    projected INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS score_events (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,

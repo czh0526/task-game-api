@@ -178,6 +178,28 @@ CREATE TABLE IF NOT EXISTS chat_reads (
     CONSTRAINT chk_chat_reads_rowid CHECK (last_read_rowid >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Message sharding prototype: global directory and transactional outbox.
+CREATE TABLE IF NOT EXISTS chat_shards (
+    chat_id VARCHAR(64) NOT NULL,
+    shard INT NOT NULL,
+    created_at VARCHAR(40) NOT NULL,
+    PRIMARY KEY (chat_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS message_outbox (
+    id VARCHAR(64) NOT NULL,
+    chat_id VARCHAR(64) NOT NULL,
+    shard INT NOT NULL,
+    sender_id VARCHAR(128) NOT NULL,
+    type VARCHAR(32) NOT NULL,
+    text MEDIUMTEXT NOT NULL,
+    attachment_ref TEXT NOT NULL,
+    created_at VARCHAR(40) NOT NULL,
+    projected TINYINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (id),
+    KEY idx_outbox_projected (projected)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS score_events (
     id VARCHAR(64) NOT NULL,
     user_id VARCHAR(128) NOT NULL,

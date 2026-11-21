@@ -33,9 +33,23 @@ type ApiKeyConf struct {
 
 // StoreConf selects the Store implementation.
 // sqlite is the single-writer default. mysql is the shared database for more than one API process.
+// The shard driver is independent of the primary driver: the primary store can be
+// SQLite or MySQL while each shard database is a SQLite file or a MySQL DSN.
 type StoreConf struct {
 	Driver string `json:",default=sqlite,options=sqlite|mysql"`
 	DSN    string
+	// Shards > 1 enables the message-sharding prototype: message bodies are
+	// routed by chat into N independent databases. 0 or 1 keeps the plain
+	// single-database behaviour.
+	Shards int `json:",optional,default=0"`
+	// ShardDriver selects the shard SQL dialect: sqlite (default, one file per
+	// shard) or mysql (network databases, one per API process that connects).
+	ShardDriver string `json:",optional,default=sqlite"`
+	// ShardDSNs is the preferred form: one DSN per shard, in shard order. A
+	// MySQL list may point at different hosts. ShardDSN is kept as a shorthand
+	// template containing %d, expanded into one DSN per shard.
+	ShardDSN  string   `json:",optional"`
+	ShardDSNs []string `json:",optional"`
 }
 
 // EscrowConf is the simulated credit ledger. No real payment provider is called.

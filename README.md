@@ -57,6 +57,77 @@ Mint a dev JWT with `make token` (subject defaults to `usr_publisher`).
 - 展示层是纯前端，**没有新增后端接口或协议字段**，`api/openapi.yaml` 与 SDK 不变。
 - 边界：页面完全关闭后收不到通知（那需要 Web Push / Service Worker + VAPID）；当前实现不弹浏览器窗口内的 toast，也不做声音提示。
 
+## 消息分片原型（可选，默认关闭）
+
+`Store.Shards > 1` 时，消息本体不再写入主库，而是按**会话聚合根**路由到 N 个独立数据库。`Store.Shards` 为 0 或 1 时仍走原来的单库路径，行为完全一致。**片库驱动与主库驱动互相独立**：主库可以是 SQLite 或 MySQL，片库可以是本机 SQLite 文件，也可以是一组网络 MySQL 数据库。
+
+**A. 本机文件分片（默认 `ShardDriver: sqlite`）**，在 `etc/taskgame.yaml` 的 `Store` 段加两行：
+
+```yaml
+Store:
+  Driver: sqlite
+  DSN: "file:data/taskgame.db"        # 保留原有 DSN 与其 pragma
+  Shards: 2
+  ShardDSN: "file:data/shard-%d.db"   # 模板，%d 替换为片序号
+```
+
+**B. 网络数据库分片（`ShardDriver: mysql`）**，`ShardDSNs` 按片序号给出**每片一个 DSN**，可以指向不同主机，所有 API 进程都能连到同一批片库：
+
+```yaml
+Store:
+  Driver: mysql
+  DSN: "root:123456@tcp(127.0.0.1:3306)/taskgame?charset=utf8mb4"
+  Shards: 2
+  ShardDriver: mysql
+  # db-shard-0 / db-shard-1 只是示意主机名，需能被 DNS 或 /etc/hosts 解析；
+  # 单机演示请直接写 127.0.0.1:3306，见 etc/taskgame.mysql-shards.yaml
+  ShardDSNs:
+    - "root:123456@tcp(db-shard-0:3306)/taskgame_shard_0?charset=utf8mb4"
+    - "root:123456@tcp(db-shard-1:3306)/taskgame_shard_1?charset=utf8mb4"
+```
+
+现成示例是 `etc/taskgame.mysql-shards.yaml`（`docker compose up -d` 会用 `etc/mysql-init.d` 建好两个片库；已有数据卷需要 `docker compose down -v` 重建才会执行初始化）。`ShardDSN` 模板在 MySQL 下也可用（同一主机的不同库），但只有列表能表达跨主机拓扑。片库 DSN 会补上 `utf8mb4` / `clientFoundRows`，`messages` 表由服务启动时自建，**库本身需预先存在**。
+
+**C. 一个库一个 MySQL 实例**：`Shards: N` 时共需 **N + 1 个实例**（1 个主库实例 + N 个片库实例），每个实例只持有一个 schema。同一台机器上用**不同端口**就能起多个独立的 mysqld，连接写法与跨机器完全一致：
+
+```bash
+docker compose -f docker-compose.3instances.yml -p taskgame-3inst up -d   # 3307 主 / 3308 片0 / 3309 片1
+CGO_ENABLED=0 go run . -f etc/taskgame.mysql-3instances.yaml
+```
+
+对应配置 `etc/taskgame.mysql-3instances.yaml`：主库 DSN 指 `3307/taskgame`，`ShardDSNs` 依次指 `3308/taskgame_shard_0`、`3309/taskgame_shard_1`。**每个后端进程都连全部 N+1 个实例**（`openStore` 开 1 个主库连接池 + N 个片库连接池），不是 A 连片 0、B 连片 1 这种按进程分工——因为任意请求都可能路由到任意片。所有进程必须使用**同一份、同顺序**的 `ShardDSNs`。实测：三个容器 hostname 各不相同；主库实例只有 `chat_shards` / `message_outbox`（`messages` 表空），两个片实例各只有 `messages` 表且分别持有不同会话的消息，片内 `chat_seq` 独立自增。
+
+- **路由**：`internal/store/shard/router.go`。FNV-1a 纯函数哈希，直聊用有序对 `pair_low#pair_high`、其它会话用 `chat_id`，所有进程与重启后都算出同一个片。建会话时把 `chat_id → shard` 写进主库 `chat_shards` 目录表（与 `chats` 行同一事务）。
+- **写入**：`PostMessage` 在事务内只往主库 `message_outbox` 写一行；事务**提交后**由 `sqlstore.DB.flush` 投影到片库，按 `message_id` 幂等。回滚不会在片里留下消息，且发消息返回前投影已完成，`ListMessages` 立刻可读。崩溃后未投影的行由启动时 `Recover` 补投。
+- **序号**：每个片库有自己的 `chat_seq` 自增列，只保证**会话内有序**；`chat_reads.last_read_rowid` 存的就是它。全局全序从来不需要，跨片序号重复不影响未读判定。
+- **读取**：`ListMessages` / `MessageRowID` / `LatestMessageRow` / `CountUnread` 先查目录定位片再查；`ListDirectUnreads` 在主库取会话与游标、再逐片查未读数（不再跨片 join）。
+- **未改动**：`store.Store` / `Repos` 接口、引擎、handler、OpenAPI、SDK、前端、SSE 与展示层全部不变，API 语义与响应字段保持一致。
+- **边界**：这是**原型**，只分片了消息本体。`chats`、`chat_reads`、幂等键、`webhooks`、任务账本仍在主库；片库现在可以走网络 MySQL，但**投影仍由写入方进程在事务提交后本地执行**（崩溃靠启动时 `Recover` 补投），没有跨机事件总线（SSE 的 `notify.Broker` 同样只在进程内扇出），也没有 2PC；`emit()` 仍在事务内查主库订阅、`idempotency_keys` 仍按 `user_id` 建主键。生产级多机分片还需把 outbox 投递改成共享租约 / 事件总线，并给幂等键加上片维度。
+
+### 调整分片数量（扩容 / 缩容 / 换实例）
+
+**先记住一条**：`chat_shards` 目录表才是权威路由。`Router` 的 `hash % N` **只在建会话时算一次**并写进目录表，之后所有读写都查目录表。因此**加片不需要搬老数据，减片必须搬**。
+
+| 变更 | 是否搬数据 | 操作 |
+|---|---|---|
+| 加片 N → N+1 | **不需要** | 起新实例/建库 → `ShardDSNs` **末尾追加**一个 DSN → `Shards` +1 → 所有进程统一切换 |
+| 换实例（N 不变） | 只搬该片 | 把该片 `messages` 导到新实例 → 只改列表中**对应下标**的 DSN → 目录表不动 |
+| 减片 N → N-1 | 需要，**当前无工具** | 见下 |
+| 关闭分片（`Shards<=1`） | 需要，**当前无工具** | 片库消息不会自动回灌主库 `messages` |
+
+**扩容步骤（2 → 3）**：
+
+1. 新起一个 MySQL 实例（例如 `3310`），`CREATE DATABASE taskgame_shard_2`。服务启动时只自建 `messages` 表，**不建库**。
+2. 改配置：`Shards: 3`，`ShardDSNs` 在**末尾**追加新 DSN。前面两项的顺序与内容**绝对不能变**——列表下标就是片序号，重排等于把老数据指到别的库。
+3. **所有后端进程一起切到这份新配置**，不要滚动混部：老进程的 `Set` 只有 2 个连接池，一旦它处理目录表里 `shard=2` 的会话，`shard.Set.check` 会报 `index 2 out of range`。建议短暂停服切换。
+4. 重启后 `Recover` 按 outbox 行内记录的**旧 `shard` 值**补投未投影消息，不受新 N 影响。
+
+`TestShardScaleOutPreservesExistingChats` 实证了这条：2 片下建的 8 个会话切成 3 片后，目录行不变、消息全部可读；新会话开始落到片 2，且片 2 里没有老会话的消息。注意**老会话永远留在原片**，扩容只把新增会话分散到新片，不会均衡已有数据；要均衡得主动迁移老会话。
+
+**为什么减片麻烦**：目录表里指向被删片的行不会自动消失，`message_outbox.shard` 也存着旧片号，`Recover` 会越界；更麻烦的是 `chat_seq` 是**片内自增**，消息搬到另一片后序号重排，而 `chat_reads.last_read_rowid` 存的正是这个序号，已读位置会错乱。所以缩容需要专门的迁移程序：搬 `messages` → 按新下标 `UPDATE chat_shards` → 修 outbox → 重算/补偿已读游标，并在切换期间停写。当前原型**没有**这套工具，不建议直接减 N；测试里验证了不搬数据就缩回 2 片会直接读失败。
+
+**只换机器/端口**（风险最低）：`Shards` 不变，用 `mysqldump` 或物理备份把该片 `messages` 搬到新实例，只改 `ShardDSNs` 对应下标的 DSN，目录表、`chat_seq`、已读游标全部不动。
+
 ## 运行
 
 需要 Go 1.26（见 `go.mod`）、`python3`（`scripts/smoke.sh` 用来读 JSON）和 `curl`。不需要 C 编译器：SQLite 驱动是 `modernc.org/sqlite`。下面的命令都在仓库根目录执行。
@@ -106,6 +177,44 @@ make test-mysql
 ```
 
 没设置 DSN 时这些用例会跳过，SQLite 测试照常跑。冒烟脚本不关心驱动，服务听在 8891 即可：`bash scripts/smoke.sh`。
+
+**MySQL 分片链路**（主库 MySQL + 每片一个 MySQL DSN）同样在设置 `TASKGAME_MYSQL_DSN` 时跑：`internal/store/shard/mysql_test.go` 验证片库的 SQL 方言、幂等投影、重启恢复与物理隔离；`internal/integration/sharded_mysql_messages_test.go` 起真实 HTTP 服务，验证 API 契约、跨片隔离、outbox 全量投影。测试会自建临时库并在结束时删除，不需要预先建 `taskgame_shard_*`。手动跑完整示例：
+
+```bash
+docker compose up -d          # 新卷会自动建 taskgame_shard_0 / taskgame_shard_1
+CGO_ENABLED=0 go run . -f etc/taskgame.mysql-shards.yaml
+```
+
+**一个库一个实例**（3 个独立 MySQL 容器，各自只持一个库）：
+
+```bash
+docker compose -f docker-compose.3instances.yml -p taskgame-3inst up -d
+CGO_ENABLED=0 go run . -f etc/taskgame.mysql-3instances.yaml
+```
+
+独立项目名 `taskgame-3inst` 不会动到默认的 3306 容器。停掉用 `docker compose -f docker-compose.3instances.yml -p taskgame-3inst down`（加 `-v` 会连数据卷一起删）。
+
+**多个 API 实例**：必须用 `Driver: mysql`（SQLite 是单连接文件，两个进程不能共用一个文件）。两个进程要共用同一份主库 DSN，且 `ShardDSNs` 列表**顺序与内容完全一致**——路由按片序号取模，顺序错了消息会落到错误的库。端口只能靠不同配置文件区分（`conf.MustLoad` 不读环境变量）：
+
+```bash
+docker compose up -d
+CGO_ENABLED=0 go run . -f etc/taskgame.mysql-shards.yaml             # 实例 A: 8891
+sed 's/^Port: 8891/Port: 8892/' etc/taskgame.mysql-shards.yaml > /tmp/taskgame-8892.yaml
+CGO_ENABLED=0 go run . -f /tmp/taskgame-8892.yaml                     # 实例 B: 8892
+```
+
+实测过：A 注册并签发 JWT，B 用同一个 token 能直接读；A 发消息 B 能读、B 发消息 A 能读；`chat_shards` 目录在主库共享，两个进程对同一会话定位到同一个片。两个进程都会跑自动结算与 webhook 投递，靠事务锁和 `delivering` 认领避免重复处理。
+
+**已知边界**：`notify.Broker` 是进程内的。B 用户的 SSE 挂在实例 B 上时，A 实例提交的消息**不会**推过来，只能等前端 45s 兜底轮询；挂在同一实例上的连接能立刻收到 `chat.message`。真正的多机实时推送需要把 SSE 信号换成共享 pub/sub。
+
+**两个前端服务，各连一个后端**：前端是静态资源、本身无状态，起几个 Vite 进程不改变架构；真正决定隔离性的是浏览器 **origin**（协议 + host + 端口）。`settings.ts` 把 `baseUrl` 存在 `localStorage`，且 `loadSettings()` 里已有的 localStorage 会**覆盖** `VITE_TASKGAME_BASE_URL`；`readSync.ts` / `avatarUtils.ts` 的 `BroadcastChannel` 也按 origin 广播。所以在**同一个 origin 开两个标签页模拟两个用户**是不成立的：两个窗口共用 localStorage，后改的服务地址会覆盖先改的，已读/头像事件还会互相串扰。要用两个不同 origin：
+
+```bash
+cd web && npm run dev -- --port 5137                                                    # 前端 A → 8891
+cd web && VITE_TASKGAME_BASE_URL=http://127.0.0.1:8892 npm run dev -- --port 5173      # 前端 B → 8892
+```
+
+`5173` 在 CORS 白名单（`5137`、`4173`、`5173`–`5185`）内。环境变量只在 `loadSettings()` 作 fallback，新 origin 的 localStorage 是空的，所以各自生效。生产环境没这个问题——A、B 是不同设备上的浏览器，localStorage 天然不共享；只有单机模拟才需要靠不同 origin 隔离。
 
 开发用的静态密钥在 `etc/taskgame.yaml` 的 `Auth.ApiKeys`：
 
@@ -171,11 +280,64 @@ CGO_ENABLED=0 go test ./internal/engine -run 'TestAutoSettleCompetitiveDoesNotPi
 - `Auth.ApiKeys`：静态 `X-Api-Key` → 用户 id
 - `Store.Driver`：`sqlite`（默认，单连接）或 `mysql`（MySQL 8.0.19+ 连接池）
 - `Store.DSN`：SQLite 文件 DSN，或 go-sql-driver 的 MySQL DSN
+- `Store.Shards`：`> 1` 开启消息分片。`Store.ShardDriver`（`sqlite` / `mysql`）、`Store.ShardDSNs`（每片一个 DSN 的列表）与 `Store.ShardDSN`（含 `%d` 的模板）见「消息分片原型」
 - `Escrow.InitialBalance`：用户第一次出现时记入的模拟积分（开发配置是 1000000）
 - `Webhook.Mode`：`log` 只记录签名，不发 HTTP；`post` 才真正 POST
 - `AutoSettle`：到 `review_deadline` 后自动结算。竞争任务如果有多份提交，不会猜赢家，保持 `in_review`
 
 错误响应是 JSON：`{"code":"...","message":"..."}`。
+
+## Message sharding prototype (opt-in, off by default)
+
+With `Store.Shards > 1`, message bodies leave the primary database and are routed by the **chat aggregate root** to N independent databases. `0` or `1` keeps the original single-database behaviour. The shard driver is independent of the primary driver.
+
+- Default `ShardDriver: sqlite`: `ShardDSN: "file:data/shard-%d.db"` expands into one local file per shard.
+- `ShardDriver: mysql`: `ShardDSNs` gives **one DSN per shard, in shard order**, and may point at different hosts so every API process reaches the same shard databases over the network. See `etc/taskgame.mysql-shards.yaml`; a fresh compose volume creates `taskgame_shard_0/1` via `etc/mysql-init.d`. The service creates the `messages` table but not the databases themselves.
+- Routing (FNV-1a, ordered pair for direct chats), `chat_shards` directory, transactional `message_outbox`, post-commit projection and startup `Recover` are unchanged. Only the `messages` table is sharded; projection is still performed locally by the writing process, with no cross-machine event bus (the SSE `notify.Broker` is process-local too) or 2PC.
+
+MySQL-backed shard tests (`internal/store/shard/mysql_test.go`, `internal/integration/sharded_mysql_messages_test.go`) run when `TASKGAME_MYSQL_DSN` is set and skip otherwise; they create and drop their own temporary databases.
+
+**Resizing the shard set**: `chat_shards` is the authoritative route. The `hash % N` router runs **only once, when a chat is created**, and the result is stored in the directory; every later read and write looks it up. So **adding a shard needs no data migration, removing one does**.
+
+| Change | Move data? | Action |
+|---|---|---|
+| Add a shard N → N+1 | **No** | Start a new instance/create the database → **append** one DSN to `ShardDSNs` → set `Shards: N+1` → switch all processes together |
+| Replace an instance (N unchanged) | Only that shard | Move its `messages` to the new instance → change only the DSN at that **index** → leave the directory alone |
+| Remove a shard N → N-1 | Yes, **no tooling yet** | See below |
+| Disable sharding (`Shards<=1`) | Yes, **no tooling yet** | Shard rows are not copied back into the primary `messages` table |
+
+To scale 2 → 3: create the new database first (the service only creates the `messages` table, never the schema), append its DSN at the **end** of `ShardDSNs` — the list index *is* the shard number, so never reorder existing entries — and switch **all** API processes to the new config at once. A rolling upgrade is unsafe: an old process has only two shard pools and fails with `index 2 out of range` when it serves a chat whose directory row says shard 2. `Recover` replays unprojected outbox rows using the `shard` value stored in each row, unaffected by the new N. `TestShardScaleOutPreservesExistingChats` verifies that eight chats created with two shards are still readable after switching to three, their directory rows are unchanged, new chats start landing on shard 2, and shard 2 contains no pre-scale-out messages. Note that **existing chats never move**: scaling out only spreads new chats, so it does not rebalance existing load.
+
+Shrinking is harder: directory rows still point at the removed shard, `message_outbox.shard` holds the old index, and `chat_seq` is **per-shard auto-increment** — moving rows renumbers them while `chat_reads.last_read_rowid` stores exactly that sequence, corrupting read cursors. A real shrink needs a migration that moves `messages`, rewrites `chat_shards` and outbox rows, and repairs cursors while writes are paused. The prototype has no such tool; the test confirms that shrinking back without migration fails. **Changing only a host/port at a fixed N** is the safest resize: move that shard's `messages`, edit the one DSN at its index, and leave the directory, sequences and cursors untouched.
+
+**One MySQL instance per database**: with `Shards: N` you need **N + 1 instances** (one primary plus one per shard), each holding a single schema. Multiple independent mysqld processes can run on one machine on **different ports**; the DSN syntax is identical to a cross-host setup:
+
+```bash
+docker compose -f docker-compose.3instances.yml -p taskgame-3inst up -d   # 3307 primary / 3308 shard0 / 3309 shard1
+CGO_ENABLED=0 go run . -f etc/taskgame.mysql-3instances.yaml
+```
+
+In `etc/taskgame.mysql-3instances.yaml` the primary DSN points at `3307/taskgame` and `ShardDSNs` at `3308/taskgame_shard_0` and `3309/taskgame_shard_1`. **Every API process connects to all N + 1 instances** (`openStore` opens one primary pool plus N shard pools); processes are not split across shards, since any request may route to any shard. All processes must use the same `ShardDSNs` list in the same order. Verified: the three containers have distinct hostnames; the primary instance holds `chat_shards` / `message_outbox` and an empty `messages` table, while each shard instance holds only `messages` for its own chats with an independent `chat_seq`.
+
+**Multiple API instances**: use `Driver: mysql` (SQLite is a single-connection file; never point two processes at one file). Both processes must share the same primary DSN and an identical `ShardDSNs` list in the same order, because routing picks a shard by index. Ports are set per config file (`conf.MustLoad` does not read environment variables):
+
+```bash
+docker compose up -d
+CGO_ENABLED=0 go run . -f etc/taskgame.mysql-shards.yaml             # instance A: 8891
+sed 's/^Port: 8891/Port: 8892/' etc/taskgame.mysql-shards.yaml > /tmp/taskgame-8892.yaml
+CGO_ENABLED=0 go run . -f /tmp/taskgame-8892.yaml                     # instance B: 8892
+```
+
+Verified: a JWT issued by A works on B; messages posted on A are readable on B and vice versa; `chat_shards` lives in the shared primary database so both processes resolve the same shard. Auto-settle and webhook delivery run on both processes safely (transaction locks and `delivering` claims). Known limit: a browser's SSE stream attached to B receives no `chat.message` signal for a message committed on A, and only the 45s fallback poll refreshes it; a connection on the same instance receives it immediately. A shared pub/sub is needed for real multi-machine push.
+
+**Two frontends, one backend each**: the frontend is stateless static assets, so the number of Vite processes does not change the architecture; what matters is the browser **origin** (scheme + host + port). `settings.ts` stores `baseUrl` in `localStorage`, and existing localStorage **overrides** `VITE_TASKGAME_BASE_URL` in `loadSettings()`. `readSync.ts` / `avatarUtils.ts` broadcast over `BroadcastChannel`, also scoped to one origin. Two tabs on a **single origin** therefore cannot model two users: they share localStorage (the last edited base URL wins) and their read/avatar events cross-contaminate. Use two distinct origins:
+
+```bash
+cd web && npm run dev -- --port 5137                                                    # frontend A → 8891
+cd web && VITE_TASKGAME_BASE_URL=http://127.0.0.1:8892 npm run dev -- --port 5173      # frontend B → 8892
+```
+
+Port `5173` is in the CORS allowlist (`5137`, `4173`, `5173`–`5185`). The env var is only a fallback in `loadSettings()`, and a fresh origin has empty localStorage, so each one takes effect. Production has no such problem: A and B are browsers on different devices with separate localStorage; distinct origins are only needed when simulating both users on one machine.
 
 ## Run
 
@@ -291,6 +453,7 @@ CGO_ENABLED=0 go test ./internal/engine -run 'TestAutoSettleCompetitiveDoesNotPi
 - `Auth.ApiKeys`: static `X-Api-Key` to user id
 - `Store.Driver`: `sqlite` (default, one connection) or `mysql` (MySQL 8.0.19+ pool)
 - `Store.DSN`: a SQLite file DSN, or a go-sql-driver MySQL DSN
+- `Store.Shards`: `> 1` enables message sharding; see "Message sharding prototype" for `Store.ShardDriver`, `Store.ShardDSNs` and `Store.ShardDSN`
 - `Escrow.InitialBalance`: simulated credits granted the first time a user is seen (1000000 in the dev file)
 - `Webhook.Mode`: `log` records the signature and does not POST; `post` delivers HTTP
 - `AutoSettle`: settles when `review_deadline` passes. A competitive task with more than one submission stays `in_review` until `winner_select_deadline`, then refunds. `OpenTimeout`, `StartTimeout`, and `SeatTimeout` default to 72h
