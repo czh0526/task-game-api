@@ -57,6 +57,25 @@ Mint a dev JWT with `make token` (subject defaults to `usr_publisher`).
 - 展示层是纯前端，**没有新增后端接口或协议字段**，`api/openapi.yaml` 与 SDK 不变。
 - 边界：页面完全关闭后收不到通知（那需要 Web Push / Service Worker + VAPID）；当前实现不弹浏览器窗口内的 toast，也不做声音提示。
 
+## 消息分片原型（可选，默认关闭）
+
+`Store.Shards > 1` 时，消息本体不再写入主库，而是按**会话聚合根**路由到 N 个独立 SQLite 文件。`Store.Shards` 为 0 或 1 时仍走原来的单库路径，行为完全一致。在 `etc/taskgame.yaml` 的 `Store` 段加两行即可启用：
+
+```yaml
+Store:
+  Driver: sqlite
+  DSN: "file:data/taskgame.db"        # 保留原有 DSN 与其 pragma
+  Shards: 2
+  ShardDSN: "file:data/shard-%d.db"   # %d 会被替换为片序号
+```
+
+- **路由**：`internal/store/shard/router.go`。FNV-1a 纯函数哈希，直聊用有序对 `pair_low#pair_high`、其它会话用 `chat_id`，所有进程与重启后都算出同一个片。建会话时把 `chat_id → shard` 写进主库 `chat_shards` 目录表（与 `chats` 行同一事务）。
+- **写入**：`PostMessage` 在事务内只往主库 `message_outbox` 写一行；事务**提交后**由 `sqlstore.DB.flush` 投影到片库，按 `message_id` 幂等。回滚不会在片里留下消息，且发消息返回前投影已完成，`ListMessages` 立刻可读。崩溃后未投影的行由启动时 `Recover` 补投。
+- **序号**：每个片库有自己的 `chat_seq` 自增列，只保证**会话内有序**；`chat_reads.last_read_rowid` 存的就是它。全局全序从来不需要，跨片序号重复不影响未读判定。
+- **读取**：`ListMessages` / `MessageRowID` / `LatestMessageRow` / `CountUnread` 先查目录定位片再查；`ListDirectUnreads` 在主库取会话与游标、再逐片查未读数（不再跨片 join）。
+- **未改动**：`store.Store` / `Repos` 接口、引擎、handler、OpenAPI、SDK、前端、SSE 与展示层全部不变，API 语义与响应字段保持一致。
+- **边界**：这是**原型**，只分片了消息本体。`chats`、`chat_reads`、幂等键、`webhooks`、任务账本仍在主库；片库固定为 SQLite 文件；`emit()` 仍在事务内查主库订阅、`idempotency_keys` 仍按 `user_id` 建主键——真正的三域分片需要把这两处改成片内 outbox / 带 shard 维度的 key，并引入事件总线。
+
 ## 运行
 
 需要 Go 1.26（见 `go.mod`）、`python3`（`scripts/smoke.sh` 用来读 JSON）和 `curl`。不需要 C 编译器：SQLite 驱动是 `modernc.org/sqlite`。下面的命令都在仓库根目录执行。

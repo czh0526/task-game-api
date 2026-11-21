@@ -36,6 +36,11 @@ type ApiKeyConf struct {
 type StoreConf struct {
 	Driver string `json:",default=sqlite,options=sqlite|mysql"`
 	DSN    string
+	// Shards > 1 enables the message-sharding prototype: message bodies are
+	// routed by chat into N independent SQLite files. 0 or 1 keeps the plain
+	// single-database behaviour. ShardDSN must contain %d for the shard index.
+	Shards   int    `json:",optional,default=0"`
+	ShardDSN string `json:",optional"`
 }
 
 // EscrowConf is the simulated credit ledger. No real payment provider is called.

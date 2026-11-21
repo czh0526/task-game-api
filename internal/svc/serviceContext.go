@@ -13,6 +13,7 @@ import (
 	"taskgame/internal/notify"
 	"taskgame/internal/store"
 	"taskgame/internal/store/mysql"
+	"taskgame/internal/store/shard"
 	"taskgame/internal/store/sqlite"
 	"taskgame/internal/webhook"
 
@@ -81,14 +82,43 @@ func NewServiceContext(c config.Config) (*ServiceContext, error) {
 }
 
 func openStore(c config.Config) (store.Store, error) {
+	var st store.Store
+	var err error
 	switch c.Store.Driver {
 	case "", "sqlite":
-		return sqlite.Open(c.Store.DSN, c.Escrow.InitialBalance)
+		st, err = sqlite.Open(c.Store.DSN, c.Escrow.InitialBalance)
 	case "mysql":
-		return mysql.Open(c.Store.DSN, c.Escrow.InitialBalance)
+		st, err = mysql.Open(c.Store.DSN, c.Escrow.InitialBalance)
 	default:
 		return nil, fmt.Errorf("unsupported store driver %q", c.Store.Driver)
 	}
+	if err != nil {
+		return nil, err
+	}
+	if c.Store.Shards <= 1 {
+		return st, nil
+	}
+	if c.Store.ShardDSN == "" {
+		_ = st.Close()
+		return nil, fmt.Errorf("Store.ShardDSN is required when Store.Shards > 1")
+	}
+	set, err := shard.Open(shard.NewRouter(c.Store.Shards), c.Store.ShardDSN)
+	if err != nil {
+		_ = st.Close()
+		return nil, err
+	}
+	enabler, ok := st.(interface{ EnableShards(*shard.Set) error })
+	if !ok {
+		_ = set.Close()
+		_ = st.Close()
+		return nil, fmt.Errorf("store %T does not support message sharding", st)
+	}
+	if err := enabler.EnableShards(set); err != nil {
+		_ = set.Close()
+		_ = st.Close()
+		return nil, err
+	}
+	return st, nil
 }
 
 // Close releases the store.
