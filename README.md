@@ -93,7 +93,7 @@ Store:
 - **序号**：每个片库有自己的 `chat_seq` 自增列，只保证**会话内有序**；`chat_reads.last_read_rowid` 存的就是它。全局全序从来不需要，跨片序号重复不影响未读判定。
 - **读取**：`ListMessages` / `MessageRowID` / `LatestMessageRow` / `CountUnread` 先查目录定位片再查；`ListDirectUnreads` 在主库取会话与游标、再逐片查未读数（不再跨片 join）。
 - **未改动**：`store.Store` / `Repos` 接口、引擎、handler、OpenAPI、SDK、前端、SSE 与展示层全部不变，API 语义与响应字段保持一致。
-- **边界**：这是**原型**，只分片了消息本体。`chats`、`chat_reads`、幂等键、`webhooks`、任务账本仍在主库；片库现在可以走网络 MySQL，但**投影仍由写入方进程在事务提交后本地执行**（崩溃靠启动时 `Recover` 补投），没有跨机事件总线，也没有 2PC；`emit()` 仍在事务内查主库订阅、`idempotency_keys` 仍按 `user_id` 建主键。生产级多机分片还需把 outbox 投递改成共享租约 / 事件总线，并给幂等键加上片维度。
+- **边界**：这是**原型**，只分片了消息本体。`chats`、`chat_reads`、幂等键、`webhooks`、任务账本仍在主库；片库现在可以走网络 MySQL，但**投影仍由写入方进程在事务提交后本地执行**（崩溃靠启动时 `Recover` 补投），没有跨机事件总线（SSE 的 `notify.Broker` 同样只在进程内扇出），也没有 2PC；`emit()` 仍在事务内查主库订阅、`idempotency_keys` 仍按 `user_id` 建主键。生产级多机分片还需把 outbox 投递改成共享租约 / 事件总线，并给幂等键加上片维度。
 
 ## 运行
 
@@ -151,6 +151,19 @@ make test-mysql
 docker compose up -d          # 新卷会自动建 taskgame_shard_0 / taskgame_shard_1
 CGO_ENABLED=0 go run . -f etc/taskgame.mysql-shards.yaml
 ```
+
+**多个 API 实例**：必须用 `Driver: mysql`（SQLite 是单连接文件，两个进程不能共用一个文件）。两个进程要共用同一份主库 DSN，且 `ShardDSNs` 列表**顺序与内容完全一致**——路由按片序号取模，顺序错了消息会落到错误的库。端口只能靠不同配置文件区分（`conf.MustLoad` 不读环境变量）：
+
+```bash
+docker compose up -d
+CGO_ENABLED=0 go run . -f etc/taskgame.mysql-shards.yaml             # 实例 A: 8891
+sed 's/^Port: 8891/Port: 8892/' etc/taskgame.mysql-shards.yaml > /tmp/taskgame-8892.yaml
+CGO_ENABLED=0 go run . -f /tmp/taskgame-8892.yaml                     # 实例 B: 8892
+```
+
+实测过：A 注册并签发 JWT，B 用同一个 token 能直接读；A 发消息 B 能读、B 发消息 A 能读；`chat_shards` 目录在主库共享，两个进程对同一会话定位到同一个片。两个进程都会跑自动结算与 webhook 投递，靠事务锁和 `delivering` 认领避免重复处理。
+
+**已知边界**：`notify.Broker` 是进程内的。B 用户的 SSE 挂在实例 B 上时，A 实例提交的消息**不会**推过来，只能等前端 45s 兜底轮询；挂在同一实例上的连接能立刻收到 `chat.message`。真正的多机实时推送需要把 SSE 信号换成共享 pub/sub。
 
 开发用的静态密钥在 `etc/taskgame.yaml` 的 `Auth.ApiKeys`：
 
@@ -229,9 +242,20 @@ With `Store.Shards > 1`, message bodies leave the primary database and are route
 
 - Default `ShardDriver: sqlite`: `ShardDSN: "file:data/shard-%d.db"` expands into one local file per shard.
 - `ShardDriver: mysql`: `ShardDSNs` gives **one DSN per shard, in shard order**, and may point at different hosts so every API process reaches the same shard databases over the network. See `etc/taskgame.mysql-shards.yaml`; a fresh compose volume creates `taskgame_shard_0/1` via `etc/mysql-init.d`. The service creates the `messages` table but not the databases themselves.
-- Routing (FNV-1a, ordered pair for direct chats), `chat_shards` directory, transactional `message_outbox`, post-commit projection and startup `Recover` are unchanged. Only the `messages` table is sharded; projection is still performed locally by the writing process, with no cross-machine event bus or 2PC.
+- Routing (FNV-1a, ordered pair for direct chats), `chat_shards` directory, transactional `message_outbox`, post-commit projection and startup `Recover` are unchanged. Only the `messages` table is sharded; projection is still performed locally by the writing process, with no cross-machine event bus (the SSE `notify.Broker` is process-local too) or 2PC.
 
 MySQL-backed shard tests (`internal/store/shard/mysql_test.go`, `internal/integration/sharded_mysql_messages_test.go`) run when `TASKGAME_MYSQL_DSN` is set and skip otherwise; they create and drop their own temporary databases.
+
+**Multiple API instances**: use `Driver: mysql` (SQLite is a single-connection file; never point two processes at one file). Both processes must share the same primary DSN and an identical `ShardDSNs` list in the same order, because routing picks a shard by index. Ports are set per config file (`conf.MustLoad` does not read environment variables):
+
+```bash
+docker compose up -d
+CGO_ENABLED=0 go run . -f etc/taskgame.mysql-shards.yaml             # instance A: 8891
+sed 's/^Port: 8891/Port: 8892/' etc/taskgame.mysql-shards.yaml > /tmp/taskgame-8892.yaml
+CGO_ENABLED=0 go run . -f /tmp/taskgame-8892.yaml                     # instance B: 8892
+```
+
+Verified: a JWT issued by A works on B; messages posted on A are readable on B and vice versa; `chat_shards` lives in the shared primary database so both processes resolve the same shard. Auto-settle and webhook delivery run on both processes safely (transaction locks and `delivering` claims). Known limit: a browser's SSE stream attached to B receives no `chat.message` signal for a message committed on A, and only the 45s fallback poll refreshes it; a connection on the same instance receives it immediately. A shared pub/sub is needed for real multi-machine push.
 
 ## Run
 
