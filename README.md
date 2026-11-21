@@ -165,6 +165,15 @@ CGO_ENABLED=0 go run . -f /tmp/taskgame-8892.yaml                     # 实例 B
 
 **已知边界**：`notify.Broker` 是进程内的。B 用户的 SSE 挂在实例 B 上时，A 实例提交的消息**不会**推过来，只能等前端 45s 兜底轮询；挂在同一实例上的连接能立刻收到 `chat.message`。真正的多机实时推送需要把 SSE 信号换成共享 pub/sub。
 
+**两个前端服务，各连一个后端**：前端是静态资源、本身无状态，起几个 Vite 进程不改变架构；真正决定隔离性的是浏览器 **origin**（协议 + host + 端口）。`settings.ts` 把 `baseUrl` 存在 `localStorage`，且 `loadSettings()` 里已有的 localStorage 会**覆盖** `VITE_TASKGAME_BASE_URL`；`readSync.ts` / `avatarUtils.ts` 的 `BroadcastChannel` 也按 origin 广播。所以在**同一个 origin 开两个标签页模拟两个用户**是不成立的：两个窗口共用 localStorage，后改的服务地址会覆盖先改的，已读/头像事件还会互相串扰。要用两个不同 origin：
+
+```bash
+cd web && npm run dev -- --port 5137                                                    # 前端 A → 8891
+cd web && VITE_TASKGAME_BASE_URL=http://127.0.0.1:8892 npm run dev -- --port 5173      # 前端 B → 8892
+```
+
+`5173` 在 CORS 白名单（`5137`、`4173`、`5173`–`5185`）内。环境变量只在 `loadSettings()` 作 fallback，新 origin 的 localStorage 是空的，所以各自生效。生产环境没这个问题——A、B 是不同设备上的浏览器，localStorage 天然不共享；只有单机模拟才需要靠不同 origin 隔离。
+
 开发用的静态密钥在 `etc/taskgame.yaml` 的 `Auth.ApiKeys`：
 
 | Header | User |
@@ -256,6 +265,15 @@ CGO_ENABLED=0 go run . -f /tmp/taskgame-8892.yaml                     # instance
 ```
 
 Verified: a JWT issued by A works on B; messages posted on A are readable on B and vice versa; `chat_shards` lives in the shared primary database so both processes resolve the same shard. Auto-settle and webhook delivery run on both processes safely (transaction locks and `delivering` claims). Known limit: a browser's SSE stream attached to B receives no `chat.message` signal for a message committed on A, and only the 45s fallback poll refreshes it; a connection on the same instance receives it immediately. A shared pub/sub is needed for real multi-machine push.
+
+**Two frontends, one backend each**: the frontend is stateless static assets, so the number of Vite processes does not change the architecture; what matters is the browser **origin** (scheme + host + port). `settings.ts` stores `baseUrl` in `localStorage`, and existing localStorage **overrides** `VITE_TASKGAME_BASE_URL` in `loadSettings()`. `readSync.ts` / `avatarUtils.ts` broadcast over `BroadcastChannel`, also scoped to one origin. Two tabs on a **single origin** therefore cannot model two users: they share localStorage (the last edited base URL wins) and their read/avatar events cross-contaminate. Use two distinct origins:
+
+```bash
+cd web && npm run dev -- --port 5137                                                    # frontend A → 8891
+cd web && VITE_TASKGAME_BASE_URL=http://127.0.0.1:8892 npm run dev -- --port 5173      # frontend B → 8892
+```
+
+Port `5173` is in the CORS allowlist (`5137`, `4173`, `5173`–`5185`). The env var is only a fallback in `loadSettings()`, and a fresh origin has empty localStorage, so each one takes effect. Production has no such problem: A and B are browsers on different devices with separate localStorage; distinct origins are only needed when simulating both users on one machine.
 
 ## Run
 
