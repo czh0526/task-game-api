@@ -41,6 +41,15 @@ Scale:
   # PubSub: redis (see etc/taskgame.scale-redis.yaml).
   PubSub: shared
   InstanceID: api-a
+  # P2 #3: persist the routing directory + shard topology in SQL instead of
+  # keeping it in process memory. Driver/DSN default to Store.Driver/Store.DSN
+  # (the primary doubles as the tiny control plane: only 3 small tables are
+  # added). A separate file is used here so the two pools do not contend.
+  # Multi-machine: set Driver: mysql and a DSN every API process can reach.
+  Directory:
+    Enabled: true
+    Driver: sqlite
+    DSN: "file:data/control-plane.db?mode=rwc&_pragma=busy_timeout(5000)"
   Domains:
     UserShards: 4
     TaskShards: 2

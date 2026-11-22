@@ -13,8 +13,9 @@ import (
 // Keeping this database tiny and cacheable is what stops it becoming the next
 // single point of contention.
 //
-// SKELETON BOUNDARY: a SQL-backed Directory / UniqueIndex implementation is
-// TODO. InMemoryDirectory and InMemoryUnique are the runnable defaults.
+// SQLDirectory (sql_directory.go) now persists these tables; a SQL-backed
+// UniqueIndex is still TODO (see internal/scale.TODOs), so InMemoryUnique
+// remains the runnable default for global uniqueness.
 const Schema = `
 CREATE TABLE IF NOT EXISTS shard_directory (
     domain      VARCHAR(16)  NOT NULL,

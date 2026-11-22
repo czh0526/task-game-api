@@ -130,12 +130,12 @@ CGO_ENABLED=0 go run . -f etc/taskgame.mysql-3instances.yaml
 
 ## P1+ 多数据库骨架（可选，默认关闭）
 
-`Scale.Enabled=false`（配置文件不写 `Scale` 段）时，`scale.New` 直接返回 `nil`，`ServiceContext.Notifier` 仍是原来的进程内 `*notify.Broker`，**行为与 PR #38 逐字节一致**。打开 `etc/taskgame.scale-skeleton.yaml` 才会装配下列骨架；**没有搬走任何一张表，没有改动 `store.Store` / `Repos` 接口、引擎、handler、OpenAPI、SDK 与前端，API 响应不变**。
+`Scale.Enabled=false`（配置文件不写 `Scale` 段）时，`scale.New` 直接返回 `nil`，`ServiceContext.Notifier` 仍是原来的进程内 `*notify.Broker`，**行为与 PR #38 逐字节一致**。打开 `etc/taskgame.scale-skeleton.yaml` 才会装配下列骨架；**没有搬走任何一张表，没有改动 `store.Store` / `Repos` 接口、引擎、handler、OpenAPI、SDK 与前端，API 响应不变**（`Scale.Directory.Enabled` 会额外创建 3 张控制面小表，但不迁移任何业务表）。
 
 | 阶段 | 新增位置 | 做了什么 | 明确没做 |
 |---|---|---|---|
 | P1 | `internal/notify/*`、`internal/projection/*` | `Fanout` + `RedisTransport` 跨进程 SSE 扇出；**`Lease`（Redis SET NX / 进程内）+ `Bus`（Redis pub/sub / 进程内）+ `Worker`**：`Recover` 每行先认领共享租约，提交后广播唤醒 hint，定时兜底；实测两进程并发只投影一次 | NATS / Kafka 传输、SQL 版租约（当前用 Redis / 内存） |
-| P2 | `internal/plane/*`、`internal/store/shard/domains.go` | 目录表 `Directory`、拓扑 `Topology`（加片只追加）、`Resolver`、全局唯一索引 / ID 生成器接口、三域 `DomainRouter`、`TxScope` 拒绝跨片事务 | SQL 版目录、User/Task 仓储真正拆分、`global_unique` 落库 |
+| P2 | `internal/plane/*`、`internal/store/shard/domains.go` | 目录表 `Directory`（**`SQLDirectory` 把映射持久化到 `shard_directory` / `shard_topology`，多进程共享**）、拓扑 `Topology`（加片只追加）、`Resolver`、全局唯一索引 / ID 生成器接口、三域 `DomainRouter`、`TxScope` 拒绝跨片事务 | User/Task 仓储真正拆分、`global_unique` 落库、目录行与聚合根写在同一事务 |
 | P3 | `internal/archive/*`、`internal/search/*` | 可运行的 `FileBlobStore`、归档策略与 `Archiver.Plan`、大字段清单、`MemoryTaskIndex` 与 `Projector` | 真正执行归档、Elasticsearch、CDC 投影、`emit()` 去放大 |
 | 装配 | `internal/scale/runtime.go`、`config.ScaleConf`、`svc` | `scale.Runtime` 统一生命周期，`Close` 一并释放 | — |
 
@@ -165,7 +165,28 @@ PR #38 的 `Recover` 是「每个进程启动时全表扫 `projected=0` 并各�
 
 `Scale.Projection.Enabled=true` 时 `scale.Runtime` 装配租约/总线，`svc` 把 coordinator 注入主库并在 `StartBackground` 启动 worker；`PubSub=redis` 用真 Redis，`shared` / `local` 用进程内实现。默认全关时 `Recover` 与 PR #38 逐字节一致。
 
-`internal/scale.TODOs` 是代码里的边界清单（原 10 条，#1 Redis 传输、#2 outbox 共享租约均已实现，现为 8 条），README 与它保持一致。跑验证：
+### 用 SQL 目录持久化路由（`Scale.Directory`）
+
+`InMemoryDirectory` 是进程内的：重启即丢，多进程各持一份，「目录表是唯一权威路由」只在单进程里成立。#3 让目录真正落库：
+
+- `internal/plane/sql_directory.go` 的 `SQLDirectory` 使用 `plane.Schema` 的三张表：`shard_directory`（`(domain, shard_key) -> shard` 权威映射）、`shard_topology`（每个域声明的片数 + DSN 快照）、`global_unique`（留给 #5）。`Migrate` 全是 `CREATE TABLE IF NOT EXISTS`，每个进程启动时重复执行也安全；`Driver` 支持 `sqlite` / `mysql`，只有 insert 幂等语法不同。
+- **`Assign` 幂等且不覆盖**：SQLite `INSERT OR IGNORE`、MySQL `INSERT IGNORE`。两个进程并发或重放同一个 key，都不会把它改到别的片——这是「加片不搬老数据」在数据库层的保证。
+- **`EnsureShards` 只增不减**：`ShardCount` 取 `MAX(shard)+1`。滚动升级时仍跑旧配置的进程，不会把别的进程已扩的片数缩回去；`shard_topology` 因此是跨进程共享的拓扑声明。
+- 包级 `AssignInTx` 让调用方在**自己的事务**里写目录行，留给 P2 把聚合根与路由写进同一事务（现有 `chat_shards` 就是这么做的）。当前 `SQLDirectory` 自带连接池，二者是最终一致；因为 `Assign` 幂等，重试是安全的。
+
+`Scale.Directory.Enabled=true` 时 `scale.New` 打开控制面库（`Driver` / `DSN` 省略则继承 `Store.Driver` / `Store.DSN`，即主库兼任这个极小控制面），并把三个域的片数同步进 `shard_topology`；`Runtime.Close` 释放连接池。**默认全关时仍是 `InMemoryDirectory`，PR #38 路径不变**。真多机部署要让所有进程指向同一个共享 MySQL：
+
+```yaml
+Scale:
+  Directory:
+    Enabled: true
+    Driver: mysql
+    DSN: "root:123456@tcp(mysql:3306)/taskgame_plane?charset=utf8mb4"
+```
+
+两个边界要记住：`shard_topology.dsn` 只是首次登记时的快照，权威 DSN 顺序仍来自配置里的 `Topology`（换实例改配置并滚动升级，见「调整分片数量」）；`Keys()` 只服务于缩容规划，当前是按 `(domain, shard_key)` 主键的扫描，上热路径前需补 `(domain, shard)` 索引。
+
+`internal/scale.TODOs` 是代码里的边界清单（原 10 条，#1 Redis 传输、#2 outbox 共享租约、#3 SQL 目录均已实现，现为 7 条），README 与它保持一致。跑验证：
 
 ```bash
 go test ./internal/notify ./internal/projection ./internal/store/sqlstore ./internal/plane ./internal/store/shard ./internal/archive ./internal/search ./internal/scale ./internal/svc
@@ -338,7 +359,7 @@ With `Store.Shards > 1`, message bodies leave the primary database and are route
 
 - Default `ShardDriver: sqlite`: `ShardDSN: "file:data/shard-%d.db"` expands into one local file per shard.
 - `ShardDriver: mysql`: `ShardDSNs` gives **one DSN per shard, in shard order**, and may point at different hosts so every API process reaches the same shard databases over the network. See `etc/taskgame.mysql-shards.yaml`; a fresh compose volume creates `taskgame_shard_0/1` via `etc/mysql-init.d`. The service creates the `messages` table but not the databases themselves.
-- Routing (FNV-1a, ordered pair for direct chats), `chat_shards` directory, transactional `message_outbox`, post-commit projection and startup `Recover` are unchanged. Only the `messages` table is sharded. In the base prototype projection is performed locally by the writing process and the SSE `notify.Broker` is process-local; the opt-in `Scale` skeleton described above adds a Redis pub/sub signal bus and a shared-lease outbox projection worker. Neither path uses 2PC.
+- Routing (FNV-1a, ordered pair for direct chats), `chat_shards` directory, transactional `message_outbox`, post-commit projection and startup `Recover` are unchanged. Only the `messages` table is sharded. In the base prototype projection is performed locally by the writing process and the SSE `notify.Broker` is process-local; the opt-in `Scale` skeleton described above adds a Redis pub/sub signal bus, a shared-lease outbox projection worker and a SQL-backed routing directory (`shard_directory` / `shard_topology`) shared by all processes. Neither path uses 2PC.
 
 MySQL-backed shard tests (`internal/store/shard/mysql_test.go`, `internal/integration/sharded_mysql_messages_test.go`) run when `TASKGAME_MYSQL_DSN` is set and skip otherwise; they create and drop their own temporary databases.
 

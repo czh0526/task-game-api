@@ -1,9 +1,10 @@
 // Package plane is the global control plane for the multi-database design.
 //
-// SKELETON BOUNDARY: this package defines the routing contracts and ships an
-// in-memory, runnable implementation. It does NOT move any existing table out
-// of the primary store. A production deployment replaces InMemoryDirectory
-// with a SQL-backed directory (see Schema) before enabling User / Task shards.
+// A SQL-backed implementation (SQLDirectory in sql_directory.go) persists the
+// routing rows across processes and restarts; it is selected by
+// Scale.Directory.Enabled. InMemoryDirectory stays the default for a single
+// process. Neither moves an existing table out of the primary store: the User
+// / Task repositories are still unsplit (see internal/scale.TODOs).
 package plane
 
 import (
@@ -44,7 +45,10 @@ type Placement struct {
 //
 // A SQL implementation should use the shard_directory table in Schema and
 // write the row in the SAME transaction as the aggregate root it describes
-// (the current prototype does exactly this for chat_shards).
+// (the current prototype does exactly this for chat_shards). SQLDirectory
+// persists the rows but owns its own pool, so it exposes AssignInTx for that
+// future same-transaction write; until the P2 repository split happens the
+// directory row and the business row are eventually consistent.
 type Directory interface {
 	Lookup(ctx context.Context, domain Domain, key string) (shard int, ok bool, err error)
 	Assign(ctx context.Context, domain Domain, key string, shard int) error

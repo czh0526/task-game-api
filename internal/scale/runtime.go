@@ -8,6 +8,7 @@
 package scale
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -28,9 +29,10 @@ import (
 // The original #1 "replace MemoryTransport with Redis pub/sub" is DONE:
 // see notify.RedisTransport (redis.go). The original #2 "shared lease / event
 // bus for message_outbox projection" is DONE too: see internal/projection.
+// The original #3 "SQL-backed plane.Directory over plane.Schema" is DONE:
+// see plane.SQLDirectory, selected by Scale.Directory.Enabled.
 // NATS/Kafka remain optional transports.
 var TODOs = []string{
-	"P2: implement a SQL-backed plane.Directory over plane.Schema",
 	"P2: split User and Task repositories into per-domain stores guarded by shard.TxScope",
 	"P2: add global_unique(email -> user_id) and a Snowflake IDGenerator",
 	"P3: execute archive batches per shard (copy, verify checksum, then delete)",
@@ -55,6 +57,7 @@ type Runtime struct {
 	Bus          projection.Bus
 	transport    notify.Transport
 	remote       *notify.RemoteFanout
+	directoryDB  *plane.SQLDirectory // non-nil when Scale.Directory.Enabled
 	instanceID   string
 }
 
@@ -113,9 +116,13 @@ func New(c config.ScaleConf, primary config.StoreConf) (*Runtime, error) {
 	}
 
 	// P2: global control plane + three-domain router.
-	dir := plane.NewInMemoryDirectory()
 	topo := plane.NewTopology()
 	if err := registerDomains(topo, c, primary); err != nil {
+		_ = rt.Close()
+		return nil, err
+	}
+	dir, err := rt.wireDirectory(c, primary, topo)
+	if err != nil {
 		_ = rt.Close()
 		return nil, err
 	}
@@ -210,6 +217,50 @@ func registerDomains(topo *plane.Topology, c config.ScaleConf, primary config.St
 	return nil
 }
 
+// wireDirectory chooses the routing directory. With Scale.Directory.Enabled
+// the mapping is persisted in SQL and shared by every API process; otherwise
+// it stays process-local (the PR #38 / skeleton default). It is opened before
+// the primary store, so its DSN can be a separate control-plane database or
+// simply inherited from the primary.
+func (r *Runtime) wireDirectory(c config.ScaleConf, primary config.StoreConf, topo *plane.Topology) (plane.Directory, error) {
+	if !c.Directory.Enabled {
+		return plane.NewInMemoryDirectory(), nil
+	}
+	primaryDriver := primary.Driver
+	if primaryDriver == "" {
+		primaryDriver = "sqlite"
+	}
+	driver := c.Directory.Driver
+	if driver == "" {
+		driver = primaryDriver
+	}
+	dsn := c.Directory.DSN
+	if dsn == "" {
+		// Inheriting the primary DSN only makes sense for the same dialect.
+		if driver != "" && !strings.EqualFold(driver, primaryDriver) {
+			return nil, fmt.Errorf("Scale.Directory.Driver %q cannot inherit Store.DSN of driver %q; set Scale.Directory.DSN explicitly", driver, primaryDriver)
+		}
+		dsn = primary.DSN
+	}
+	// New has no ctx parameter; a bounded startup context keeps a broken DSN
+	// from hanging the process forever.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	sqlDir, err := plane.OpenSQLDirectory(ctx, driver, dsn, topo)
+	if err != nil {
+		return nil, fmt.Errorf("SQL directory: %w", err)
+	}
+	r.directoryDB = sqlDir
+	// Persist the configured topology so ShardCount is shared, and a process
+	// still rolling with an older, smaller config cannot shrink it.
+	for _, domain := range []plane.Domain{plane.DomainUser, plane.DomainTask, plane.DomainMessage} {
+		if err := sqlDir.EnsureShards(ctx, domain, topo.Len(domain)); err != nil {
+			return nil, fmt.Errorf("sync topology for %s: %w", domain, err)
+		}
+	}
+	return sqlDir, nil
+}
+
 // wireProjection chooses the shared lease/bus backend. With PubSub=redis the
 // lease and bus are real Redis objects shared by every API process; otherwise
 // they are in-process implementations (single node / tests).
@@ -289,6 +340,11 @@ func (r *Runtime) Close() error {
 	if r.Bus != nil {
 		if berr := r.Bus.Close(); err == nil {
 			err = berr
+		}
+	}
+	if r.directoryDB != nil {
+		if derr := r.directoryDB.Close(); err == nil {
+			err = derr
 		}
 	}
 	return err

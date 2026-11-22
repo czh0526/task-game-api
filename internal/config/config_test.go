@@ -52,6 +52,9 @@ func TestScaleSkeletonExampleLoads(t *testing.T) {
 		c.Scale.Projection.LeaseTTL != 30*time.Second {
 		t.Fatalf("projection config not parsed: %+v", c.Scale.Projection)
 	}
+	if !c.Scale.Directory.Enabled || c.Scale.Directory.Driver != "sqlite" || c.Scale.Directory.DSN == "" {
+		t.Fatalf("SQL directory config not parsed: %+v", c.Scale.Directory)
+	}
 }
 
 func TestScaleRedisExampleLoads(t *testing.T) {
@@ -68,7 +71,23 @@ func TestScaleRedisExampleLoads(t *testing.T) {
 	if !c.Scale.Projection.Enabled || c.Scale.Projection.Channel == "" {
 		t.Fatalf("projection config not parsed: %+v", c.Scale.Projection)
 	}
+	if !c.Scale.Directory.Enabled || c.Scale.Directory.DSN == "" {
+		t.Fatalf("SQL directory config not parsed: %+v", c.Scale.Directory)
+	}
 	if err := c.Scale.Validate(); err != nil {
 		t.Fatalf("example config is invalid: %v", err)
+	}
+}
+
+func TestDirectoryDriverValidation(t *testing.T) {
+	for _, driver := range []string{"", "sqlite", "mysql"} {
+		c := ScaleConf{Enabled: true, Directory: DirectoryScaleConf{Enabled: true, Driver: driver, DSN: "file:p.db"}}
+		if err := c.Validate(); err != nil {
+			t.Fatalf("driver %q rejected: %v", driver, err)
+		}
+	}
+	c := ScaleConf{Enabled: true, Directory: DirectoryScaleConf{Enabled: true, Driver: "postgres"}}
+	if err := c.Validate(); err == nil {
+		t.Fatal("unsupported directory driver accepted")
 	}
 }

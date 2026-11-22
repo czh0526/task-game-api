@@ -56,6 +56,15 @@ Scale:
     Channel: "taskgame.signals"
     Timeout: 2s
     # Username / Password / DB are optional.
+  # P2 #3: SQL-backed routing directory. This single-node demo uses a local
+  # SQLite file; a REAL multi-machine deployment must point this at the same
+  # shared MySQL database as every other API process:
+  #   Directory: { Enabled: true, Driver: mysql,
+  #                DSN: "root:123456@tcp(mysql:3306)/taskgame_plane?charset=utf8mb4" }
+  Directory:
+    Enabled: true
+    Driver: sqlite
+    DSN: "file:data/control-plane.db?mode=rwc&_pragma=busy_timeout(5000)"
   Domains:
     UserShards: 4
     TaskShards: 2

@@ -63,6 +63,7 @@ type ScaleConf struct {
 	InstanceID string              `json:",optional"` // identifies this API process on the bus
 	Redis      RedisScaleConf      `json:",optional"` // used only when PubSub=redis
 	Projection ProjectionScaleConf `json:",optional"` // shared-lease outbox projection
+	Directory  DirectoryScaleConf  `json:",optional"` // SQL-backed routing directory
 	Domains    DomainScaleConf     `json:",optional"`
 	Archive    ArchiveScaleConf    `json:",optional"`
 	Search     SearchScaleConf     `json:",optional"`
@@ -77,6 +78,21 @@ type ProjectionScaleConf struct {
 	Interval time.Duration `json:",optional,default=5s"`  // periodic fallback scan
 	LeaseTTL time.Duration `json:",optional,default=30s"` // crash takeover window
 	Channel  string        `json:",optional"`             // default: taskgame.outbox
+}
+
+// DirectoryScaleConf persists the routing directory and shard topology in SQL
+// so every API process sees the same authoritative key -> shard mapping. With
+// Enabled=false the control plane stays process-local (InMemoryDirectory) and
+// loses its mappings on restart.
+//
+// Driver / DSN default to Store.Driver / Store.DSN, i.e. the primary database
+// doubles as the tiny control plane (only three small tables are added). A
+// multi-machine deployment should point DSN at a shared MySQL database that
+// every process can reach; an explicit Driver must match the DSN's dialect.
+type DirectoryScaleConf struct {
+	Enabled bool   `json:",optional"`
+	Driver  string `json:",optional"` // sqlite | mysql; default: inherit Store.Driver
+	DSN     string `json:",optional"` // default: inherit Store.DSN
 }
 
 // RedisScaleConf is the real cross-process signal bus. Every API process of
@@ -126,6 +142,11 @@ func (c ScaleConf) Validate() error {
 	}
 	if c.Projection.Interval < 0 || c.Projection.LeaseTTL < 0 {
 		return fmt.Errorf("Scale.Projection durations cannot be negative")
+	}
+	switch c.Directory.Driver {
+	case "", "sqlite", "mysql":
+	default:
+		return fmt.Errorf("Scale.Directory.Driver must be sqlite or mysql, got %q", c.Directory.Driver)
 	}
 	if c.Domains.UserShards < 0 || c.Domains.TaskShards < 0 {
 		return fmt.Errorf("Scale.Domains shard counts cannot be negative")
