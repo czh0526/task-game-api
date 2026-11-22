@@ -59,11 +59,23 @@ type StoreConf struct {
 // is constructed, no config file needs a Scale section.
 type ScaleConf struct {
 	Enabled    bool             `json:",optional"`
-	PubSub     string           `json:",optional"` // local (default) | shared
+	PubSub     string           `json:",optional"` // local (default) | shared | redis
 	InstanceID string           `json:",optional"` // identifies this API process on the bus
+	Redis      RedisScaleConf   `json:",optional"` // used only when PubSub=redis
 	Domains    DomainScaleConf  `json:",optional"`
 	Archive    ArchiveScaleConf `json:",optional"`
 	Search     SearchScaleConf  `json:",optional"`
+}
+
+// RedisScaleConf is the real cross-process signal bus. Every API process of
+// one deployment must point at the same Redis and the same Channel.
+type RedisScaleConf struct {
+	Addr     string        `json:",optional"`
+	Username string        `json:",optional"`
+	Password string        `json:",optional"`
+	DB       int           `json:",optional"`
+	Channel  string        `json:",optional"` // default: taskgame.signals
+	Timeout  time.Duration `json:",optional,default=2s"`
 }
 
 // DomainScaleConf declares how many databases each aggregate-root domain would
@@ -90,9 +102,15 @@ func (c ScaleConf) Validate() error {
 		return nil
 	}
 	switch c.PubSub {
-	case "", "local", "shared":
+	case "", "local", "shared", "redis":
 	default:
-		return fmt.Errorf("Scale.PubSub must be local or shared, got %q", c.PubSub)
+		return fmt.Errorf("Scale.PubSub must be local, shared or redis, got %q", c.PubSub)
+	}
+	if c.PubSub == "redis" && c.Redis.Addr == "" {
+		return fmt.Errorf("Scale.Redis.Addr is required when Scale.PubSub is redis")
+	}
+	if c.Redis.Timeout < 0 {
+		return fmt.Errorf("Scale.Redis.Timeout cannot be negative")
 	}
 	if c.Domains.UserShards < 0 || c.Domains.TaskShards < 0 {
 		return fmt.Errorf("Scale.Domains shard counts cannot be negative")

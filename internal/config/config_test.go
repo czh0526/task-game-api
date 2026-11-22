@@ -49,3 +49,19 @@ func TestScaleSkeletonExampleLoads(t *testing.T) {
 		t.Fatal("Store.DSN missing")
 	}
 }
+
+func TestScaleRedisExampleLoads(t *testing.T) {
+	c := loadExample(t, "taskgame.scale-redis.yaml")
+	if !c.Scale.Enabled || c.Scale.PubSub != "redis" {
+		t.Fatalf("redis pub/sub not enabled in example: %+v", c.Scale)
+	}
+	if c.Scale.Redis.Addr == "" || c.Scale.Redis.Channel == "" {
+		t.Fatalf("redis endpoint not parsed: %+v", c.Scale.Redis)
+	}
+	if c.Scale.Redis.Timeout != 2*time.Second {
+		t.Fatalf("Timeout = %v", c.Scale.Redis.Timeout)
+	}
+	if err := c.Scale.Validate(); err != nil {
+		t.Fatalf("example config is invalid: %v", err)
+	}
+}

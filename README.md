@@ -134,18 +134,32 @@ CGO_ENABLED=0 go run . -f etc/taskgame.mysql-3instances.yaml
 
 | 阶段 | 新增位置 | 做了什么 | 明确没做 |
 |---|---|---|---|
-| P1 剩余 | `internal/notify/fanout.go`、`remote.go` | `Fanout` 接口；`RemoteFanout` + `Transport`；`MemoryTransport` 可让两个 fan-out 实例互通，实测跨进程扇出 | 真实 Redis / NATS 传输、outbox 跨机租约 |
+| P1 剩余 | `internal/notify/fanout.go`、`remote.go`、`redis.go` | `Fanout` 接口；`RemoteFanout` + `Transport`；**`RedisTransport` 用 Redis pub/sub 做真实跨进程扇出**（miniredis 实测两实例互通）；`MemoryTransport` 保留给单进程测试 | NATS / Kafka 传输、outbox 跨机租约 |
 | P2 | `internal/plane/*`、`internal/store/shard/domains.go` | 目录表 `Directory`、拓扑 `Topology`（加片只追加）、`Resolver`、全局唯一索引 / ID 生成器接口、三域 `DomainRouter`、`TxScope` 拒绝跨片事务 | SQL 版目录、User/Task 仓储真正拆分、`global_unique` 落库 |
 | P3 | `internal/archive/*`、`internal/search/*` | 可运行的 `FileBlobStore`、归档策略与 `Archiver.Plan`、大字段清单、`MemoryTaskIndex` 与 `Projector` | 真正执行归档、Elasticsearch、CDC 投影、`emit()` 去放大 |
 | 装配 | `internal/scale/runtime.go`、`config.ScaleConf`、`svc` | `scale.Runtime` 统一生命周期，`Close` 一并释放 | — |
 
 三个容易踩坑的点已经写进代码：`chat_shards` 之类**目录表才是权威路由**；**加片不搬老数据**（`ScaleOutPlan.MigratedKeys` 恒为 0，减片才必须迁移）；**没有目录行的老 key 必须按首次部署的片数（`Topology.Pinned`）做回退哈希**，否则滚动升级时会算出别的片甚至 `index out of range`。另外要记住：**分片只把数据摊薄，不会减少总量**——在线库真正变小靠 `archive` 的冷热分离、大字段外置与去掉 `emit()` 的 N 倍投递放大。
 
-`internal/scale.TODOs` 是代码里的边界清单（10 条），README 与它保持一致。跑验证：
+### 用真实 Redis 跑多机 SSE（`Scale.PubSub: redis`）
+
+`internal/notify/redis.go` 实现了 `Transport`：**发布**走带短超时的连接池（Redis 卡住也不会阻塞产生信号的请求），**订阅**走另一条关闭读写超时的连接（阻塞订阅不能被默认的 3s 读超时反复打断）。构造时 `PING` 校验，Redis 不可用会**直接启动失败**，避免多实例静默退化成互不通信的单机。`Envelope` 用 JSON 编码，坏帧／非本系统的帧直接丢弃，不会卡住接收循环。
+
+`etc/taskgame.scale-redis.yaml` 是可运行示例，先起 Redis 再启动：
+
+```bash
+docker run --rm -p 6379:6379 --name taskgame-redis redis:7-alpine
+CGO_ENABLED=0 go run . -f etc/taskgame.scale-redis.yaml
+```
+
+第二个 API 实例复制该配置，改 `Port`（如 8892）与 `Scale.InstanceID`（如 `api-b`），**指向同一个 `Scale.Redis.Addr` 和 `Scale.Redis.Channel`**；两个进程各建一条订阅，A 进程产生的信号经 Redis 广播给 B 进程的 SSE 连接。注意 Redis pub/sub 是 **at-most-once**：进程宕机期间的信号会丢，但信号只带 id、不落库，浏览器 45s 兜底轮询会补上，因此不需要换成 Redis Stream。`Scale.PubSub: shared` 仍是进程内总线，只用于测试；本示例的 `Store` 仍是本地 SQLite，真正多机还要把 `Store` 指向共享 MySQL（见 `etc/taskgame.mysql-shards.yaml`）。
+
+`internal/scale.TODOs` 是代码里的边界清单（原 10 条，#1 的 Redis 传输已实现，现为 9 条），README 与它保持一致。跑验证：
 
 ```bash
 go test ./internal/notify ./internal/plane ./internal/store/shard ./internal/archive ./internal/search ./internal/scale
-CGO_ENABLED=0 go run . -f etc/taskgame.scale-skeleton.yaml   # 骨架开关全开的示例配置
+CGO_ENABLED=0 go run . -f etc/taskgame.scale-skeleton.yaml   # 骨架开关全开、无需外部服务
+CGO_ENABLED=0 go run . -f etc/taskgame.scale-redis.yaml      # 需先启动 Redis
 ```
 
 ## 运行

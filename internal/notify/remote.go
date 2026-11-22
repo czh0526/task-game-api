@@ -10,18 +10,19 @@ import (
 // Envelope is one cross-process signal delivery. Origin identifies the API
 // process that produced the signal, so a receiver can ignore its own echo.
 type Envelope struct {
-	Origin  string
-	UserIDs []string
-	Signal  Signal
+	Origin  string   `json:"origin"`
+	UserIDs []string `json:"user_ids"`
+	Signal  Signal   `json:"signal"`
 }
 
 // Transport carries lightweight signals between API processes.
 //
-// SKELETON BOUNDARY: only LocalTransport (no-op) and MemoryTransport (in-process
-// bus for tests) are implemented. A production deployment plugs in Redis
-// pub/sub, NATS, or Kafka here. Implementations must be safe for concurrent
-// use, must not block the caller, and must deliver to every process including
-// the origin (RemoteFanout filters its own echo).
+// Implementations: LocalTransport (single-process no-op), MemoryTransport
+// (in-process bus for tests) and RedisTransport (real cross-process Redis
+// pub/sub, see redis.go). NATS/Kafka can be added by implementing this
+// interface. Implementations must be safe for concurrent use, must not block
+// the caller, and must deliver to every process including the origin
+// (RemoteFanout filters its own echo).
 type Transport interface {
 	Publish(ctx context.Context, env Envelope) error
 	// Subscribe registers a callback. The returned stop function unregisters it.

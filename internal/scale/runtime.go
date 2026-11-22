@@ -21,8 +21,10 @@ import (
 
 // TODOs is the explicit list of work this skeleton does NOT do. Keeping it in
 // code (rather than only in docs) makes the boundary hard to forget.
+//
+// The original #1 "replace MemoryTransport with Redis pub/sub" is now DONE:
+// see notify.RedisTransport (redis.go). NATS/Kafka remain optional transports.
 var TODOs = []string{
-	"P1: replace MemoryTransport / LocalTransport with Redis pub-sub or NATS",
 	"P1: move message_outbox projection to a shared lease / event bus",
 	"P2: implement a SQL-backed plane.Directory over plane.Schema",
 	"P2: split User and Task repositories into per-domain stores guarded by shard.TxScope",
@@ -60,11 +62,29 @@ func New(c config.ScaleConf, primary config.StoreConf) (*Runtime, error) {
 	}
 	rt := &Runtime{cfg: c}
 
-	// P1 remainder: shared signal fan-out. MemoryTransport emulates several
-	// processes in one test binary; a real deployment swaps this line only.
-	if c.PubSub == "shared" {
+	// P1: signal fan-out.
+	//   local  - single process, no transport at all (PR #38 behaviour)
+	//   shared - in-process bus, emulates several API processes in one binary
+	//   redis  - REAL cross-process transport; every API process must point at
+	//            the same Redis. NewRedisTransport PINGs, so a broken bus
+	//            fails at startup instead of silently degrading to one node.
+	switch c.PubSub {
+	case "shared":
 		rt.transport = notify.NewMemoryTransport()
-	} else {
+	case "redis":
+		tr, err := notify.NewRedisTransport(notify.RedisConfig{
+			Addr:     c.Redis.Addr,
+			Username: c.Redis.Username,
+			Password: c.Redis.Password,
+			DB:       c.Redis.DB,
+			Channel:  c.Redis.Channel,
+			Timeout:  c.Redis.Timeout,
+		})
+		if err != nil {
+			return nil, err
+		}
+		rt.transport = tr
+	default:
 		rt.transport = notify.LocalTransport{}
 	}
 	fanout, err := notify.NewRemoteFanout(c.InstanceID, rt.transport)

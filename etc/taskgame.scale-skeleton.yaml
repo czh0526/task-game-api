@@ -37,7 +37,8 @@ Store:
 Scale:
   Enabled: true
   # shared uses notify.MemoryTransport: it emulates several API processes
-  # inside ONE process for tests. Production must swap in Redis pub/sub or NATS.
+  # inside ONE process for tests. For real cross-process signals use
+  # PubSub: redis (see etc/taskgame.scale-redis.yaml).
   PubSub: shared
   InstanceID: api-a
   Domains:
