@@ -128,6 +128,26 @@ CGO_ENABLED=0 go run . -f etc/taskgame.mysql-3instances.yaml
 
 **只换机器/端口**（风险最低）：`Shards` 不变，用 `mysqldump` 或物理备份把该片 `messages` 搬到新实例，只改 `ShardDSNs` 对应下标的 DSN，目录表、`chat_seq`、已读游标全部不动。
 
+## P1+ 多数据库骨架（可选，默认关闭）
+
+`Scale.Enabled=false`（配置文件不写 `Scale` 段）时，`scale.New` 直接返回 `nil`，`ServiceContext.Notifier` 仍是原来的进程内 `*notify.Broker`，**行为与 PR #38 逐字节一致**。打开 `etc/taskgame.scale-skeleton.yaml` 才会装配下列骨架；**没有搬走任何一张表，没有改动 `store.Store` / `Repos` 接口、引擎、handler、OpenAPI、SDK 与前端，API 响应不变**。
+
+| 阶段 | 新增位置 | 做了什么 | 明确没做 |
+|---|---|---|---|
+| P1 剩余 | `internal/notify/fanout.go`、`remote.go` | `Fanout` 接口；`RemoteFanout` + `Transport`；`MemoryTransport` 可让两个 fan-out 实例互通，实测跨进程扇出 | 真实 Redis / NATS 传输、outbox 跨机租约 |
+| P2 | `internal/plane/*`、`internal/store/shard/domains.go` | 目录表 `Directory`、拓扑 `Topology`（加片只追加）、`Resolver`、全局唯一索引 / ID 生成器接口、三域 `DomainRouter`、`TxScope` 拒绝跨片事务 | SQL 版目录、User/Task 仓储真正拆分、`global_unique` 落库 |
+| P3 | `internal/archive/*`、`internal/search/*` | 可运行的 `FileBlobStore`、归档策略与 `Archiver.Plan`、大字段清单、`MemoryTaskIndex` 与 `Projector` | 真正执行归档、Elasticsearch、CDC 投影、`emit()` 去放大 |
+| 装配 | `internal/scale/runtime.go`、`config.ScaleConf`、`svc` | `scale.Runtime` 统一生命周期，`Close` 一并释放 | — |
+
+三个容易踩坑的点已经写进代码：`chat_shards` 之类**目录表才是权威路由**；**加片不搬老数据**（`ScaleOutPlan.MigratedKeys` 恒为 0，减片才必须迁移）；**没有目录行的老 key 必须按首次部署的片数（`Topology.Pinned`）做回退哈希**，否则滚动升级时会算出别的片甚至 `index out of range`。另外要记住：**分片只把数据摊薄，不会减少总量**——在线库真正变小靠 `archive` 的冷热分离、大字段外置与去掉 `emit()` 的 N 倍投递放大。
+
+`internal/scale.TODOs` 是代码里的边界清单（10 条），README 与它保持一致。跑验证：
+
+```bash
+go test ./internal/notify ./internal/plane ./internal/store/shard ./internal/archive ./internal/search ./internal/scale
+CGO_ENABLED=0 go run . -f etc/taskgame.scale-skeleton.yaml   # 骨架开关全开的示例配置
+```
+
 ## 运行
 
 需要 Go 1.26（见 `go.mod`）、`python3`（`scripts/smoke.sh` 用来读 JSON）和 `curl`。不需要 C 编译器：SQLite 驱动是 `modernc.org/sqlite`。下面的命令都在仓库根目录执行。

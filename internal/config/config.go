@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/zeromicro/go-zero/rest"
@@ -11,6 +12,7 @@ type Config struct {
 	rest.RestConf
 	Auth       AuthConf
 	Store      StoreConf
+	Scale      ScaleConf
 	Escrow     EscrowConf
 	Webhook    WebhookConf
 	AutoSettle AutoSettleConf
@@ -50,6 +52,63 @@ type StoreConf struct {
 	// template containing %d, expanded into one DSN per shard.
 	ShardDSN  string   `json:",optional"`
 	ShardDSNs []string `json:",optional"`
+}
+
+// ScaleConf is the opt-in multi-database skeleton (P1 remainder / P2 / P3).
+// With Enabled=false the process behaves exactly like PR #38: no new package
+// is constructed, no config file needs a Scale section.
+type ScaleConf struct {
+	Enabled    bool             `json:",optional"`
+	PubSub     string           `json:",optional"` // local (default) | shared
+	InstanceID string           `json:",optional"` // identifies this API process on the bus
+	Domains    DomainScaleConf  `json:",optional"`
+	Archive    ArchiveScaleConf `json:",optional"`
+	Search     SearchScaleConf  `json:",optional"`
+}
+
+// DomainScaleConf declares how many databases each aggregate-root domain would
+// have. User / Task counts are scaffolding only: their repositories still live
+// in the primary store. Message is taken from Store.Shards, NOT from here.
+type DomainScaleConf struct {
+	UserShards int `json:",optional"`
+	TaskShards int `json:",optional"`
+}
+
+type ArchiveScaleConf struct {
+	Enabled   bool          `json:",optional"`
+	Dir       string        `json:",optional"`
+	HotWindow time.Duration `json:",optional"`
+}
+
+type SearchScaleConf struct {
+	Enabled bool   `json:",optional"`
+	Driver  string `json:",optional"` // memory (default)
+}
+
+func (c ScaleConf) Validate() error {
+	if !c.Enabled {
+		return nil
+	}
+	switch c.PubSub {
+	case "", "local", "shared":
+	default:
+		return fmt.Errorf("Scale.PubSub must be local or shared, got %q", c.PubSub)
+	}
+	if c.Domains.UserShards < 0 || c.Domains.TaskShards < 0 {
+		return fmt.Errorf("Scale.Domains shard counts cannot be negative")
+	}
+	if c.Archive.Enabled && c.Archive.Dir == "" {
+		return fmt.Errorf("Scale.Archive.Dir is required when archive is enabled")
+	}
+	if c.Archive.HotWindow < 0 {
+		return fmt.Errorf("Scale.Archive.HotWindow cannot be negative")
+	}
+	switch c.Search.Driver {
+	case "", "memory":
+	default:
+		return fmt.Errorf("Scale.Search.Driver %q is not implemented in the skeleton", c.Search.Driver)
+	}
+	return nil
 }
 
 // EscrowConf is the simulated credit ledger. No real payment provider is called.

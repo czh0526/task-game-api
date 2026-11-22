@@ -11,6 +11,7 @@ import (
 	"taskgame/internal/id"
 	"taskgame/internal/middleware"
 	"taskgame/internal/notify"
+	"taskgame/internal/scale"
 	"taskgame/internal/store"
 	"taskgame/internal/store/mysql"
 	"taskgame/internal/store/shard"
@@ -29,7 +30,11 @@ type ServiceContext struct {
 	Accounts   *account.Service
 	Store      store.Store
 	Dispatcher *webhook.Dispatcher
-	Notifier   *notify.Broker
+	// Fanout (not *notify.Broker) so a multi-process deployment can supply a
+	// RemoteFanout without changing the SSE handler.
+	Notifier notify.Fanout
+	// Scale is nil unless the P1+ skeleton is explicitly enabled.
+	Scale *scale.Runtime
 }
 
 // NewServiceContext opens the store and wires the engine, auth, and webhook worker.
@@ -50,13 +55,26 @@ func NewServiceContext(c config.Config) (*ServiceContext, error) {
 	if c.Store.DSN == "" {
 		return nil, fmt.Errorf("Store.DSN is required")
 	}
+	// The scale skeleton is built before the store opens so a bad config
+	// fails fast and cannot leak a connection pool.
+	rt, err := scale.New(c.Scale, c.Store)
+	if err != nil {
+		return nil, fmt.Errorf("scale: %w", err)
+	}
 	st, err := openStore(c)
 	if err != nil {
+		if rt != nil {
+			_ = rt.Close()
+		}
 		return nil, err
 	}
-	// One broker per process. A multi-instance deployment needs a shared
-	// pub/sub instead; see the SSE section in README.md.
-	notifier := notify.New()
+	// PR #38 default: one broker per process. With Scale.Enabled and
+	// PubSub=shared, the runtime supplies a RemoteFanout that also publishes
+	// over a Transport for the other API processes.
+	var notifier notify.Fanout = notify.New()
+	if rt != nil && rt.Fanout != nil {
+		notifier = rt.Fanout
+	}
 	return &ServiceContext{
 		Config: c,
 		Auth:   middleware.NewAuthMiddleware(c.Auth).Handle,
@@ -73,6 +91,7 @@ func NewServiceContext(c config.Config) (*ServiceContext, error) {
 		Accounts: account.New(st, c.Auth.JwtSecret, c.Auth.TokenTTL),
 		Store:    st,
 		Notifier: notifier,
+		Scale:    rt,
 		Dispatcher: webhook.NewDispatcher(st, webhook.Config{
 			Mode:        c.Webhook.Mode,
 			Timeout:     c.Webhook.Timeout,
@@ -143,12 +162,21 @@ func shardConfig(c config.StoreConf) (shard.Config, error) {
 	return shard.Config{Driver: driver, DSNs: dsns}, nil
 }
 
-// Close releases the store.
+// Close releases the store and, when enabled, the scale skeleton.
 func (sc *ServiceContext) Close() error {
-	if sc == nil || sc.Store == nil {
+	if sc == nil {
 		return nil
 	}
-	return sc.Store.Close()
+	var err error
+	if sc.Store != nil {
+		err = sc.Store.Close()
+	}
+	if sc.Scale != nil {
+		if serr := sc.Scale.Close(); err == nil {
+			err = serr
+		}
+	}
+	return err
 }
 
 // StartBackground runs auto-settle and webhook delivery until ctx is cancelled.
