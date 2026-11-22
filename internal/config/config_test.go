@@ -48,6 +48,10 @@ func TestScaleSkeletonExampleLoads(t *testing.T) {
 	if c.Store.DSN == "" {
 		t.Fatal("Store.DSN missing")
 	}
+	if !c.Scale.Projection.Enabled || c.Scale.Projection.Interval != 5*time.Second ||
+		c.Scale.Projection.LeaseTTL != 30*time.Second {
+		t.Fatalf("projection config not parsed: %+v", c.Scale.Projection)
+	}
 }
 
 func TestScaleRedisExampleLoads(t *testing.T) {
@@ -60,6 +64,9 @@ func TestScaleRedisExampleLoads(t *testing.T) {
 	}
 	if c.Scale.Redis.Timeout != 2*time.Second {
 		t.Fatalf("Timeout = %v", c.Scale.Redis.Timeout)
+	}
+	if !c.Scale.Projection.Enabled || c.Scale.Projection.Channel == "" {
+		t.Fatalf("projection config not parsed: %+v", c.Scale.Projection)
 	}
 	if err := c.Scale.Validate(); err != nil {
 		t.Fatalf("example config is invalid: %v", err)

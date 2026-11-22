@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"time"
 
+	"taskgame/internal/projection"
 	"taskgame/internal/store"
 	"taskgame/internal/store/shard"
 
@@ -21,6 +23,28 @@ type DB struct {
 	// primary store keeps chats, read cursors and an outbox; message bodies
 	// live in the per-shard databases owned by shards.
 	shards *shard.Set
+
+	// Optional cross-process outbox coordination. All four fields are zero
+	// unless Scale.Projection is enabled, in which case Recover claims each
+	// pending row through a shared lease before projecting it.
+	outboxOwner string
+	outboxTTL   time.Duration
+	outboxLease projection.Lease
+	outboxBus   projection.Bus
+
+	// project is a test seam: nil means the real shard insert + mark step.
+	project func(ctx context.Context, it pendingMessage) error
+}
+
+// SetOutboxCoordinator enables shared-lease projection. Without it (the
+// default) Recover behaves exactly as before: this process projects every
+// pending row itself. The caller owns lease/bus and closes them via
+// scale.Runtime.Close.
+func (d *DB) SetOutboxCoordinator(owner string, ttl time.Duration, l projection.Lease, b projection.Bus) {
+	d.outboxOwner = owner
+	d.outboxTTL = ttl
+	d.outboxLease = l
+	d.outboxBus = b
 }
 
 // New binds an already-migrated *sql.DB to the store interface.
@@ -90,6 +114,21 @@ func (d *DB) inTx(ctx context.Context, fn func(ctx context.Context, r store.Repo
 	}
 	if err := tx.Commit(); err != nil {
 		return err
+	}
+	// Broadcast AFTER commit but BEFORE the local flush, so a process that
+	// dies in the gap still leaves a hint for the others. This is only a
+	// wake-up hint: correctness comes from the periodic scan + lease, and a
+	// lost/failed publish is harmless. Fire-and-forget keeps it off the
+	// request's critical path.
+	if d.outboxBus != nil && buf != nil {
+		for _, it := range buf.items {
+			msgID := it.msg.ID
+			go func() {
+				c, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+				defer cancel()
+				_ = d.outboxBus.Publish(c, msgID)
+			}()
+		}
 	}
 	return d.flush(ctx, buf)
 }

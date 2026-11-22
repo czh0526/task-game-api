@@ -11,6 +11,7 @@ import (
 	"taskgame/internal/id"
 	"taskgame/internal/middleware"
 	"taskgame/internal/notify"
+	"taskgame/internal/projection"
 	"taskgame/internal/scale"
 	"taskgame/internal/store"
 	"taskgame/internal/store/mysql"
@@ -35,6 +36,9 @@ type ServiceContext struct {
 	Notifier notify.Fanout
 	// Scale is nil unless the P1+ skeleton is explicitly enabled.
 	Scale *scale.Runtime
+	// projectionWorker is nil unless Scale.Projection is enabled.
+	projectionWorker *projection.Worker
+	projectionCancel context.CancelFunc
 }
 
 // NewServiceContext opens the store and wires the engine, auth, and webhook worker.
@@ -75,7 +79,7 @@ func NewServiceContext(c config.Config) (*ServiceContext, error) {
 	if rt != nil && rt.Fanout != nil {
 		notifier = rt.Fanout
 	}
-	return &ServiceContext{
+	sc := &ServiceContext{
 		Config: c,
 		Auth:   middleware.NewAuthMiddleware(c.Auth).Handle,
 		Engine: engine.New(st, c.Escrow.Currency,
@@ -97,7 +101,20 @@ func NewServiceContext(c config.Config) (*ServiceContext, error) {
 			Timeout:     c.Webhook.Timeout,
 			MaxAttempts: c.Webhook.MaxAttempts,
 		}),
-	}, nil
+	}
+	// P1 #2: attach the shared-lease coordinator to the primary DB and build
+	// the worker that reacts to wake-up hints. The store type is asserted
+	// narrowly so a store without sharding support stays untouched.
+	if rt != nil && rt.ProjectionEnabled() {
+		if db, ok := st.(interface {
+			SetOutboxCoordinator(string, time.Duration, projection.Lease, projection.Bus)
+			Recover(context.Context) error
+		}); ok {
+			db.SetOutboxCoordinator(rt.InstanceID(), rt.ProjectionLeaseTTL(), rt.Lease, rt.Bus)
+			sc.projectionWorker = projection.NewWorker(db, rt.Bus, rt.ProjectionInterval())
+		}
+	}
+	return sc, nil
 }
 
 func openStore(c config.Config) (store.Store, error) {
@@ -168,6 +185,10 @@ func (sc *ServiceContext) Close() error {
 		return nil
 	}
 	var err error
+	// Stop the projection worker before closing the store / bus it uses.
+	if sc.projectionCancel != nil {
+		sc.projectionCancel()
+	}
 	if sc.Store != nil {
 		err = sc.Store.Close()
 	}
@@ -181,6 +202,11 @@ func (sc *ServiceContext) Close() error {
 
 // StartBackground runs auto-settle and webhook delivery until ctx is cancelled.
 func (sc *ServiceContext) StartBackground(ctx context.Context) {
+	if sc.projectionWorker != nil {
+		pctx, cancel := context.WithCancel(ctx)
+		sc.projectionCancel = cancel
+		go sc.projectionWorker.Run(pctx)
+	}
 	if sc.Config.AutoSettle.Enabled {
 		sc.loop(ctx, sc.Config.AutoSettle.Interval, 30*time.Second, "auto-settle", func() error {
 			_, err := sc.Engine.AutoSettleDue(ctx)

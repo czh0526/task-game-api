@@ -66,6 +66,12 @@ Scale:
   Search:
     Enabled: true
     Driver: memory
+  # P1 #2: Redis-backed shared lease + wake-up bus for outbox projection.
+  Projection:
+    Enabled: true
+    Interval: 5s
+    LeaseTTL: 30s
+    Channel: "taskgame.outbox"
 
 Escrow:
   InitialBalance: 1000000

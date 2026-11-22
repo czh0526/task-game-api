@@ -10,11 +10,14 @@ package scale
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"taskgame/internal/archive"
 	"taskgame/internal/config"
+	"taskgame/internal/id"
 	"taskgame/internal/notify"
 	"taskgame/internal/plane"
+	"taskgame/internal/projection"
 	"taskgame/internal/search"
 	"taskgame/internal/store/shard"
 )
@@ -22,10 +25,11 @@ import (
 // TODOs is the explicit list of work this skeleton does NOT do. Keeping it in
 // code (rather than only in docs) makes the boundary hard to forget.
 //
-// The original #1 "replace MemoryTransport with Redis pub/sub" is now DONE:
-// see notify.RedisTransport (redis.go). NATS/Kafka remain optional transports.
+// The original #1 "replace MemoryTransport with Redis pub/sub" is DONE:
+// see notify.RedisTransport (redis.go). The original #2 "shared lease / event
+// bus for message_outbox projection" is DONE too: see internal/projection.
+// NATS/Kafka remain optional transports.
 var TODOs = []string{
-	"P1: move message_outbox projection to a shared lease / event bus",
 	"P2: implement a SQL-backed plane.Directory over plane.Schema",
 	"P2: split User and Task repositories into per-domain stores guarded by shard.TxScope",
 	"P2: add global_unique(email -> user_id) and a Snowflake IDGenerator",
@@ -47,8 +51,11 @@ type Runtime struct {
 	Archiver     *archive.Archiver
 	TaskIndex    search.TaskIndex
 	Projector    *search.Projector
+	Lease        projection.Lease
+	Bus          projection.Bus
 	transport    notify.Transport
 	remote       *notify.RemoteFanout
+	instanceID   string
 }
 
 // New returns (nil, nil) when the skeleton is disabled, so the caller can
@@ -60,7 +67,11 @@ func New(c config.ScaleConf, primary config.StoreConf) (*Runtime, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
-	rt := &Runtime{cfg: c}
+	instanceID := c.InstanceID
+	if instanceID == "" {
+		instanceID = id.New("api_")
+	}
+	rt := &Runtime{cfg: c, instanceID: instanceID}
 
 	// P1: signal fan-out.
 	//   local  - single process, no transport at all (PR #38 behaviour)
@@ -87,11 +98,19 @@ func New(c config.ScaleConf, primary config.StoreConf) (*Runtime, error) {
 	default:
 		rt.transport = notify.LocalTransport{}
 	}
-	fanout, err := notify.NewRemoteFanout(c.InstanceID, rt.transport)
+	fanout, err := notify.NewRemoteFanout(instanceID, rt.transport)
 	if err != nil {
 		return nil, err
 	}
 	rt.remote, rt.Fanout = fanout, fanout
+
+	// P1 #2: shared-lease outbox projection + wake-up bus.
+	if c.Projection.Enabled {
+		if err := rt.wireProjection(c); err != nil {
+			_ = rt.Close()
+			return nil, err
+		}
+	}
 
 	// P2: global control plane + three-domain router.
 	dir := plane.NewInMemoryDirectory()
@@ -191,6 +210,56 @@ func registerDomains(topo *plane.Topology, c config.ScaleConf, primary config.St
 	return nil
 }
 
+// wireProjection chooses the shared lease/bus backend. With PubSub=redis the
+// lease and bus are real Redis objects shared by every API process; otherwise
+// they are in-process implementations (single node / tests).
+func (r *Runtime) wireProjection(c config.ScaleConf) error {
+	e := projection.Endpoint{
+		Addr:     c.Redis.Addr,
+		Username: c.Redis.Username,
+		Password: c.Redis.Password,
+		DB:       c.Redis.DB,
+		Channel:  c.Projection.Channel,
+		Timeout:  c.Redis.Timeout,
+	}
+	if c.PubSub == "redis" {
+		if e.Addr == "" {
+			return fmt.Errorf("Scale.Redis.Addr is required for redis-backed projection")
+		}
+		r.Lease = projection.NewRedisLease(e)
+		r.Bus = projection.NewRedisBus(e)
+		return nil
+	}
+	r.Lease = projection.NewMemoryLease()
+	r.Bus = projection.NewMemoryBus()
+	return nil
+}
+
+func (r *Runtime) InstanceID() string {
+	if r == nil {
+		return ""
+	}
+	return r.instanceID
+}
+
+func (r *Runtime) ProjectionEnabled() bool {
+	return r != nil && r.cfg.Projection.Enabled
+}
+
+func (r *Runtime) ProjectionInterval() time.Duration {
+	if r == nil || r.cfg.Projection.Interval <= 0 {
+		return projection.DefaultInterval
+	}
+	return r.cfg.Projection.Interval
+}
+
+func (r *Runtime) ProjectionLeaseTTL() time.Duration {
+	if r == nil || r.cfg.Projection.LeaseTTL <= 0 {
+		return 30 * time.Second
+	}
+	return r.cfg.Projection.LeaseTTL
+}
+
 // Transport exposes the bus so a second process (or a test) can attach.
 func (r *Runtime) Transport() notify.Transport {
 	if r == nil {
@@ -210,6 +279,16 @@ func (r *Runtime) Close() error {
 	if r.transport != nil {
 		if terr := r.transport.Close(); err == nil {
 			err = terr
+		}
+	}
+	if r.Lease != nil {
+		if lerr := r.Lease.Close(); err == nil {
+			err = lerr
+		}
+	}
+	if r.Bus != nil {
+		if berr := r.Bus.Close(); err == nil {
+			err = berr
 		}
 	}
 	return err

@@ -51,6 +51,12 @@ Scale:
   Search:
     Enabled: true
     Driver: memory
+  # P1 #2: shared-lease outbox projection. PubSub=shared uses the in-process
+  # lease/bus (single-node demo); taskgame.scale-redis.yaml uses real Redis.
+  Projection:
+    Enabled: true
+    Interval: 5s
+    LeaseTTL: 30s
 
 Escrow:
   InitialBalance: 1000000

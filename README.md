@@ -134,7 +134,7 @@ CGO_ENABLED=0 go run . -f etc/taskgame.mysql-3instances.yaml
 
 | 阶段 | 新增位置 | 做了什么 | 明确没做 |
 |---|---|---|---|
-| P1 剩余 | `internal/notify/fanout.go`、`remote.go`、`redis.go` | `Fanout` 接口；`RemoteFanout` + `Transport`；**`RedisTransport` 用 Redis pub/sub 做真实跨进程扇出**（miniredis 实测两实例互通）；`MemoryTransport` 保留给单进程测试 | NATS / Kafka 传输、outbox 跨机租约 |
+| P1 | `internal/notify/*`、`internal/projection/*` | `Fanout` + `RedisTransport` 跨进程 SSE 扇出；**`Lease`（Redis SET NX / 进程内）+ `Bus`（Redis pub/sub / 进程内）+ `Worker`**：`Recover` 每行先认领共享租约，提交后广播唤醒 hint，定时兜底；实测两进程并发只投影一次 | NATS / Kafka 传输、SQL 版租约（当前用 Redis / 内存） |
 | P2 | `internal/plane/*`、`internal/store/shard/domains.go` | 目录表 `Directory`、拓扑 `Topology`（加片只追加）、`Resolver`、全局唯一索引 / ID 生成器接口、三域 `DomainRouter`、`TxScope` 拒绝跨片事务 | SQL 版目录、User/Task 仓储真正拆分、`global_unique` 落库 |
 | P3 | `internal/archive/*`、`internal/search/*` | 可运行的 `FileBlobStore`、归档策略与 `Archiver.Plan`、大字段清单、`MemoryTaskIndex` 与 `Projector` | 真正执行归档、Elasticsearch、CDC 投影、`emit()` 去放大 |
 | 装配 | `internal/scale/runtime.go`、`config.ScaleConf`、`svc` | `scale.Runtime` 统一生命周期，`Close` 一并释放 | — |
@@ -154,10 +154,21 @@ CGO_ENABLED=0 go run . -f etc/taskgame.scale-redis.yaml
 
 第二个 API 实例复制该配置，改 `Port`（如 8892）与 `Scale.InstanceID`（如 `api-b`），**指向同一个 `Scale.Redis.Addr` 和 `Scale.Redis.Channel`**；两个进程各建一条订阅，A 进程产生的信号经 Redis 广播给 B 进程的 SSE 连接。注意 Redis pub/sub 是 **at-most-once**：进程宕机期间的信号会丢，但信号只带 id、不落库，浏览器 45s 兜底轮询会补上，因此不需要换成 Redis Stream。`Scale.PubSub: shared` 仍是进程内总线，只用于测试；本示例的 `Store` 仍是本地 SQLite，真正多机还要把 `Store` 指向共享 MySQL（见 `etc/taskgame.mysql-shards.yaml`）。
 
-`internal/scale.TODOs` 是代码里的边界清单（原 10 条，#1 的 Redis 传输已实现，现为 9 条），README 与它保持一致。跑验证：
+### 用共享租约投影 `message_outbox`（`Scale.Projection`）
+
+PR #38 的 `Recover` 是「每个进程启动时全表扫 `projected=0` 并各自投影」，多实例会重复劳动。#2 把它改成协同式：
+
+- `internal/projection` 提供 `Lease`（`RedisLease` = `SET NX PX` + Lua 比较删除；`MemoryLease` 给单机/测试）、`Bus`（`RedisBus` 用独立的 `taskgame.outbox` 频道；`MemoryBus` 给单机）、`Worker`（事件唤醒 + 定时兜底）。
+- `sqlstore.DB.Recover` 对每行先 `claimOutbox` 认领租约：拿不到就跳过（别的进程在处理），投影失败立刻释放让别人重试，**成功则保留到 TTL 自动过期**——若立即释放，另一个持有旧 pending 快照的进程会重复投影同一行。
+- 事务提交后、本地 `flush` 之前**异步广播** outbox id 作为加速唤醒 hint；`flush` 仍由写进程同步投影，保证「发消息返回即可读」的契约不变。
+- 正确性不依赖 Redis：`shard.Set.Insert` 按 `message_id` 幂等，`projected=1` 是权威事实；租约只消除重复劳动，事件只缩短崩溃恢复延迟，丢事件由定时扫描兜底。
+
+`Scale.Projection.Enabled=true` 时 `scale.Runtime` 装配租约/总线，`svc` 把 coordinator 注入主库并在 `StartBackground` 启动 worker；`PubSub=redis` 用真 Redis，`shared` / `local` 用进程内实现。默认全关时 `Recover` 与 PR #38 逐字节一致。
+
+`internal/scale.TODOs` 是代码里的边界清单（原 10 条，#1 Redis 传输、#2 outbox 共享租约均已实现，现为 8 条），README 与它保持一致。跑验证：
 
 ```bash
-go test ./internal/notify ./internal/plane ./internal/store/shard ./internal/archive ./internal/search ./internal/scale
+go test ./internal/notify ./internal/projection ./internal/store/sqlstore ./internal/plane ./internal/store/shard ./internal/archive ./internal/search ./internal/scale ./internal/svc
 CGO_ENABLED=0 go run . -f etc/taskgame.scale-skeleton.yaml   # 骨架开关全开、无需外部服务
 CGO_ENABLED=0 go run . -f etc/taskgame.scale-redis.yaml      # 需先启动 Redis
 ```
@@ -327,7 +338,7 @@ With `Store.Shards > 1`, message bodies leave the primary database and are route
 
 - Default `ShardDriver: sqlite`: `ShardDSN: "file:data/shard-%d.db"` expands into one local file per shard.
 - `ShardDriver: mysql`: `ShardDSNs` gives **one DSN per shard, in shard order**, and may point at different hosts so every API process reaches the same shard databases over the network. See `etc/taskgame.mysql-shards.yaml`; a fresh compose volume creates `taskgame_shard_0/1` via `etc/mysql-init.d`. The service creates the `messages` table but not the databases themselves.
-- Routing (FNV-1a, ordered pair for direct chats), `chat_shards` directory, transactional `message_outbox`, post-commit projection and startup `Recover` are unchanged. Only the `messages` table is sharded; projection is still performed locally by the writing process, with no cross-machine event bus (the SSE `notify.Broker` is process-local too) or 2PC.
+- Routing (FNV-1a, ordered pair for direct chats), `chat_shards` directory, transactional `message_outbox`, post-commit projection and startup `Recover` are unchanged. Only the `messages` table is sharded. In the base prototype projection is performed locally by the writing process and the SSE `notify.Broker` is process-local; the opt-in `Scale` skeleton described above adds a Redis pub/sub signal bus and a shared-lease outbox projection worker. Neither path uses 2PC.
 
 MySQL-backed shard tests (`internal/store/shard/mysql_test.go`, `internal/integration/sharded_mysql_messages_test.go`) run when `TASKGAME_MYSQL_DSN` is set and skip otherwise; they create and drop their own temporary databases.
 

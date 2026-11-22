@@ -58,13 +58,25 @@ type StoreConf struct {
 // With Enabled=false the process behaves exactly like PR #38: no new package
 // is constructed, no config file needs a Scale section.
 type ScaleConf struct {
-	Enabled    bool             `json:",optional"`
-	PubSub     string           `json:",optional"` // local (default) | shared | redis
-	InstanceID string           `json:",optional"` // identifies this API process on the bus
-	Redis      RedisScaleConf   `json:",optional"` // used only when PubSub=redis
-	Domains    DomainScaleConf  `json:",optional"`
-	Archive    ArchiveScaleConf `json:",optional"`
-	Search     SearchScaleConf  `json:",optional"`
+	Enabled    bool                `json:",optional"`
+	PubSub     string              `json:",optional"` // local (default) | shared | redis
+	InstanceID string              `json:",optional"` // identifies this API process on the bus
+	Redis      RedisScaleConf      `json:",optional"` // used only when PubSub=redis
+	Projection ProjectionScaleConf `json:",optional"` // shared-lease outbox projection
+	Domains    DomainScaleConf     `json:",optional"`
+	Archive    ArchiveScaleConf    `json:",optional"`
+	Search     SearchScaleConf     `json:",optional"`
+}
+
+// ProjectionScaleConf turns message_outbox crash recovery into a coordinated
+// multi-process task: a shared Lease prevents duplicate projection and a Bus
+// wakes the other processes when a new outbox row appears. With Enabled=false
+// Recover stays the original single-process scan.
+type ProjectionScaleConf struct {
+	Enabled  bool          `json:",optional"`
+	Interval time.Duration `json:",optional,default=5s"`  // periodic fallback scan
+	LeaseTTL time.Duration `json:",optional,default=30s"` // crash takeover window
+	Channel  string        `json:",optional"`             // default: taskgame.outbox
 }
 
 // RedisScaleConf is the real cross-process signal bus. Every API process of
@@ -111,6 +123,9 @@ func (c ScaleConf) Validate() error {
 	}
 	if c.Redis.Timeout < 0 {
 		return fmt.Errorf("Scale.Redis.Timeout cannot be negative")
+	}
+	if c.Projection.Interval < 0 || c.Projection.LeaseTTL < 0 {
+		return fmt.Errorf("Scale.Projection durations cannot be negative")
 	}
 	if c.Domains.UserShards < 0 || c.Domains.TaskShards < 0 {
 		return fmt.Errorf("Scale.Domains shard counts cannot be negative")
