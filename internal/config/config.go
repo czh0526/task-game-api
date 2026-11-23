@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/zeromicro/go-zero/rest"
@@ -11,6 +12,7 @@ type Config struct {
 	rest.RestConf
 	Auth       AuthConf
 	Store      StoreConf
+	Scale      ScaleConf
 	Escrow     EscrowConf
 	Webhook    WebhookConf
 	AutoSettle AutoSettleConf
@@ -32,10 +34,149 @@ type ApiKeyConf struct {
 }
 
 // StoreConf selects the Store implementation.
-// sqlite is the single-writer default. mysql is the shared database for more than one API process.
+//
+// The shipped default (etc/taskgame.yaml) is horizontal cell sharding: N
+// independent MySQL databases with identical full schemas. Each cell owns
+// roughly 1/N of users, tasks, messages and every other business table; there
+// is no full primary database. Cells takes precedence over DSN/Shards.
+//
+// Two older modes remain for backwards compatibility and for the PR #38
+// prototype: a single database (DSN) and message-only sharding (Shards +
+// ShardDSNs, which keeps a primary database). SQLite is available for local
+// single-process debugging by setting Driver: sqlite explicitly.
 type StoreConf struct {
-	Driver string `json:",default=sqlite,options=sqlite|mysql"`
-	DSN    string
+	// Driver is sqlite or mysql. When omitted, openStore falls back to sqlite
+	// for backwards compatibility with old local configs.
+	Driver string `json:",optional,options=sqlite|mysql"`
+	DSN    string `json:",optional"`
+	// Cells enables horizontal, unit-based sharding. One DSN per cell, in cell
+	// order. They may be different MySQL instances (different hosts/ports) or
+	// different schemas on one server. Every API process must use the same
+	// ordered list. When set, DSN and Shards are ignored.
+	Cells []string `json:",optional"`
+	// Shards > 1 enables the older message-only sharding prototype: message
+	// bodies are routed by chat into N independent databases while a primary
+	// database keeps the other tables. 0 or 1 keeps single-database behaviour.
+	Shards int `json:",optional,default=0"`
+	// ShardDriver selects the shard SQL dialect: sqlite (one file per shard)
+	// or mysql (network databases, one per API process that connects).
+	ShardDriver string `json:",optional,default=sqlite"`
+	// ShardDSNs is the preferred form: one DSN per shard, in shard order. A
+	// MySQL list may point at different hosts. ShardDSN is kept as a shorthand
+	// template containing %d, expanded into one DSN per shard.
+	ShardDSN  string   `json:",optional"`
+	ShardDSNs []string `json:",optional"`
+}
+
+// ScaleConf is the opt-in multi-database skeleton (P1 remainder / P2 / P3).
+// With Enabled=false the process behaves exactly like PR #38: no new package
+// is constructed, no config file needs a Scale section.
+type ScaleConf struct {
+	Enabled    bool                `json:",optional"`
+	PubSub     string              `json:",optional"` // local (default) | shared | redis
+	InstanceID string              `json:",optional"` // identifies this API process on the bus
+	Redis      RedisScaleConf      `json:",optional"` // used only when PubSub=redis
+	Projection ProjectionScaleConf `json:",optional"` // shared-lease outbox projection
+	Directory  DirectoryScaleConf  `json:",optional"` // SQL-backed routing directory
+	Domains    DomainScaleConf     `json:",optional"`
+	Archive    ArchiveScaleConf    `json:",optional"`
+	Search     SearchScaleConf     `json:",optional"`
+}
+
+// ProjectionScaleConf turns message_outbox crash recovery into a coordinated
+// multi-process task: a shared Lease prevents duplicate projection and a Bus
+// wakes the other processes when a new outbox row appears. With Enabled=false
+// Recover stays the original single-process scan.
+type ProjectionScaleConf struct {
+	Enabled  bool          `json:",optional"`
+	Interval time.Duration `json:",optional,default=5s"`  // periodic fallback scan
+	LeaseTTL time.Duration `json:",optional,default=30s"` // crash takeover window
+	Channel  string        `json:",optional"`             // default: taskgame.outbox
+}
+
+// DirectoryScaleConf persists the routing directory and shard topology in SQL
+// so every API process sees the same authoritative key -> shard mapping. With
+// Enabled=false the control plane stays process-local (InMemoryDirectory) and
+// loses its mappings on restart.
+//
+// Driver / DSN default to Store.Driver / Store.DSN, i.e. the primary database
+// doubles as the tiny control plane (only three small tables are added). A
+// multi-machine deployment should point DSN at a shared MySQL database that
+// every process can reach; an explicit Driver must match the DSN's dialect.
+type DirectoryScaleConf struct {
+	Enabled bool   `json:",optional"`
+	Driver  string `json:",optional"` // sqlite | mysql; default: inherit Store.Driver
+	DSN     string `json:",optional"` // default: inherit Store.DSN
+}
+
+// RedisScaleConf is the real cross-process signal bus. Every API process of
+// one deployment must point at the same Redis and the same Channel.
+type RedisScaleConf struct {
+	Addr     string        `json:",optional"`
+	Username string        `json:",optional"`
+	Password string        `json:",optional"`
+	DB       int           `json:",optional"`
+	Channel  string        `json:",optional"` // default: taskgame.signals
+	Timeout  time.Duration `json:",optional,default=2s"`
+}
+
+// DomainScaleConf declares how many databases each aggregate-root domain would
+// have. User / Task counts are scaffolding only: their repositories still live
+// in the primary store. Message is taken from Store.Shards, NOT from here.
+type DomainScaleConf struct {
+	UserShards int `json:",optional"`
+	TaskShards int `json:",optional"`
+}
+
+type ArchiveScaleConf struct {
+	Enabled   bool          `json:",optional"`
+	Dir       string        `json:",optional"`
+	HotWindow time.Duration `json:",optional"`
+}
+
+type SearchScaleConf struct {
+	Enabled bool   `json:",optional"`
+	Driver  string `json:",optional"` // memory (default)
+}
+
+func (c ScaleConf) Validate() error {
+	if !c.Enabled {
+		return nil
+	}
+	switch c.PubSub {
+	case "", "local", "shared", "redis":
+	default:
+		return fmt.Errorf("Scale.PubSub must be local, shared or redis, got %q", c.PubSub)
+	}
+	if c.PubSub == "redis" && c.Redis.Addr == "" {
+		return fmt.Errorf("Scale.Redis.Addr is required when Scale.PubSub is redis")
+	}
+	if c.Redis.Timeout < 0 {
+		return fmt.Errorf("Scale.Redis.Timeout cannot be negative")
+	}
+	if c.Projection.Interval < 0 || c.Projection.LeaseTTL < 0 {
+		return fmt.Errorf("Scale.Projection durations cannot be negative")
+	}
+	switch c.Directory.Driver {
+	case "", "sqlite", "mysql":
+	default:
+		return fmt.Errorf("Scale.Directory.Driver must be sqlite or mysql, got %q", c.Directory.Driver)
+	}
+	if c.Domains.UserShards < 0 || c.Domains.TaskShards < 0 {
+		return fmt.Errorf("Scale.Domains shard counts cannot be negative")
+	}
+	if c.Archive.Enabled && c.Archive.Dir == "" {
+		return fmt.Errorf("Scale.Archive.Dir is required when archive is enabled")
+	}
+	if c.Archive.HotWindow < 0 {
+		return fmt.Errorf("Scale.Archive.HotWindow cannot be negative")
+	}
+	switch c.Search.Driver {
+	case "", "memory":
+	default:
+		return fmt.Errorf("Scale.Search.Driver %q is not implemented in the skeleton", c.Search.Driver)
+	}
+	return nil
 }
 
 // EscrowConf is the simulated credit ledger. No real payment provider is called.

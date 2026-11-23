@@ -8,17 +8,54 @@ jobs:
   test:
     runs-on: ubuntu-latest
     services:
-      mysql:
+      # The default config (etc/taskgame.yaml) is three independent cell
+      # databases on 3307/3308/3309, each with the full schema.
+      mysql-cell-0:
         image: mysql:8.4.11
         env:
           MYSQL_ROOT_PASSWORD: "123456"
           MYSQL_DATABASE: taskgame
         ports:
-          - 3306:3306
+          - 3307:3306
         options: >-
           --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -p123456"
           --health-interval=5s
           --health-timeout=5s
+          --health-retries=30
+      mysql-cell-1:
+        image: mysql:8.4.11
+        env:
+          MYSQL_ROOT_PASSWORD: "123456"
+          MYSQL_DATABASE: taskgame
+        ports:
+          - 3308:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -p123456"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+      mysql-cell-2:
+        image: mysql:8.4.11
+        env:
+          MYSQL_ROOT_PASSWORD: "123456"
+          MYSQL_DATABASE: taskgame
+        ports:
+          - 3309:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -p123456"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+      # The default config turns on Scale.PubSub=redis, so the API requires
+      # a reachable Redis even for the single-process smoke test.
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=3s
           --health-retries=30
     steps:
       - uses: actions/checkout@v4
@@ -29,13 +66,15 @@ jobs:
         env:
           CGO_ENABLED: "0"
           TASKGAME_MYSQL_REQUIRED: "1"
-          TASKGAME_MYSQL_DSN: root:123456@tcp(127.0.0.1:3306)/taskgame?charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=false
+          # Tests create their own temporary schemas; cell 0 is a convenient
+          # MySQL instance with CREATE DATABASE rights.
+          TASKGAME_MYSQL_DSN: root:123456@tcp(127.0.0.1:3307)/taskgame?charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=false
         run: go test ./...
-      - name: smoke against MySQL
+      - name: smoke against the three cells
         env:
           CGO_ENABLED: "0"
         run: |
-          go run . -f etc/taskgame.mysql.yaml > /tmp/taskgame.log 2>&1 &
+          go run . > /tmp/taskgame.log 2>&1 &
           echo $! > /tmp/taskgame.pid
           ok=0
           for _ in $(seq 1 40); do

@@ -17,8 +17,9 @@
 #   profile:        optional nickname on register, PATCH /me, GET /me, public friend and
 #                   score views, duplicate display names, and rejected values.
 #
-# Start the API first, from the repo root:
-#   CGO_ENABLED=0 go run . -f etc/taskgame.yaml
+# Start the databases and the API first, from the repo root:
+#   docker compose up -d                    # 3 independent MySQL cell databases + Redis
+#   CGO_ENABLED=0 go run .                  # loads etc/taskgame.yaml by default
 #   # or: make run
 #
 # Competitive confirm needs a submission id. The task lists submissions[].
@@ -574,7 +575,8 @@ wait_health() {
   done
   echo "No server at ${BASE}/health." >&2
   echo "Start it in another shell from the repo root:" >&2
-  echo "  CGO_ENABLED=0 go run . -f etc/taskgame.yaml" >&2
+  echo "  docker compose up -d" >&2
+  echo "  CGO_ENABLED=0 go run ." >&2
   echo "  # or: make run" >&2
   exit 1
 }

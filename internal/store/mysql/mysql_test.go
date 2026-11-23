@@ -193,3 +193,69 @@ func TestFiltersAndClaim(t *testing.T) {
 		t.Fatalf("delivered row reclaimed %+v %v", final, err)
 	}
 }
+
+// TestShardTablesOnUpgradedSchema reproduces a database stamped at schema
+// version 1 before chat_shards / message_outbox existed: re-opening it must
+// add both tables, otherwise enabling sharding fails at startup.
+func TestShardTablesOnUpgradedSchema(t *testing.T) {
+	base := os.Getenv("TASKGAME_MYSQL_DSN")
+	if base == "" {
+		if os.Getenv("TASKGAME_MYSQL_REQUIRED") == "1" {
+			t.Fatal("TASKGAME_MYSQL_DSN is required")
+		}
+		t.Skip("TASKGAME_MYSQL_DSN not set")
+	}
+	cfg, err := mysqldriver.ParseDSN(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminCfg := *cfg
+	adminCfg.DBName = "mysql"
+	admin, err := sql.Open("mysql", adminCfg.FormatDSN())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw [8]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		t.Fatal(err)
+	}
+	name := "tg_upgrade_" + hex.EncodeToString(raw[:])
+	if _, err := admin.Exec("CREATE DATABASE `" + name + "` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"); err != nil {
+		_ = admin.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = admin.Exec("DROP DATABASE IF EXISTS `" + name + "`")
+		_ = admin.Close()
+	})
+	dbCfg := *cfg
+	dbCfg.DBName = name
+	dsn := dbCfg.FormatDSN()
+
+	st, err := Open(dsn, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate an older database: version 1 is stamped, but the two tables
+	// appended to schema.sql later were never created.
+	if _, err := admin.Exec("DROP TABLE `" + name + "`.`chat_shards`, `" + name + "`.`message_outbox`"); err != nil {
+		t.Fatal(err)
+	}
+	st2, err := Open(dsn, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st2.Close()
+	var n int
+	if err := admin.QueryRow(`
+		SELECT COUNT(*) FROM information_schema.TABLES
+		WHERE TABLE_SCHEMA = ? AND TABLE_NAME IN ('chat_shards', 'message_outbox')`, name).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("upgraded database has %d shard tables, want 2", n)
+	}
+}

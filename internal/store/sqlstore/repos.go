@@ -11,6 +11,7 @@ import (
 	"taskgame/internal/id"
 	"taskgame/internal/model"
 	"taskgame/internal/store"
+	"taskgame/internal/store/shard"
 )
 
 type userRepo struct {
@@ -1003,6 +1004,12 @@ func (r *deliveryRepo) Finish(ctx context.Context, id, claimToken, status, lastE
 type chatRepo struct {
 	q querier
 	d Dialect
+	// shards is nil in the default single-database deployment. When enabled,
+	// message bodies live in per-shard SQLite files and the primary store
+	// keeps only the outbox, the directory and the read cursors.
+	shards *shard.Set
+	// buf is set only inside InTx; it defers shard writes until commit.
+	buf *txBuffer
 }
 
 const chatCols = `id, task_id, member_ids, created_at, type, pair_low, pair_high`
@@ -1023,7 +1030,11 @@ func (r *chatRepo) InsertChat(ctx context.Context, c model.Chat) error {
 	if r.d.IsUnique(err) {
 		return store.ErrConflict
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	c.Type = kind
+	return r.registerShard(ctx, c)
 }
 
 func (r *chatRepo) UpdateChat(ctx context.Context, c model.Chat) error {
@@ -1123,6 +1134,25 @@ func scanChat(s scanner) (model.Chat, error) {
 }
 
 func (r *chatRepo) InsertMessage(ctx context.Context, m model.Message) error {
+	if r.shards != nil {
+		idx, err := r.shardFor(ctx, m.ChatID)
+		if err != nil {
+			return err
+		}
+		if err := r.writeOutbox(ctx, idx, m); err != nil {
+			return err
+		}
+		if r.buf != nil {
+			// Deferred until the surrounding primary transaction commits.
+			r.buf.add(idx, m)
+			return nil
+		}
+		if err := r.shards.Insert(ctx, idx, m); err != nil {
+			return err
+		}
+		_, err = r.q.ExecContext(ctx, `UPDATE message_outbox SET projected = 1 WHERE id = ?`, m.ID)
+		return err
+	}
 	_, err := r.q.ExecContext(ctx, `
 		INSERT INTO messages (id, chat_id, sender_id, type, text, attachment_ref, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -1131,6 +1161,9 @@ func (r *chatRepo) InsertMessage(ctx context.Context, m model.Message) error {
 }
 
 func (r *chatRepo) ListDirectUnreads(ctx context.Context, userID string) ([]model.DirectUnread, error) {
+	if r.shards != nil {
+		return r.listDirectUnreadsSharded(ctx, userID)
+	}
 	rows, err := r.q.QueryContext(ctx, `
 		SELECT c.id,
 		       CASE WHEN c.pair_low = ? THEN c.pair_high ELSE c.pair_low END,
@@ -1165,7 +1198,62 @@ func (r *chatRepo) ListDirectUnreads(ctx context.Context, userID string) ([]mode
 	return out, rows.Err()
 }
 
+// listDirectUnreadsSharded reads chat membership and cursors from the primary
+// store, then asks each chat's shard for the unread count. The single SQLite
+// connection is released before any secondary query runs.
+func (r *chatRepo) listDirectUnreadsSharded(ctx context.Context, userID string) ([]model.DirectUnread, error) {
+	type directRow struct {
+		chatID, peerID string
+		cursor         int64
+	}
+	rows, err := r.q.QueryContext(ctx, `
+		SELECT c.id,
+		       CASE WHEN c.pair_low = ? THEN c.pair_high ELSE c.pair_low END,
+		       COALESCE((SELECT cr.last_read_rowid FROM chat_reads cr
+		                 WHERE cr.user_id = ? AND cr.chat_id = c.id), 0)
+		FROM chats c
+		WHERE c.type = ? AND (c.pair_low = ? OR c.pair_high = ?)`,
+		userID, userID, model.ChatDirect, userID, userID)
+	if err != nil {
+		return nil, err
+	}
+	list := []directRow{}
+	for rows.Next() {
+		var row directRow
+		if err := rows.Scan(&row.chatID, &row.peerID, &row.cursor); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		list = append(list, row)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	_ = rows.Close()
+	out := []model.DirectUnread{}
+	for _, row := range list {
+		idx, err := r.shardFor(ctx, row.chatID)
+		if err != nil {
+			return nil, err
+		}
+		n, err := r.shards.CountUnread(ctx, idx, row.chatID, userID, row.cursor)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, model.DirectUnread{ChatID: row.chatID, PeerID: row.peerID, UnreadCount: n})
+	}
+	return out, nil
+}
+
 func (r *chatRepo) MessageRowID(ctx context.Context, chatID, messageID string) (int64, error) {
+	if r.shards != nil {
+		idx, err := r.shardFor(ctx, chatID)
+		if err != nil {
+			return 0, err
+		}
+		return r.shards.MessageSeq(ctx, idx, chatID, messageID)
+	}
 	var rowid int64
 	err := r.q.QueryRowContext(ctx, `
 		SELECT `+r.d.MessageSeq()+` FROM messages WHERE chat_id = ? AND id = ?`, chatID, messageID).Scan(&rowid)
@@ -1176,6 +1264,13 @@ func (r *chatRepo) MessageRowID(ctx context.Context, chatID, messageID string) (
 }
 
 func (r *chatRepo) LatestMessageRow(ctx context.Context, chatID string) (int64, string, bool, error) {
+	if r.shards != nil {
+		idx, err := r.shardFor(ctx, chatID)
+		if err != nil {
+			return 0, "", false, err
+		}
+		return r.shards.Latest(ctx, idx, chatID)
+	}
 	var rowid int64
 	var messageID string
 	err := r.q.QueryRowContext(ctx, `
@@ -1190,6 +1285,17 @@ func (r *chatRepo) LatestMessageRow(ctx context.Context, chatID string) (int64, 
 }
 
 func (r *chatRepo) CountUnread(ctx context.Context, userID, chatID string) (int64, error) {
+	if r.shards != nil {
+		cursor, err := r.readCursor(ctx, userID, chatID)
+		if err != nil {
+			return 0, err
+		}
+		idx, err := r.shardFor(ctx, chatID)
+		if err != nil {
+			return 0, err
+		}
+		return r.shards.CountUnread(ctx, idx, chatID, userID, cursor)
+	}
 	var n int64
 	err := r.q.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM messages m
@@ -1212,6 +1318,13 @@ func (r *chatRepo) AdvanceRead(ctx context.Context, userID, chatID string, rowid
 }
 
 func (r *chatRepo) ListMessages(ctx context.Context, chatID string, limit, offset int) ([]model.Message, error) {
+	if r.shards != nil {
+		idx, err := r.shardFor(ctx, chatID)
+		if err != nil {
+			return nil, err
+		}
+		return r.shards.List(ctx, idx, chatID, limit, offset)
+	}
 	if limit <= 0 {
 		limit = 50
 	}

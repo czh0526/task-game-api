@@ -1,3 +1,29 @@
+# Default config: horizontal cell sharding (plan A).
+#
+# Three INDEPENDENT MySQL databases, each on its own instance/port, run the
+# SAME full schema. Every cell owns roughly 1/3 of users, tasks, messages and
+# all other business tables. There is NO primary database holding every row:
+#
+#   3307/taskgame  cell 0: ~1/3 of users + their tasks, chats, messages, ledger...
+#   3308/taskgame  cell 1: ~1/3 of users + their tasks, chats, messages, ledger...
+#   3309/taskgame  cell 2: ~1/3 of users + their tasks, chats, messages, ledger...
+#
+# A request is routed by the authenticated user id (or by the task/chat id in
+# the URL) to exactly one cell, and its transaction stays inside that cell.
+# No 2PC. Global reads (market listing, login by email) fan out and merge.
+#
+# Start the three databases and Redis first (compose starts all four):
+#   docker compose up -d
+#   CGO_ENABLED=0 go run .            # this file is loaded by default
+#
+# Redis is REQUIRED by this config: Scale.PubSub=redis publishes SSE signals
+# on a shared channel and PINGs Redis at startup, so `make run` fails fast
+# when 6379 is unreachable. Redis carries signals only, never business rows.
+#
+# To run all three cells on ONE MySQL server instead, keep the same port and
+# give each DSN a different schema name (for example taskgame_cell_0/1/2).
+# Adding or removing a cell means editing the ordered Cells list; see the
+# "Resizing the cells" section of the README (it is a data migration).
 Name: taskgame-api
 Host: 0.0.0.0
 Port: 8891
@@ -23,15 +49,14 @@ Auth:
     - Key: dev-arbiter-key
       UserId: usr_arbiter
 
-# sqlite: one connection, local file, the default. mysql: MySQL 8.0.19+ pool for
-# more than one API process. Do not point two processes at one SQLite file.
-# A ready mysql config is etc/taskgame.mysql.yaml. clientFoundRows and utf8mb4
-# are applied when the DSN does not already set them.
 Store:
-  Driver: sqlite
-  DSN: "file:data/taskgame.db?mode=rwc&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_txlock=immediate"
-  # Driver: mysql
-  # DSN: "root:123456@tcp(127.0.0.1:3306)/taskgame?charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=false"
+  Driver: mysql
+  # One DSN per cell, in cell order. Every API process must use the same
+  # ordered list. No DSN / Shards setting is used when Cells is present.
+  Cells:
+    - "root:123456@tcp(127.0.0.1:3307)/taskgame?charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=false"
+    - "root:123456@tcp(127.0.0.1:3308)/taskgame?charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=false"
+    - "root:123456@tcp(127.0.0.1:3309)/taskgame?charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=false"
 
 # Simulated credits. InitialBalance is granted the first time a user is seen.
 # ArbiterUserIds may POST /v1/tasks/{taskId}/arbitrate. They are not the publisher or the executor.
@@ -63,3 +88,20 @@ AutoSettle:
   StartTimeout: 72h
   SeatTimeout: 72h
   WinnerSelectHours: 72
+
+# Cross-process SSE signal bus. Every API process in one deployment must use
+# the same Redis Addr and Channel. Leave InstanceID empty: each process then
+# generates a unique id at startup, so copying this file for a second API
+# process only needs a different Port. A fixed InstanceID is still accepted,
+# but MUST be unique (never reuse the same value in two processes), otherwise
+# the echo filter drops the other process's signals.
+# The other Scale sub-systems (Projection / Directory / Domains / Archive /
+# Search) stay disabled: they belong to the legacy message-sharding prototype.
+Scale:
+  Enabled: true
+  PubSub: redis
+  # InstanceID: api-a   # optional; empty = auto-generated unique id per process
+  Redis:
+    Addr: "127.0.0.1:6379"
+    Channel: "taskgame.signals"
+    Timeout: 2s

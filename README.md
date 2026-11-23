@@ -1,6 +1,6 @@
 # Task Game Open Protocol v0.1
 
-Simulated-escrow HTTP API for the Task Game Open Protocol. The contract is [`api/openapi.yaml`](api/openapi.yaml) (OpenAPI 3.1). The service is a [go-zero](https://github.com/zeromicro/go-zero) API: `taskgame.api` is the goctl source, handlers and routes are generated, and the task state machine lives in `internal/engine` behind a `store.Store` interface. The default store is SQLite through `modernc.org/sqlite` (no cgo). `Store.Driver: mysql` uses MySQL 8.0.19+ (InnoDB, utf8mb4) so more than one API process can share one database.
+Simulated-escrow HTTP API for the Task Game Open Protocol. The contract is [`api/openapi.yaml`](api/openapi.yaml) (OpenAPI 3.1). The service is a [go-zero](https://github.com/zeromicro/go-zero) API: `taskgame.api` is the goctl source, handlers and routes are generated, and the task state machine lives in `internal/engine` behind a `store.Store` interface. The shipped default `etc/taskgame.yaml` is MySQL 8.0.19+ (InnoDB, utf8mb4) with **horizontal cell sharding**: three independent databases with identical full schemas, each owning about one third of users, tasks, messages and every other table. There is no primary database holding all rows. SQLite through `modernc.org/sqlite` (no cgo) remains available for local single-process debugging by setting `Store.Driver: sqlite` explicitly.
 
 Credits are simulated. There is no payment provider. Locked v0.1 rules:
 
@@ -45,7 +45,7 @@ Mint a dev JWT with `make token` (subject defaults to `usr_publisher`).
 - 连接建立时发 `hello`；带 `Last-Event-ID` 重连时改发 `resync`。两种帧都让前端重新拉一次，覆盖断线期间漏掉的消息；每 15 秒另发 `: ping` 注释帧保活。
 - `POST /chats/{id}/messages` 在事务**提交之后**才广播 `chat.message`（只含 `chat_id` / `message_id` / `sender_id`）。幂等重放不会重复通知。它和 `chat.message.created` webhook 是两条独立链路：webhook 面向第三方 URL 且在事务内入队，SSE 面向当前登录用户的浏览器。
 - 前端保留 45 秒兜底轮询，防止信号丢失或流连不上；不可见标签页依旧不发请求。
-- 订阅表在进程内存里（`internal/notify`），**只在单进程部署下有效**；多实例需要换成 Redis pub/sub 或让客户端退回轮询。反向代理需禁用响应缓冲（服务端已发 `X-Accel-Buffering: no`）。
+- 订阅表本身在进程内存里（`internal/notify`），但默认配置已开启 `Scale.PubSub: redis`：跨进程信号走 Redis 广播，多实例下也能实时推送。Redis 由 `docker compose up -d` 一并启动；未启动时 API 会在启动阶段直接失败（不静默退化成单机）。客户端仍保留 45 秒兜底轮询。反向代理需禁用响应缓冲（服务端已发 `X-Accel-Buffering: no`）。
 
 ## 展示层：全局未读角标与桌面通知
 
@@ -57,9 +57,185 @@ Mint a dev JWT with `make token` (subject defaults to `usr_publisher`).
 - 展示层是纯前端，**没有新增后端接口或协议字段**，`api/openapi.yaml` 与 SDK 不变。
 - 边界：页面完全关闭后收不到通知（那需要 Web Push / Service Worker + VAPID）；当前实现不弹浏览器窗口内的 toast，也不做声音提示。
 
+## 水平三库单元化（默认，方案 A）
+
+默认 `etc/taskgame.yaml` 是 **3 个彼此独立的 MySQL 实例**（`127.0.0.1:3307` / `3308` / `3309`），每个实例一个 `taskgame` 库，**三套表结构完全相同**。每个库保存约 **1/3** 的 `users`、`tasks`、`messages` 及其余全部业务表；**不存在保存全量数据的主库**。
+
+另外默认开启了 `Scale.PubSub: redis`（Redis 在 `127.0.0.1:6379`，由 `docker compose up -d` 与三个库一起启动），只用于跨 API 进程的 SSE 信号广播——**Redis 里不存任何业务数据**。多实例时每个进程复制一份配置，**只改 `Port`**；`Scale.InstanceID` 留空即可，进程启动时会自动生成唯一 id。若手写固定值，必须保证每个进程不同，否则对方的信号会被当成“自己发的回声”丢掉。其余（三个 DSN、Redis 地址与频道）保持一致。
+
+```
+请求 ──► Auth 中间件（user_id，或 URL 里的 taskId / chatId / userId）
+           │  FNV-1a % 3
+           ├──► cell 0 (3307)   ~1/3 users / tasks / messages / ...
+           ├──► cell 1 (3308)   ~1/3 ...
+           └──► cell 2 (3309)   ~1/3 ...
+                     │
+          单库事务（无 2PC）；无主键的全局读 scatter-gather 合并
+```
+
+- **路由**：`internal/store/cell`。认证请求按 `user_id` 定位；`/v1/tasks/{id}`、`/v1/chats/{id}`、`/v1/users/{id}` 按 URL 里的主键定位，所以同一个任务/会话的所有参与者都会落到同一个库。
+- **写**：`InTx` 只在一个库里开事务。事务内 `Ensure`、好友关系等跨单元写是幂等或可交换的尽力而为操作，**不使用 2PC**。
+- **读**：市场列表、按 email 登录、webhook 投递扫描等没有单一主键的读遍历三个库并合并；好友卡片昵称、积分按 `user_id` 回表补齐。
+- **单元化的含义**：一个用户的账号、其发布的任务、其会话与消息、其好友视角都在自己的库里。**单个用户的数据不会拆到多个库**——因此一个超级用户创建大量任务时，这些任务会集中在它所在的库；均匀分布体现在**用户维度**，海量用户下三个库自然各约 1/3。
+- **扩展**：`Store.Cells` 是**有序列表**，下标就是单元编号。加/减单元属于数据迁移（按 `user_id` 重算归属并搬迁该单元的数据），不能只改配置完成；当前原型没有在线迁移工具。
+- **边界**：这是可运行的单元化原型。跨单元的余额/积分更新、好友关系双写是最终一致（`Ensure` 幂等、`UPDATE` 可重放），没有分布式事务；单条消息只有一份，落在会话所在单元。
+
+## 消息分片（旧模式，非默认）
+
+下面是 PR #38 的**消息级**分片原型，只在 `Store.Shards > 1` 时启用；默认配置已改为上面的三库单元化。原说明保留如下，便于对照。**注意：下文提到的 `docker-compose.3instances.yml` 与 `etc/mysql-init.d` 已随默认配置切换而删除；要重跑旧模式，按下面的 YAML 片段自行准备 1 个主库 + N 个片库。**
+
+`Store.Shards: 2` + `ShardDriver: mysql` 是“一个主库 + 两个片库”：`taskgame` 存账号、任务、账本、好友、会话元数据，`taskgame_shard_0` / `taskgame_shard_1` 各存约一半聊天消息（按会话 ID）。
+
+`Store.Shards > 1` 时，消息本体不再写入主库，而是按**会话聚合根**路由到 N 个独立数据库。`Store.Shards` 为 0 或 1 时仍走原来的单库路径，行为完全一致。**片库驱动与主库驱动互相独立**：主库可以是 SQLite 或 MySQL，片库可以是本机 SQLite 文件，也可以是一组网络 MySQL 数据库。
+
+**A. 本机文件分片（`ShardDriver: sqlite`）**，想要零依赖的纯本地调试时，复制配置改成：
+
+```yaml
+Store:
+  Driver: sqlite
+  DSN: "file:data/taskgame.db"        # 保留原有 DSN 与其 pragma
+  Shards: 2
+  ShardDSN: "file:data/shard-%d.db"   # 模板，%d 替换为片序号
+```
+
+**B. 网络数据库分片（`ShardDriver: mysql`）**，`ShardDSNs` 按片序号给出**每片一个 DSN**，可以指向不同主机，所有 API 进程都能连到同一批片库：
+
+```yaml
+Store:
+  Driver: mysql
+  DSN: "root:123456@tcp(127.0.0.1:3306)/taskgame?charset=utf8mb4"
+  Shards: 2
+  ShardDriver: mysql
+  # db-shard-0 / db-shard-1 只是示意主机名，需能被 DNS 或 /etc/hosts 解析；
+  # 单机演示请直接写 127.0.0.1:3306，与默认配置一致
+  ShardDSNs:
+    - "root:123456@tcp(db-shard-0:3306)/taskgame_shard_0?charset=utf8mb4"
+    - "root:123456@tcp(db-shard-1:3306)/taskgame_shard_1?charset=utf8mb4"
+```
+
+默认 `etc/taskgame.yaml` 就是这个 B 形态，只是两个 DSN 都指向 `127.0.0.1:3306` 上的不同库（`docker compose up -d` 会用 `etc/mysql-init.d` 建好两个片库；已有数据卷需要 `docker compose down -v` 重建才会执行初始化）。`ShardDSN` 模板在 MySQL 下也可用（同一主机的不同库），但只有列表能表达跨主机拓扑。片库 DSN 会补上 `utf8mb4` / `clientFoundRows`，`messages` 表由服务启动时自建，**库本身需预先存在**。
+
+**C. 一个库一个 MySQL 实例**：`Shards: N` 时共需 **N + 1 个实例**（1 个主库实例 + N 个片库实例），每个实例只持有一个 schema。同一台机器上用**不同端口**就能起多个独立的 mysqld，连接写法与跨机器完全一致：
+
+```bash
+docker compose -f docker-compose.3instances.yml -p taskgame-3inst up -d   # 3307 主 / 3308 片0 / 3309 片1
+cp etc/taskgame.yaml /tmp/taskgame-3inst.yaml
+# 把 /tmp/taskgame-3inst.yaml 里 3 个 DSN 的端口改成：主库 3307、片 0 为 3308、片 1 为 3309
+CGO_ENABLED=0 go run . -f /tmp/taskgame-3inst.yaml
+```
+
+改完后主库 DSN 指 `3307/taskgame`，`ShardDSNs` 依次指 `3308/taskgame_shard_0`、`3309/taskgame_shard_1`。**每个后端进程都连全部 N+1 个实例**（`openStore` 开 1 个主库连接池 + N 个片库连接池），不是 A 连片 0、B 连片 1 这种按进程分工——因为任意请求都可能路由到任意片。所有进程必须使用**同一份、同顺序**的 `ShardDSNs`。实测：三个容器 hostname 各不相同；主库实例只有 `chat_shards` / `message_outbox`（`messages` 表空），两个片实例各只有 `messages` 表且分别持有不同会话的消息，片内 `chat_seq` 独立自增。
+
+- **路由**：`internal/store/shard/router.go`。FNV-1a 纯函数哈希，直聊用有序对 `pair_low#pair_high`、其它会话用 `chat_id`，所有进程与重启后都算出同一个片。建会话时把 `chat_id → shard` 写进主库 `chat_shards` 目录表（与 `chats` 行同一事务）。
+- **写入**：`PostMessage` 在事务内只往主库 `message_outbox` 写一行；事务**提交后**由 `sqlstore.DB.flush` 投影到片库，按 `message_id` 幂等。回滚不会在片里留下消息，且发消息返回前投影已完成，`ListMessages` 立刻可读。崩溃后未投影的行由启动时 `Recover` 补投。
+- **序号**：每个片库有自己的 `chat_seq` 自增列，只保证**会话内有序**；`chat_reads.last_read_rowid` 存的就是它。全局全序从来不需要，跨片序号重复不影响未读判定。
+- **读取**：`ListMessages` / `MessageRowID` / `LatestMessageRow` / `CountUnread` 先查目录定位片再查；`ListDirectUnreads` 在主库取会话与游标、再逐片查未读数（不再跨片 join）。
+- **未改动**：`store.Store` / `Repos` 接口、引擎、handler、OpenAPI、SDK、前端、SSE 与展示层全部不变，API 语义与响应字段保持一致。
+- **边界**：这是**原型**，只分片了消息本体。`chats`、`chat_reads`、幂等键、`webhooks`、任务账本仍在主库；默认路径下投影仍由写入方进程在事务提交后本地执行（崩溃靠启动时 `Recover` 补投），没有 2PC。SSE 信号总线现已在默认配置里开启（`Scale.PubSub: redis`，只广播信号、不迁数据）；共享租约投影与 SQL 目录仍属旧原型的可选子项，默认关闭（见「P1+ 多数据库骨架」）。`emit()` 仍在事务内查主库订阅、`idempotency_keys` 仍按 `user_id` 建主键；给幂等键加上片维度仍属后续工作。
+
+### 调整分片数量（扩容 / 缩容 / 换实例）
+
+**先记住一条**：`chat_shards` 目录表才是权威路由。`Router` 的 `hash % N` **只在建会话时算一次**并写进目录表，之后所有读写都查目录表。因此**加片不需要搬老数据，减片必须搬**。
+
+| 变更 | 是否搬数据 | 操作 |
+|---|---|---|
+| 加片 N → N+1 | **不需要** | 起新实例/建库 → `ShardDSNs` **末尾追加**一个 DSN → `Shards` +1 → 所有进程统一切换 |
+| 换实例（N 不变） | 只搬该片 | 把该片 `messages` 导到新实例 → 只改列表中**对应下标**的 DSN → 目录表不动 |
+| 减片 N → N-1 | 需要，**当前无工具** | 见下 |
+| 关闭分片（`Shards<=1`） | 需要，**当前无工具** | 片库消息不会自动回灌主库 `messages` |
+
+**扩容步骤（2 → 3）**：
+
+1. 新起一个 MySQL 实例（例如 `3310`），`CREATE DATABASE taskgame_shard_2`。服务启动时只自建 `messages` 表，**不建库**。
+2. 改配置：`Shards: 3`，`ShardDSNs` 在**末尾**追加新 DSN。前面两项的顺序与内容**绝对不能变**——列表下标就是片序号，重排等于把老数据指到别的库。
+3. **所有后端进程一起切到这份新配置**，不要滚动混部：老进程的 `Set` 只有 2 个连接池，一旦它处理目录表里 `shard=2` 的会话，`shard.Set.check` 会报 `index 2 out of range`。建议短暂停服切换。
+4. 重启后 `Recover` 按 outbox 行内记录的**旧 `shard` 值**补投未投影消息，不受新 N 影响。
+
+`TestShardScaleOutPreservesExistingChats` 实证了这条：2 片下建的 8 个会话切成 3 片后，目录行不变、消息全部可读；新会话开始落到片 2，且片 2 里没有老会话的消息。注意**老会话永远留在原片**，扩容只把新增会话分散到新片，不会均衡已有数据；要均衡得主动迁移老会话。
+
+**为什么减片麻烦**：目录表里指向被删片的行不会自动消失，`message_outbox.shard` 也存着旧片号，`Recover` 会越界；更麻烦的是 `chat_seq` 是**片内自增**，消息搬到另一片后序号重排，而 `chat_reads.last_read_rowid` 存的正是这个序号，已读位置会错乱。所以缩容需要专门的迁移程序：搬 `messages` → 按新下标 `UPDATE chat_shards` → 修 outbox → 重算/补偿已读游标，并在切换期间停写。当前原型**没有**这套工具，不建议直接减 N；测试里验证了不搬数据就缩回 2 片会直接读失败。
+
+**只换机器/端口**（风险最低）：`Shards` 不变，用 `mysqldump` 或物理备份把该片 `messages` 搬到新实例，只改 `ShardDSNs` 对应下标的 DSN，目录表、`chat_seq`、已读游标全部不动。
+
+## P1+ 多数据库骨架（默认只开 Redis 总线，其余关闭）
+
+默认 `etc/taskgame.yaml` 已包含 `Scale.Enabled: true` + `PubSub: redis`，**只装配跨进程 SSE 信号总线**，Redis 由 `docker compose up -d` 一起启动，是默认部署的必需依赖（启动时 `PING` 校验，不通则直接失败）。其它子项（`Projection` / `Directory` / `Domains` / `Archive` / `Search`）默认仍关闭——它们属于旧消息分片原型或未完成的 P2/P3 骨架，三库单元化模式用不上。若显式设 `Scale.Enabled=false`，`scale.New` 返回 `nil`，`ServiceContext.Notifier` 退回进程内 `*notify.Broker`，这是旧的单进程行为。**没有搬走任何一张表，没有改动 `store.Store` / `Repos` 接口、引擎、handler、OpenAPI、SDK 与前端，API 响应不变**（`Scale.Directory.Enabled` 会额外创建 3 张控制面小表，但不迁移任何业务表）。
+
+| 阶段 | 新增位置 | 做了什么 | 明确没做 |
+|---|---|---|---|
+| P1 | `internal/notify/*`、`internal/projection/*` | `Fanout` + `RedisTransport` 跨进程 SSE 扇出；**`Lease`（Redis SET NX / 进程内）+ `Bus`（Redis pub/sub / 进程内）+ `Worker`**：`Recover` 每行先认领共享租约，提交后广播唤醒 hint，定时兜底；实测两进程并发只投影一次 | NATS / Kafka 传输、SQL 版租约（当前用 Redis / 内存） |
+| P2 | `internal/plane/*`、`internal/store/shard/domains.go` | 目录表 `Directory`（**`SQLDirectory` 把映射持久化到 `shard_directory` / `shard_topology`，多进程共享**）、拓扑 `Topology`（加片只追加）、`Resolver`、全局唯一索引 / ID 生成器接口、三域 `DomainRouter`、`TxScope` 拒绝跨片事务 | User/Task 仓储真正拆分、`global_unique` 落库、目录行与聚合根写在同一事务 |
+| P3 | `internal/archive/*`、`internal/search/*` | 可运行的 `FileBlobStore`、归档策略与 `Archiver.Plan`、大字段清单、`MemoryTaskIndex` 与 `Projector` | 真正执行归档、Elasticsearch、CDC 投影、`emit()` 去放大 |
+| 装配 | `internal/scale/runtime.go`、`config.ScaleConf`、`svc` | `scale.Runtime` 统一生命周期，`Close` 一并释放 | — |
+
+三个容易踩坑的点已经写进代码：`chat_shards` 之类**目录表才是权威路由**；**加片不搬老数据**（`ScaleOutPlan.MigratedKeys` 恒为 0，减片才必须迁移）；**没有目录行的老 key 必须按首次部署的片数（`Topology.Pinned`）做回退哈希**，否则滚动升级时会算出别的片甚至 `index out of range`。另外要记住：**分片只把数据摊薄，不会减少总量**——在线库真正变小靠 `archive` 的冷热分离、大字段外置与去掉 `emit()` 的 N 倍投递放大。
+
+### 用真实 Redis 跑多机 SSE（`Scale.PubSub: redis`）
+
+`internal/notify/redis.go` 实现了 `Transport`：**发布**走带短超时的连接池（Redis 卡住也不会阻塞产生信号的请求），**订阅**走另一条关闭读写超时的连接（阻塞订阅不能被默认的 3s 读超时反复打断）。构造时 `PING` 校验，Redis 不可用会**直接启动失败**，避免多实例静默退化成互不通信的单机。`Envelope` 用 JSON 编码，坏帧／非本系统的帧直接丢弃，不会卡住接收循环。
+
+默认 `etc/taskgame.yaml` 末尾已包含下面的 `Scale` 段（`InstanceID` 默认留空、自动生成），`docker compose up -d` 会一并启动 Redis，因此无需手工添加：
+
+```yaml
+Scale:
+  Enabled: true
+  PubSub: redis
+  # InstanceID: api-a   # 可选；留空 = 每个进程自动生成唯一 id
+  Redis:
+    Addr: "127.0.0.1:6379"
+    Channel: "taskgame.signals"
+```
+
+```bash
+docker compose up -d    # 3 个 MySQL cell + Redis
+make run                # 或 CGO_ENABLED=0 go run .
+```
+
+第二个 API 实例复制这份配置，**只改 `Port`（如 8892）**，`Scale.InstanceID` 留空即可自动生成本进程唯一 id；**指向同一个 `Scale.Redis.Addr` 和 `Scale.Redis.Channel`**。两个进程各建一条订阅，A 进程产生的信号经 Redis 广播给 B 进程的 SSE 连接。若你显式写了 `InstanceID`，务必给两个进程写不同的值：回声过滤按 `Origin == 本进程 InstanceID` 丢包，写重了会导致对方永远收不到实时消息（只剩 45s 兜底轮询）。注意 Redis pub/sub 是 **at-most-once**：进程宕机期间的信号会丢，但信号只带 id、不落库，浏览器 45s 兜底轮询会补上，因此不需要换成 Redis Stream。`Scale.PubSub: shared` 仍是进程内总线，只用于测试；默认配置的 `Store` 已是三库单元化，真多机只要所有进程都能连到同一批库和同一个 Redis 即可。
+
+### 用共享租约投影 `message_outbox`（`Scale.Projection`）
+
+PR #38 的 `Recover` 是「每个进程启动时全表扫 `projected=0` 并各自投影」，多实例会重复劳动。#2 把它改成协同式：
+
+- `internal/projection` 提供 `Lease`（`RedisLease` = `SET NX PX` + Lua 比较删除；`MemoryLease` 给单机/测试）、`Bus`（`RedisBus` 用独立的 `taskgame.outbox` 频道；`MemoryBus` 给单机）、`Worker`（事件唤醒 + 定时兜底）。
+- `sqlstore.DB.Recover` 对每行先 `claimOutbox` 认领租约：拿不到就跳过（别的进程在处理），投影失败立刻释放让别人重试，**成功则保留到 TTL 自动过期**——若立即释放，另一个持有旧 pending 快照的进程会重复投影同一行。
+- 事务提交后、本地 `flush` 之前**异步广播** outbox id 作为加速唤醒 hint；`flush` 仍由写进程同步投影，保证「发消息返回即可读」的契约不变。
+- 正确性不依赖 Redis：`shard.Set.Insert` 按 `message_id` 幂等，`projected=1` 是权威事实；租约只消除重复劳动，事件只缩短崩溃恢复延迟，丢事件由定时扫描兜底。
+
+`Scale.Projection.Enabled=true` 时 `scale.Runtime` 装配租约/总线，`svc` 把 coordinator 注入主库并在 `StartBackground` 启动 worker；`PubSub=redis` 用真 Redis，`shared` / `local` 用进程内实现。默认全关时 `Recover` 与 PR #38 逐字节一致。
+
+### 用 SQL 目录持久化路由（`Scale.Directory`）
+
+`InMemoryDirectory` 是进程内的：重启即丢，多进程各持一份，「目录表是唯一权威路由」只在单进程里成立。#3 让目录真正落库：
+
+- `internal/plane/sql_directory.go` 的 `SQLDirectory` 使用 `plane.Schema` 的三张表：`shard_directory`（`(domain, shard_key) -> shard` 权威映射）、`shard_topology`（每个域声明的片数 + DSN 快照）、`global_unique`（留给 #5）。`Migrate` 全是 `CREATE TABLE IF NOT EXISTS`，每个进程启动时重复执行也安全；`Driver` 支持 `sqlite` / `mysql`，只有 insert 幂等语法不同。
+- **`Assign` 幂等且不覆盖**：SQLite `INSERT OR IGNORE`、MySQL `INSERT IGNORE`。两个进程并发或重放同一个 key，都不会把它改到别的片——这是「加片不搬老数据」在数据库层的保证。
+- **`EnsureShards` 只增不减**：`ShardCount` 取 `MAX(shard)+1`。滚动升级时仍跑旧配置的进程，不会把别的进程已扩的片数缩回去；`shard_topology` 因此是跨进程共享的拓扑声明。
+- 包级 `AssignInTx` 让调用方在**自己的事务**里写目录行，留给 P2 把聚合根与路由写进同一事务（现有 `chat_shards` 就是这么做的）。当前 `SQLDirectory` 自带连接池，二者是最终一致；因为 `Assign` 幂等，重试是安全的。
+
+`Scale.Directory.Enabled=true` 时 `scale.New` 打开控制面库（`Driver` / `DSN` 省略则继承 `Store.Driver` / `Store.DSN`，即主库兼任这个极小控制面），并把三个域的片数同步进 `shard_topology`；`Runtime.Close` 释放连接池。**默认全关时仍是 `InMemoryDirectory`，PR #38 路径不变**。真多机部署要让所有进程指向同一个共享 MySQL：
+
+```yaml
+Scale:
+  Directory:
+    Enabled: true
+    Driver: mysql
+    DSN: "root:123456@tcp(mysql:3306)/taskgame_plane?charset=utf8mb4"
+```
+
+两个边界要记住：`shard_topology.dsn` 只是首次登记时的快照，权威 DSN 顺序仍来自配置里的 `Topology`（换实例改配置并滚动升级，见「调整分片数量」）；`Keys()` 只服务于缩容规划，当前是按 `(domain, shard_key)` 主键的扫描，上热路径前需补 `(domain, shard)` 索引。
+
+`internal/scale.TODOs` 是代码里的边界清单（原 10 条，#1 Redis 传输、#2 outbox 共享租约、#3 SQL 目录均已实现，现为 7 条），README 与它保持一致。跑验证：
+
+```bash
+go test ./internal/notify ./internal/projection ./internal/store/sqlstore ./internal/plane ./internal/store/shard ./internal/archive ./internal/search ./internal/scale ./internal/svc
+# 默认配置只开 Scale.PubSub=redis；要试其它骨架，在配置副本中追加字段（见 internal/config/config.go）
+CGO_ENABLED=0 go run .
+```
+
 ## 运行
 
-需要 Go 1.26（见 `go.mod`）、`python3`（`scripts/smoke.sh` 用来读 JSON）和 `curl`。不需要 C 编译器：SQLite 驱动是 `modernc.org/sqlite`。下面的命令都在仓库根目录执行。
+需要 Go 1.26（见 `go.mod`）、`python3`（`scripts/smoke.sh` 用来读 JSON）、`curl` 和 Docker（默认配置要连 MySQL）。不需要 C 编译器：测试用的 SQLite 驱动是 `modernc.org/sqlite`。下面的命令都在仓库根目录执行。
 
 ```bash
 go mod tidy
@@ -69,31 +245,36 @@ CGO_ENABLED=0 go build ./...
 
 `Makefile` 会导出 `CGO_ENABLED=0`（也可在命令行覆盖），所以测试和构建等价于 `make tidy`、`make test`、`make build`。
 
-`make run` 使用 `etc/taskgame.mysql.yaml`，连本机 MySQL（镜像 `mysql:8.4.11`，`root` / `123456`，库 `taskgame`，`127.0.0.1:3306`）。先启动数据库：
+只有一份配置：`etc/taskgame.yaml`（`go run .` / `make run` 默认加载它）。它连 **3 个独立 MySQL 实例**（镜像 `mysql:8.4.11`，`root` / `123456`）：
+
+| 端口 | 库 | 存什么 |
+| --- | --- | --- |
+| `3307` | `taskgame` | cell 0：约 1/3 用户及其任务、会话、消息、账本、好友、webhook |
+| `3308` | `taskgame` | cell 1：另一份约 1/3，表结构完全相同 |
+| `3309` | `taskgame` | cell 2：最后约 1/3 |
+
+先启动数据库再启动服务：
 
 ```bash
-docker compose up -d
+docker compose up -d          # 起 3 个 MySQL 实例 + Redis
 make run
+# 或：CGO_ENABLED=0 go run .
 ```
 
-`etc/taskgame.yaml` 的 `Store.Driver` 仍是 `sqlite`。要用那个文件：
+指定别的配置文件（例如多实例的第二份配置）：
 
 ```bash
-make run-sqlite
-# 或
-CGO_ENABLED=0 go run . -f etc/taskgame.yaml
+make run CONFIG=taskgame.yaml           # 等价于 go run . -f taskgame.yaml
+make run GOARGS="-f taskgame.yaml"      # 直接透传完整参数
 ```
 
-进程监听 `http://0.0.0.0:8891`。探活是 `GET /health`（响应 `{"status":"ok"}`）。业务路径都在 `/v1` 下。SQLite 文件是 `data/taskgame.db`（已在 `.gitignore` 中），只在 `make run-sqlite` 时创建。
+`-f` **不能**紧跟 `make run`：它是 make 自己的「指定 makefile」选项，会被 make 截走（报 `taskgame.yaml: No such file or directory`）。用 `CONFIG=` 或 `GOARGS=` 传。`make token` 也接受同样的变量。
 
-MySQL 配置在 `etc/taskgame.mysql.yaml`。直接启动：
+每个实例的库由 `MYSQL_DATABASE` 在首次启动时创建；服务启动时只自建表，**不建库**。端口刻意用 3307/3308/3309，不会碰本机已有的 3306。要改成一机三库，把三个 DSN 的端口都改成 3306、库名分别改成 `taskgame_cell_0/1/2` 即可。
 
-```bash
-docker compose up -d
-CGO_ENABLED=0 go run . -f etc/taskgame.mysql.yaml
-```
+进程监听 `http://0.0.0.0:8891`。探活是 `GET /health`（响应 `{"status":"ok"}`）。业务路径都在 `/v1` 下。三个 cell DSN 是 `root:123456@tcp(127.0.0.1:3307|3308|3309)/taskgame`，与 `docker-compose.yml` 的 root 密码一致。驱动是 `github.com/go-sql-driver/mysql`；`Open` 会补上 `clientFoundRows=true` 和 `utf8mb4`（DSN 里已经写了就保持原样）。多个进程共用同一份 DSN 列表即可。每个进程仍然跑自动结算和 webhook 投递；任务行和托管行在事务里加锁，托管的 `held`/`frozen` 按版本做比较并交换，webhook 先把行认领为 `delivering` 再 POST。接收方仍应按 `X-Event-Id` 去重：worker 在 POST 成功之后、写回 `delivered` 之前崩溃时，租约到期会再投一次。
 
-`etc/taskgame.mysql.yaml` 的 DSN 是 `root:123456@tcp(127.0.0.1:3306)/taskgame`，与 `docker-compose.yml` 的 root 密码和库名一致。驱动是 `github.com/go-sql-driver/mysql`。`Open` 会补上 `clientFoundRows=true` 和 `utf8mb4`（DSN 里已经写了就保持原样）。多个进程可以共用这一份 DSN。每个进程仍然跑自动结算和 webhook 投递；任务行和托管行在事务里加锁，托管的 `held`/`frozen` 按版本做比较并交换，webhook 先把行认领为 `delivering` 再 POST。接收方仍应按 `X-Event-Id` 去重：worker 在 POST 成功之后、写回 `delivered` 之前崩溃时，租约到期会再投一次。SQLite 仍是单连接，不要把两个进程指到同一个 SQLite 文件。如果本机 compose 数据卷是用以前的 root 密码初始化的，新密码不会写进已有数据，需要重建容器和卷：`docker compose down -v && docker compose up -d`。这会清空该 MySQL 数据卷。
+想要零依赖的本地调试，可复制配置把 `Store.Driver` 改成 `sqlite`（单连接文件，不能两个进程共用一个文件）；这不是默认路径。
 
 需要 MySQL 的测试（并发自动结算、并发席位超时退款、并发 webhook 投递、超过 50 条的超时扫描）在设置了 `TASKGAME_MYSQL_DSN` 时运行。账号要能 `CREATE DATABASE`。compose 里的 root 可以：
 
@@ -106,6 +287,46 @@ make test-mysql
 ```
 
 没设置 DSN 时这些用例会跳过，SQLite 测试照常跑。冒烟脚本不关心驱动，服务听在 8891 即可：`bash scripts/smoke.sh`。
+
+**MySQL 分片链路**（主库 MySQL + 每片一个 MySQL DSN）同样在设置 `TASKGAME_MYSQL_DSN` 时跑：`internal/store/shard/mysql_test.go` 验证片库的 SQL 方言、幂等投影、重启恢复与物理隔离；`internal/integration/sharded_mysql_messages_test.go` 起真实 HTTP 服务，验证 API 契约、跨片隔离、outbox 全量投影。测试会自建临时库并在结束时删除，不需要预先建 `taskgame_shard_*`。手动跑完整示例：
+
+```bash
+docker compose up -d          # 新卷会自动建 taskgame_shard_0 / taskgame_shard_1
+CGO_ENABLED=0 go run .        # 默认配置即分片形态
+```
+
+**一个库一个实例**（3 个独立 MySQL 容器，各自只持一个库）：
+
+```bash
+docker compose -f docker-compose.3instances.yml -p taskgame-3inst up -d
+cp etc/taskgame.yaml /tmp/taskgame-3inst.yaml
+# 把 3 个 DSN 的端口改成 3307（主库）、3308（片 0）、3309（片 1）
+CGO_ENABLED=0 go run . -f /tmp/taskgame-3inst.yaml
+```
+
+独立项目名 `taskgame-3inst` 不会动到默认的 3306 容器。停掉用 `docker compose -f docker-compose.3instances.yml -p taskgame-3inst down`（加 `-v` 会连数据卷一起删）。
+
+**多个 API 实例**：三库单元化配置下，所有进程连同一组 Cell DSN（顺序也要一致），并共用同一个 Redis 地址与频道；SQLite 是单连接文件，不能给两个进程共用。端口只能靠不同配置文件区分（`conf.MustLoad` 不读环境变量）。`InstanceID` 留空时每个进程自动生成唯一 id，复制配置只改 `Port` 就够了：
+
+```bash
+docker compose up -d
+CGO_ENABLED=0 go run .                                                # 实例 A: 8891
+sed 's/^Port: 8891/Port: 8892/' etc/taskgame.yaml > /tmp/taskgame-8892.yaml
+CGO_ENABLED=0 go run . -f /tmp/taskgame-8892.yaml                     # 实例 B: 8892
+```
+
+实测过：A 注册并签发 JWT，B 用同一个 token 能直接读；A 发消息 B 能读、B 发消息 A 能读；同一个会话按 `chat_id` 稳定路由到同一个 Cell。两个进程都会跑自动结算与 webhook 投递，靠事务锁和 `delivering` 认领避免重复处理。
+
+**已知边界**：默认 `Scale.PubSub: redis` 时，A 实例提交的消息会通过 Redis 广播给挂在 B 实例上的 SSE 连接，实时刷新。Redis pub/sub 是 at-most-once，宕机期间的信号会丢，前端 45s 兜底轮询会补上；只有把 `PubSub` 改成 `local`/`shared` 时才会退回“收不到另一进程信号”。
+
+**两个前端服务，各连一个后端**：前端是静态资源、本身无状态，起几个 Vite 进程不改变架构；真正决定隔离性的是浏览器 **origin**（协议 + host + 端口）。`settings.ts` 把 `baseUrl` 存在 `localStorage`，且 `loadSettings()` 里已有的 localStorage 会**覆盖** `VITE_TASKGAME_BASE_URL`；`readSync.ts` / `avatarUtils.ts` 的 `BroadcastChannel` 也按 origin 广播。所以在**同一个 origin 开两个标签页模拟两个用户**是不成立的：两个窗口共用 localStorage，后改的服务地址会覆盖先改的，已读/头像事件还会互相串扰。要用两个不同 origin：
+
+```bash
+cd web && npm run dev -- --port 5137                                                    # 前端 A → 8891
+cd web && VITE_TASKGAME_BASE_URL=http://127.0.0.1:8892 npm run dev -- --port 5138      # 前端 B → 8892
+```
+
+`5137`、`5138`、`4173`、`5173`–`5185` 都在后端 CORS 白名单内。环境变量只在 `loadSettings()` 作 fallback，新 origin 的 localStorage 是空的，所以各自生效；若之前已在该端口存过设置，`VITE_TASKGAME_BASE_URL` 会被 localStorage 覆盖，需要在「设置」页手动改服务地址。生产环境没这个问题——A、B 是不同设备上的浏览器，localStorage 天然不共享；只有单机模拟才需要靠不同 origin 隔离。
 
 开发用的静态密钥在 `etc/taskgame.yaml` 的 `Auth.ApiKeys`：
 
@@ -169,17 +390,89 @@ CGO_ENABLED=0 go test ./internal/engine -run 'TestAutoSettleCompetitiveDoesNotPi
 - `Auth.JwtSecret`：HS256 密钥，至少 16 个字符。`make token`、注册和登录共用它
 - `Auth.TokenTTL`：注册和登录签发的 JWT 有效期，缺省 24h
 - `Auth.ApiKeys`：静态 `X-Api-Key` → 用户 id
-- `Store.Driver`：`sqlite`（默认，单连接）或 `mysql`（MySQL 8.0.19+ 连接池）
-- `Store.DSN`：SQLite 文件 DSN，或 go-sql-driver 的 MySQL DSN
+- `Store.Driver`：`mysql`（默认，连接池）或 `sqlite`（本地调试，单连接）
+- `Store.Cells`：**默认 3 个** cell DSN（有序，下标即单元编号）。三个 DSN 可以是不同实例（默认 3307/3308/3309），也可以是同一实例的不同库名。设置后忽略 `Store.DSN` 与 `Store.Shards`
+- `Store.DSN`：单库模式的主库 DSN（不设 `Cells` 时生效）
+- `Store.Shards`：旧的消息分片原型，`> 1` 时启用；`Store.ShardDriver`、`Store.ShardDSNs`、`Store.ShardDSN`（含 `%d` 模板）见「消息分片（旧模式）」
 - `Escrow.InitialBalance`：用户第一次出现时记入的模拟积分（开发配置是 1000000）
 - `Webhook.Mode`：`log` 只记录签名，不发 HTTP；`post` 才真正 POST
 - `AutoSettle`：到 `review_deadline` 后自动结算。竞争任务如果有多份提交，不会猜赢家，保持 `in_review`
+- `Scale.PubSub`：**默认 `redis`**，跨进程 SSE 信号总线；`Scale.InstanceID` 留空则每进程自动生成唯一 id（手写则必须互不相同），`Scale.Redis.Addr` / `Channel` 全部署一致。Redis 由 compose 启动，未启动则 API 启动失败。其它 Scale 子项默认关闭
 
 错误响应是 JSON：`{"code":"...","message":"..."}`。
 
+## Horizontal cells (default, plan A)
+
+The shipped `etc/taskgame.yaml` opens **three independent MySQL instances** (`127.0.0.1:3307` / `3308` / `3309`), each with one `taskgame` database and the **same full schema**. Each cell owns about **one third** of `users`, `tasks`, `messages` and every other business table. **No primary database holds all rows.** It also enables `Scale.PubSub: redis` on `127.0.0.1:6379` (started by the same compose file) for cross-process SSE signals only — Redis holds no business data. For multiple API processes, copy the config and change only `Port`; leave `Scale.InstanceID` empty so each process generates a unique id. If you set it explicitly, every process must use a different value — a duplicate id makes the echo filter drop the other process's signals.
+
+- **Routing** (`internal/store/cell`): an authenticated request is routed by `user_id`; `/v1/tasks/{id}`, `/v1/chats/{id}` and `/v1/users/{id}` are routed by the id in the URL, so every participant of a task or chat lands on the same cell.
+- **Writes**: `InTx` opens a transaction in exactly one cell. Cross-cell work inside a transaction (`Ensure`, friendships) is idempotent or commutative best-effort; there is no 2PC.
+- **Reads**: market listing, login by email and webhook delivery scans fan out over all cells and merge; friend-card nickname and scores are re-read from the owner cell.
+- **What unit-based means**: a user's account, the tasks they publish, their chats/messages and their friend view live in their own cell. **One user's data is never split across cells**, so a single power user's many tasks concentrate in that user's cell; even distribution is over **users**, and with many users the three cells naturally hold about 1/3 each.
+- **Resizing**: `Store.Cells` is an ordered list (index = cell id). Adding or removing a cell is a data migration (recompute `user_id` ownership and move that cell's rows); the prototype has no online migration tool.
+- **Boundary**: this is a runnable unit-based prototype. Cross-cell balance/score updates and the two-sided friend view are eventually consistent (idempotent `Ensure`, replayable `UPDATE`), not distributed transactions.
+
+## Message sharding (legacy, not the default)
+
+The PR #38 message-level prototype is kept for comparison and only activates when `Store.Shards > 1`. Its original description follows. **The `docker-compose.3instances.yml` and `etc/mysql-init.d` files it mentions were removed with the switch to cells; to rerun the legacy mode, create one primary plus N shard schemas yourself from the YAML below.**
+
+With `Store.Shards: 2` and `ShardDriver: mysql`, one MySQL server holds `taskgame` (accounts, tasks, ledger, friends, chat metadata) plus `taskgame_shard_0` / `taskgame_shard_1` for about half of the chat messages each, routed by chat id.
+
+With `Store.Shards > 1`, message bodies leave the primary database and are routed by the **chat aggregate root** to N independent databases. `0` or `1` keeps the original single-database behaviour. The shard driver is independent of the primary driver.
+
+- `ShardDriver: sqlite`: `ShardDSN: "file:data/shard-%d.db"` expands into one local file per shard (single-process local debugging only).
+- `ShardDriver: mysql`: `ShardDSNs` gives **one DSN per shard, in shard order**, and may point at different hosts so every API process reaches the same shard databases over the network. This is the default; both DSNs point at `127.0.0.1:3306` on different schemas. The service creates the `messages` table but not the databases themselves.
+- Routing (FNV-1a, ordered pair for direct chats), `chat_shards` directory, transactional `message_outbox`, post-commit projection and startup `Recover` are unchanged. Only the `messages` table is sharded. In the base prototype projection is performed locally by the writing process, and SSE fan-out is process-local only when `Scale` is disabled. The shipped config enables `Scale.PubSub: redis` for the cross-process signal bus; the optional P1/P2 skeleton additionally offers a shared-lease outbox projection worker and a SQL-backed routing directory (`shard_directory` / `shard_topology`) shared by all processes. Neither path uses 2PC.
+
+MySQL-backed shard tests (`internal/store/shard/mysql_test.go`, `internal/integration/sharded_mysql_messages_test.go`) run when `TASKGAME_MYSQL_DSN` is set and skip otherwise; they create and drop their own temporary databases.
+
+**Resizing the shard set**: `chat_shards` is the authoritative route. The `hash % N` router runs **only once, when a chat is created**, and the result is stored in the directory; every later read and write looks it up. So **adding a shard needs no data migration, removing one does**.
+
+| Change | Move data? | Action |
+|---|---|---|
+| Add a shard N → N+1 | **No** | Start a new instance/create the database → **append** one DSN to `ShardDSNs` → set `Shards: N+1` → switch all processes together |
+| Replace an instance (N unchanged) | Only that shard | Move its `messages` to the new instance → change only the DSN at that **index** → leave the directory alone |
+| Remove a shard N → N-1 | Yes, **no tooling yet** | See below |
+| Disable sharding (`Shards<=1`) | Yes, **no tooling yet** | Shard rows are not copied back into the primary `messages` table |
+
+To scale 2 → 3: create the new database first (the service only creates the `messages` table, never the schema), append its DSN at the **end** of `ShardDSNs` — the list index *is* the shard number, so never reorder existing entries — and switch **all** API processes to the new config at once. A rolling upgrade is unsafe: an old process has only two shard pools and fails with `index 2 out of range` when it serves a chat whose directory row says shard 2. `Recover` replays unprojected outbox rows using the `shard` value stored in each row, unaffected by the new N. `TestShardScaleOutPreservesExistingChats` verifies that eight chats created with two shards are still readable after switching to three, their directory rows are unchanged, new chats start landing on shard 2, and shard 2 contains no pre-scale-out messages. Note that **existing chats never move**: scaling out only spreads new chats, so it does not rebalance existing load.
+
+Shrinking is harder: directory rows still point at the removed shard, `message_outbox.shard` holds the old index, and `chat_seq` is **per-shard auto-increment** — moving rows renumbers them while `chat_reads.last_read_rowid` stores exactly that sequence, corrupting read cursors. A real shrink needs a migration that moves `messages`, rewrites `chat_shards` and outbox rows, and repairs cursors while writes are paused. The prototype has no such tool; the test confirms that shrinking back without migration fails. **Changing only a host/port at a fixed N** is the safest resize: move that shard's `messages`, edit the one DSN at its index, and leave the directory, sequences and cursors untouched.
+
+**One MySQL instance per database**: with `Shards: N` you need **N + 1 instances** (one primary plus one per shard), each holding a single schema. Multiple independent mysqld processes can run on one machine on **different ports**; the DSN syntax is identical to a cross-host setup:
+
+```bash
+docker compose -f docker-compose.3instances.yml -p taskgame-3inst up -d   # 3307 primary / 3308 shard0 / 3309 shard1
+cp etc/taskgame.yaml /tmp/taskgame-3inst.yaml
+# repoint the three DSNs to 3307 (primary), 3308 (shard 0), 3309 (shard 1)
+CGO_ENABLED=0 go run . -f /tmp/taskgame-3inst.yaml
+```
+
+After that edit the primary DSN points at `3307/taskgame` and `ShardDSNs` at `3308/taskgame_shard_0` and `3309/taskgame_shard_1`. **Every API process connects to all N + 1 instances** (`openStore` opens one primary pool plus N shard pools); processes are not split across shards, since any request may route to any shard. All processes must use the same `ShardDSNs` list in the same order. Verified: the three containers have distinct hostnames; the primary instance holds `chat_shards` / `message_outbox` and an empty `messages` table, while each shard instance holds only `messages` for its own chats with an independent `chat_seq`.
+
+**Multiple API instances**: in the default three-cell setup, every process connects to the same Cell DSNs (same order) and the same Redis address/channel; SQLite is a single-connection file and cannot be shared. Ports are set per config file (`conf.MustLoad` does not read environment variables). Leave `InstanceID` empty so each process generates a unique id — copying the config then only needs a different `Port`:
+
+```bash
+docker compose up -d
+CGO_ENABLED=0 go run .                                                # instance A: 8891
+sed 's/^Port: 8891/Port: 8892/' etc/taskgame.yaml > /tmp/taskgame-8892.yaml
+CGO_ENABLED=0 go run . -f /tmp/taskgame-8892.yaml                     # instance B: 8892
+```
+
+Verified: a JWT issued by A works on B; messages posted on A are readable on B and vice versa; a chat routes to the same cell from both processes. Auto-settle and webhook delivery run on both processes safely (transaction locks and `delivering` claims). With the default `Scale.PubSub: redis`, a message committed on A is broadcast over Redis to the SSE stream attached to B, so the peer's panel refreshes immediately. Redis pub/sub is at-most-once — signals lost while a process is down are repaired by the browser's 45s fallback poll. Cross-process push only degrades if `PubSub` is set to `local`/`shared`, or if two processes reuse the same `InstanceID`.
+
+**Two frontends, one backend each**: the frontend is stateless static assets, so the number of Vite processes does not change the architecture; what matters is the browser **origin** (scheme + host + port). `settings.ts` stores `baseUrl` in `localStorage`, and existing localStorage **overrides** `VITE_TASKGAME_BASE_URL` in `loadSettings()`. `readSync.ts` / `avatarUtils.ts` broadcast over `BroadcastChannel`, also scoped to one origin. Two tabs on a **single origin** therefore cannot model two users: they share localStorage (the last edited base URL wins) and their read/avatar events cross-contaminate. Use two distinct origins:
+
+```bash
+cd web && npm run dev -- --port 5137                                                    # frontend A → 8891
+cd web && VITE_TASKGAME_BASE_URL=http://127.0.0.1:8892 npm run dev -- --port 5138      # frontend B → 8892
+```
+
+Ports `5137`, `5138`, `4173` and `5173`–`5185` are all in the CORS allowlist. The env var is only a fallback in `loadSettings()`, and a fresh origin has empty localStorage, so each one takes effect; if settings were saved earlier on that port, localStorage wins and the service URL must be changed in the Settings page. Production has no such problem: A and B are browsers on different devices with separate localStorage; distinct origins are only needed when simulating both users on one machine.
+
 ## Run
 
-Requires Go 1.26 (see `go.mod`), `python3` (the smoke script reads JSON with it), and `curl`. No C compiler: the SQLite driver is `modernc.org/sqlite`. Run the commands below from the repository root.
+Requires Go 1.26 (see `go.mod`), `python3` (the smoke script reads JSON with it), `curl`, and Docker (the default config needs MySQL). No C compiler: the SQLite driver used by the tests is `modernc.org/sqlite`. Run the commands below from the repository root.
 
 ```bash
 go mod tidy
@@ -189,31 +482,36 @@ CGO_ENABLED=0 go build ./...
 
 The `Makefile` exports `CGO_ENABLED=0` (override it from the environment or the command line), so test and build are `make tidy`, `make test`, and `make build`.
 
-`make run` loads `etc/taskgame.mysql.yaml` and connects to local MySQL (image `mysql:8.4.11`, `root` / `123456`, database `taskgame`, `127.0.0.1:3306`). Start the database first:
+There is one config: `etc/taskgame.yaml`, loaded by default by `go run .` and `make run`. It connects to **three independent MySQL instances** (image `mysql:8.4.11`, `root` / `123456`):
+
+| Port | Database | Holds |
+| --- | --- | --- |
+| `3307` | `taskgame` | cell 0: about 1/3 of users plus their tasks, chats, messages, ledger, friends, webhooks |
+| `3308` | `taskgame` | cell 1: another ~1/3, identical schema |
+| `3309` | `taskgame` | cell 2: the last ~1/3 |
+
+Start the databases and Redis first, then the service. Redis is required at startup because `Scale.PubSub: redis` PINGs it:
 
 ```bash
-docker compose up -d
+docker compose up -d          # three independent MySQL cells + Redis
 make run
+# or: CGO_ENABLED=0 go run .
 ```
 
-`Store.Driver` in `etc/taskgame.yaml` stays `sqlite`. To use that file:
+To use another config file (for example a second API instance), pass it through make:
 
 ```bash
-make run-sqlite
-# or
-CGO_ENABLED=0 go run . -f etc/taskgame.yaml
+make run CONFIG=taskgame.yaml           # same as go run . -f taskgame.yaml
+make run GOARGS="-f taskgame.yaml"      # pass the full flag through
 ```
 
-The process listens on `http://0.0.0.0:8891`. Liveness is `GET /health` (`{"status":"ok"}`). Protocol routes are under `/v1`. The SQLite file is `data/taskgame.db` (gitignored) and is created only by `make run-sqlite`.
+Do **not** write `make run -f taskgame.yaml`: make consumes `-f` as its own "use this makefile" option and looks for `taskgame.yaml` as a makefile. `make token` accepts `CONFIG=` / `GOARGS=` too.
 
-The MySQL config is `etc/taskgame.mysql.yaml`. Start it directly with:
+`MYSQL_DATABASE` creates each cell's database on first boot; the service creates tables but **not databases**. The ports are deliberately 3307/3308/3309 so an existing local MySQL on 3306 is untouched. To run all three cells on one server, point all three DSNs at 3306 and use `taskgame_cell_0/1/2` as schema names.
 
-```bash
-docker compose up -d
-CGO_ENABLED=0 go run . -f etc/taskgame.mysql.yaml
-```
+The process listens on `http://0.0.0.0:8891`. Liveness is `GET /health` (`{"status":"ok"}`). Protocol routes are under `/v1`. The three cell DSNs are `root:123456@tcp(127.0.0.1:3307|3308|3309)/taskgame`, matching `docker-compose.yml`. The driver is `github.com/go-sql-driver/mysql`. `Open` sets `clientFoundRows=true` and `utf8mb4` when the DSN does not already say so. Several processes can share the same DSN list. Each process still runs auto-settle and webhook delivery. Task and escrow rows are locked inside the transaction, escrow `held`/`frozen` updates compare-and-swap on a version, and a webhook row is claimed as `delivering` before the POST. Receivers should still dedupe on `X-Event-Id`: if a worker crashes after the POST and before it marks the row delivered, the lease expires and another worker sends the event again.
 
-`etc/taskgame.mysql.yaml` uses `root:123456@tcp(127.0.0.1:3306)/taskgame`, the same root password and database as `docker-compose.yml`. The driver is `github.com/go-sql-driver/mysql`. `Open` sets `clientFoundRows=true` and `utf8mb4` when the DSN does not already say so. Several processes can share that DSN. Each process still runs auto-settle and webhook delivery. Task and escrow rows are locked inside the transaction, escrow `held`/`frozen` updates compare-and-swap on a version, and a webhook row is claimed as `delivering` before the POST. Receivers should still dedupe on `X-Event-Id`: if a worker crashes after the POST and before it marks the row delivered, the lease expires and another worker sends the event again. SQLite stays single-connection. Do not point two processes at one SQLite file. If a compose volume was already initialized with the previous root password, recreate the container and volume so the new password applies: `docker compose down -v && docker compose up -d`. That deletes the MySQL data volume.
+For zero-dependency local debugging, copy the config and set `Store.Driver: sqlite` (a single-connection file; never point two processes at one file). That is not the default path.
 
 Tests that need MySQL (concurrent auto-settle, concurrent per-seat timeout refund, concurrent webhook delivery, and the timeout sweep past 50 rows) run when `TASKGAME_MYSQL_DSN` is set. The account must be allowed to `CREATE DATABASE`. The compose root user can:
 
@@ -289,11 +587,14 @@ CGO_ENABLED=0 go test ./internal/engine -run 'TestAutoSettleCompetitiveDoesNotPi
 - `Auth.JwtSecret`: HS256 secret, at least 16 characters. Shared by `make token`, register, and login
 - `Auth.TokenTTL`: lifetime of register and login JWTs, default 24h
 - `Auth.ApiKeys`: static `X-Api-Key` to user id
-- `Store.Driver`: `sqlite` (default, one connection) or `mysql` (MySQL 8.0.19+ pool)
-- `Store.DSN`: a SQLite file DSN, or a go-sql-driver MySQL DSN
+- `Store.Driver`: `mysql` (default, pooled) or `sqlite` (local debugging, one connection)
+- `Store.Cells`: **three** cell DSNs by default, ordered (index = cell id). DSNs may point at different instances (3307/3308/3309) or at different schemas on one server. When set, `Store.DSN` and `Store.Shards` are ignored
+- `Store.DSN`: single-database DSN (used only when `Cells` is empty)
+- `Store.Shards`: legacy message-level prototype; `> 1` enables it. See "Message sharding (legacy)" for `Store.ShardDriver`, `Store.ShardDSNs` and `Store.ShardDSN`
 - `Escrow.InitialBalance`: simulated credits granted the first time a user is seen (1000000 in the dev file)
 - `Webhook.Mode`: `log` records the signature and does not POST; `post` delivers HTTP
 - `AutoSettle`: settles when `review_deadline` passes. A competitive task with more than one submission stays `in_review` until `winner_select_deadline`, then refunds. `OpenTimeout`, `StartTimeout`, and `SeatTimeout` default to 72h
+- `Scale.PubSub`: **`redis` by default**, the cross-process SSE signal bus. Leave `Scale.InstanceID` empty to auto-generate a unique id per process; if set explicitly it must be unique per API process. `Scale.Redis.Addr` / `Channel` must be identical across the deployment. Redis is started by compose and is required at startup; other Scale sub-systems stay off
 - `Escrow.ArbiterUserIds`: users who may `POST /v1/tasks/{taskId}/arbitrate`. Dev config lists `usr_arbiter` (`make token USER_ID=usr_arbiter` or `X-Api-Key: dev-arbiter-key`)
 
 Error bodies are JSON: `{"code":"...","message":"..."}`.
