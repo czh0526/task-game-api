@@ -1,6 +1,6 @@
 # 按域分片改造方案（P2）
 
-状态：设计稿，尚未实现。对应 `internal/scale.TODOs` 中的 P2 两条：
+状态：阶段 0（`43044ee` 之后的 `764398d`）与阶段 1 的**域仓储骨架**已实现于 `internal/store/domain`，但**仍未接入 ServiceContext**：默认运行时继续走 cell 模式。阶段 2 起才涉及物理数据切分。对应 `internal/scale.TODOs` 中的 P2 两条：
 
 - `split User and Task repositories into per-domain stores guarded by shard.TxScope`
 - `add global_unique(email -> user_id) and a Snowflake IDGenerator`
@@ -122,6 +122,13 @@
 3. 所有创建类操作在写业务行的**同一个事务**里调用 `plane.AssignInTx` 写目录行；读取类操作走 `Resolver.ResolveExisting`，目录命中则直接拿 DSN，未命中按 pinned 片数算哈希（兼容迁移前的老数据）。
 
 验收：新增 `domain` 包的单元与集成测试；在共置配置下重跑 `cell_test.go` 的全部断言（三库同 schema、约 1/3 分布、跨库读），结果应一致。
+
+**阶段 1 实现状态**：`internal/store/domain` 已完成 `store.Store` 接口、每域 DSN 列表的连接池、Resolver 路由、`TxScope` 钉住与同域跨片拒绝、全部 10 个 repo 的按域路由，以及共置分布 / 目录权威 / 事务跨片拒绝 / 直聊对称性 + SQL 目录重启可见性四组测试。`Store.Mode=domain` 尚未在 `openStore()` 中消费，运行时行为不变。
+
+两个刻意保留的骨架边界：
+
+1. `store.Store.InTx` 只暴露 `store.Repos`，拿不到底层 `*sql.Tx`，所以创建类操作目前调用 `Resolver.Resolve`（内部走 `Directory.Assign`）写目录行，**不能**与业务行同事务；`plane.AssignInTx` 仍是预留接口。要消除这个最终一致窗口，必须先扩展 store 层的事务接口。
+2. 只有带聚合根 key 的调用经过 `TxScope`；只有 id 的广播写（`Delivery.Finish`、`FriendRepo` 的 UPDATE/DELETE、`EscrowEntry`、`Submission.MarkStatus`）仍扇出到域内各片，靠"只有持有行的一片真正变更"工作，不受 `TxScope` 约束。阶段 4 需要逐一改成 outbox 补偿或显式路由。
 
 ### 阶段 2：三个域逐个切流
 
