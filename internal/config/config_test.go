@@ -116,24 +116,27 @@ const redisYAML = inlineHeader + `  Enabled: true
     Channel: "taskgame.outbox"
 `
 
-func TestDefaultConfigIsMySQLWithMessageShards(t *testing.T) {
+func TestDefaultConfigIsThreeMySQLCells(t *testing.T) {
 	c := loadExample(t, "taskgame.yaml")
 	if c.Store.Driver != "mysql" {
 		t.Fatalf("Store.Driver = %q, want mysql", c.Store.Driver)
 	}
-	if c.Store.Shards != 2 {
-		t.Fatalf("Store.Shards = %d, want 2", c.Store.Shards)
+	if len(c.Store.Cells) != 3 {
+		t.Fatalf("Store.Cells = %d entries, want 3 independent databases", len(c.Store.Cells))
 	}
-	if c.Store.ShardDriver != "mysql" {
-		t.Fatalf("Store.ShardDriver = %q, want mysql", c.Store.ShardDriver)
-	}
-	if len(c.Store.ShardDSNs) != c.Store.Shards {
-		t.Fatalf("got %d ShardDSNs for %d shards", len(c.Store.ShardDSNs), c.Store.Shards)
-	}
-	for i, dsn := range c.Store.ShardDSNs {
-		if dsn == "" || dsn == c.Store.DSN {
-			t.Fatalf("ShardDSNs[%d] is empty or equals the primary DSN", i)
+	seen := make(map[string]bool, len(c.Store.Cells))
+	for i, dsn := range c.Store.Cells {
+		if dsn == "" || seen[dsn] {
+			t.Fatalf("Store.Cells[%d] is empty or duplicated: %q", i, dsn)
 		}
+		seen[dsn] = true
+	}
+	// Cell mode must not declare a full primary database or message shards.
+	if c.Store.DSN != "" {
+		t.Fatalf("cell mode must not keep a primary DSN, got %q", c.Store.DSN)
+	}
+	if c.Store.Shards != 0 || len(c.Store.ShardDSNs) != 0 {
+		t.Fatalf("cell mode must not enable message-only sharding: %+v", c.Store)
 	}
 	if c.Scale.Enabled {
 		t.Fatal("the default config must not enable the skeleton")

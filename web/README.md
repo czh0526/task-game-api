@@ -81,7 +81,7 @@ make token USER_ID=usr_extra
 ## Run
 
 ```bash
-docker compose up -d   # MySQL: primary taskgame + 2 message shard databases
+docker compose up -d   # 3 independent MySQL cells on 3307/3308/3309
 make run               # etc/taskgame.yaml, API on http://127.0.0.1:8891
 cd web && npm install && npm run dev
 ```

@@ -34,19 +34,29 @@ type ApiKeyConf struct {
 }
 
 // StoreConf selects the Store implementation.
-// The shipped default (etc/taskgame.yaml) is MySQL with message sharding: a
-// primary database plus one network MySQL database per shard. SQLite remains
-// available for local single-process debugging by setting Driver: sqlite
-// explicitly. The shard driver is independent of the primary driver: the
-// primary store can be SQLite or MySQL while each shard database is a SQLite
-// file or a MySQL DSN.
+//
+// The shipped default (etc/taskgame.yaml) is horizontal cell sharding: N
+// independent MySQL databases with identical full schemas. Each cell owns
+// roughly 1/N of users, tasks, messages and every other business table; there
+// is no full primary database. Cells takes precedence over DSN/Shards.
+//
+// Two older modes remain for backwards compatibility and for the PR #38
+// prototype: a single database (DSN) and message-only sharding (Shards +
+// ShardDSNs, which keeps a primary database). SQLite is available for local
+// single-process debugging by setting Driver: sqlite explicitly.
 type StoreConf struct {
 	// Driver is sqlite or mysql. When omitted, openStore falls back to sqlite
 	// for backwards compatibility with old local configs.
 	Driver string `json:",optional,options=sqlite|mysql"`
-	DSN    string
-	// Shards > 1 enables message sharding: message bodies are routed by chat
-	// into N independent databases. 0 or 1 keeps single-database behaviour.
+	DSN    string `json:",optional"`
+	// Cells enables horizontal, unit-based sharding. One DSN per cell, in cell
+	// order. They may be different MySQL instances (different hosts/ports) or
+	// different schemas on one server. Every API process must use the same
+	// ordered list. When set, DSN and Shards are ignored.
+	Cells []string `json:",optional"`
+	// Shards > 1 enables the older message-only sharding prototype: message
+	// bodies are routed by chat into N independent databases while a primary
+	// database keeps the other tables. 0 or 1 keeps single-database behaviour.
 	Shards int `json:",optional,default=0"`
 	// ShardDriver selects the shard SQL dialect: sqlite (one file per shard)
 	// or mysql (network databases, one per API process that connects).

@@ -23,7 +23,7 @@ Node.js 18 or newer. The client uses global `fetch`.
 
 ## Call the dev server
 
-Start the API from the repo root (`docker compose up -d` for the MySQL primary plus two message shard databases, then `make run`, which loads `etc/taskgame.yaml`). It listens on `http://127.0.0.1:8891`. Pass that origin, or the OpenAPI server URL ending in `/v1`. `health()` calls `/health` on the origin. Every other method calls `/v1/...`.
+Start the API from the repo root (`docker compose up -d` for the three independent MySQL cells on 3307/3308/3309, then `make run`, which loads `etc/taskgame.yaml`). It listens on `http://127.0.0.1:8891`. Pass that origin, or the OpenAPI server URL ending in `/v1`. `health()` calls `/health` on the origin. Every other method calls `/v1/...`.
 
 Auth is one header. `apiKey(...)` sends `X-Api-Key`. `bearer(...)` sends `Authorization: Bearer`. Development keys in `etc/taskgame.yaml`:
 

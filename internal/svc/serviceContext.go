@@ -14,6 +14,7 @@ import (
 	"taskgame/internal/projection"
 	"taskgame/internal/scale"
 	"taskgame/internal/store"
+	"taskgame/internal/store/cell"
 	"taskgame/internal/store/mysql"
 	"taskgame/internal/store/shard"
 	"taskgame/internal/store/sqlite"
@@ -56,8 +57,8 @@ func NewServiceContext(c config.Config) (*ServiceContext, error) {
 		}
 		seen[key.Key] = struct{}{}
 	}
-	if c.Store.DSN == "" {
-		return nil, fmt.Errorf("Store.DSN is required")
+	if c.Store.DSN == "" && len(c.Store.Cells) == 0 {
+		return nil, fmt.Errorf("Store.DSN or Store.Cells is required")
 	}
 	// The scale skeleton is built before the store opens so a bad config
 	// fails fast and cannot leak a connection pool.
@@ -79,9 +80,15 @@ func NewServiceContext(c config.Config) (*ServiceContext, error) {
 	if rt != nil && rt.Fanout != nil {
 		notifier = rt.Fanout
 	}
+	// In cell mode the auth middleware also pins each request to the database
+	// that owns the aggregate root named in the URL (or the caller's cell).
+	var locator *cell.Locator
+	if cs, ok := st.(*cell.Store); ok {
+		locator = cs.Locator()
+	}
 	sc := &ServiceContext{
 		Config: c,
-		Auth:   middleware.NewAuthMiddleware(c.Auth).Handle,
+		Auth:   middleware.NewAuthMiddleware(c.Auth, locator).Handle,
 		Engine: engine.New(st, c.Escrow.Currency,
 			engine.WithTimeouts(engine.TimeoutConfig{
 				OpenTimeout:       c.AutoSettle.OpenTimeout,
@@ -118,6 +125,15 @@ func NewServiceContext(c config.Config) (*ServiceContext, error) {
 }
 
 func openStore(c config.Config) (store.Store, error) {
+	// Horizontal cell sharding (plan A): N independent databases, each with
+	// the full schema and roughly 1/N of every table. No primary database.
+	if len(c.Store.Cells) > 0 {
+		return cell.Open(cell.Config{
+			Driver:         c.Store.Driver,
+			DSNs:           c.Store.Cells,
+			InitialBalance: c.Escrow.InitialBalance,
+		})
+	}
 	var st store.Store
 	var err error
 	switch c.Store.Driver {
@@ -209,13 +225,33 @@ func (sc *ServiceContext) StartBackground(ctx context.Context) {
 	}
 	if sc.Config.AutoSettle.Enabled {
 		sc.loop(ctx, sc.Config.AutoSettle.Interval, 30*time.Second, "auto-settle", func() error {
-			_, err := sc.Engine.AutoSettleDue(ctx)
-			return err
+			// Auto-settle uses InTx, which is pinned to ONE cell. Sweep every
+			// cell so a due task is never skipped in a sharded deployment.
+			var first error
+			for _, cctx := range sc.backgroundContexts(ctx) {
+				if _, err := sc.Engine.AutoSettleDue(cctx); err != nil && first == nil {
+					first = err
+				}
+			}
+			return first
 		})
 	}
 	sc.loop(ctx, sc.Config.Webhook.Interval, 2*time.Second, "webhook", func() error {
 		return sc.Dispatcher.DeliverPending(ctx)
 	})
+}
+
+// backgroundContexts returns one context per cell. In a single-database
+// deployment it is just the original context.
+func (sc *ServiceContext) backgroundContexts(ctx context.Context) []context.Context {
+	if cs, ok := sc.Store.(*cell.Store); ok {
+		out := make([]context.Context, cs.Len())
+		for i := range out {
+			out[i] = cell.WithCell(ctx, i)
+		}
+		return out
+	}
+	return []context.Context{ctx}
 }
 
 func (sc *ServiceContext) loop(ctx context.Context, every, fallback time.Duration, name string, fn func() error) {

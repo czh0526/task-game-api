@@ -8,6 +8,7 @@ import (
 	"taskgame/internal/auth"
 	"taskgame/internal/biz"
 	"taskgame/internal/config"
+	"taskgame/internal/store/cell"
 
 	"github.com/zeromicro/go-zero/rest/httpx"
 )
@@ -16,15 +17,47 @@ import (
 type AuthMiddleware struct {
 	secret string
 	keys   map[string]string
+	// loc is nil for a single-database deployment. In cell mode it pins each
+	// request to the database that owns the aggregate root in the URL (or the
+	// authenticated user when there is no id).
+	loc *cell.Locator
 }
 
-// NewAuthMiddleware indexes the configured API keys.
-func NewAuthMiddleware(cfg config.AuthConf) *AuthMiddleware {
+// NewAuthMiddleware indexes the configured API keys. An optional cell Locator
+// enables horizontal routing; single-database callers omit it.
+func NewAuthMiddleware(cfg config.AuthConf, loc ...*cell.Locator) *AuthMiddleware {
 	keys := make(map[string]string, len(cfg.ApiKeys))
 	for _, item := range cfg.ApiKeys {
 		keys[item.Key] = item.UserId
 	}
-	return &AuthMiddleware{secret: cfg.JwtSecret, keys: keys}
+	m := &AuthMiddleware{secret: cfg.JwtSecret, keys: keys}
+	if len(loc) > 0 {
+		m.loc = loc[0]
+	}
+	return m
+}
+
+// cellRoute pins the request context to one cell. It runs after the user id is
+// placed on the context, so both authenticated and anonymous public reads can
+// be routed. A request with no key at all stays unpinned; list reads fan out.
+func (m *AuthMiddleware) cellRoute(next http.HandlerFunc) http.HandlerFunc {
+	if m.loc == nil {
+		return next
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		key, kind := cell.KeyFromPath(r.URL.Path)
+		if key == "" {
+			if uid, ok := auth.UserID(ctx); ok {
+				key, kind = uid, cell.KindUser
+			}
+		}
+		if key != "" {
+			ctx = cell.WithHint(ctx, key, kind)
+			ctx = cell.WithCell(ctx, m.loc.CellFor(ctx, key, kind))
+		}
+		next(w, r.WithContext(ctx))
+	}
 }
 
 // Handle rejects unauthenticated calls before the handler runs.
@@ -32,9 +65,10 @@ func NewAuthMiddleware(cfg config.AuthConf) *AuthMiddleware {
 // and stored avatars are readable without sign-in; credentials, when supplied,
 // are still validated.
 func (m *AuthMiddleware) Handle(next http.HandlerFunc) http.HandlerFunc {
+	routed := m.cellRoute(next)
 	return func(w http.ResponseWriter, r *http.Request) {
 		if isPublicRead(r) && !hasCredentials(r) {
-			next(w, r)
+			routed(w, r)
 			return
 		}
 		userID, err := m.authenticate(r)
@@ -42,7 +76,7 @@ func (m *AuthMiddleware) Handle(next http.HandlerFunc) http.HandlerFunc {
 			httpx.ErrorCtx(r.Context(), w, err)
 			return
 		}
-		next(w, r.WithContext(auth.WithUserID(r.Context(), userID)))
+		routed(w, r.WithContext(auth.WithUserID(r.Context(), userID)))
 	}
 }
 

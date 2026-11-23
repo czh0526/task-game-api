@@ -21,17 +21,18 @@ test:
 	go test ./...
 
 # MySQL 8 tests, including the concurrent settle, timeout, and webhook cases.
-# Start MySQL first: docker compose up -d
-# The account needs CREATE DATABASE (the compose root user does).
+# Start the three cells first: docker compose up -d
+# The account needs CREATE DATABASE (the compose root user does); tests create
+# their own temporary schemas on cell 0.
 test-mysql:
-	TASKGAME_MYSQL_DSN="$${TASKGAME_MYSQL_DSN:-root:123456@tcp(127.0.0.1:3306)/taskgame?charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=false}" \
+	TASKGAME_MYSQL_DSN="$${TASKGAME_MYSQL_DSN:-root:123456@tcp(127.0.0.1:3307)/taskgame?charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=false}" \
 	TASKGAME_MYSQL_REQUIRED=1 go test ./...
 
-# Default config etc/taskgame.yaml: one MySQL primary (taskgame) plus two
-# message shard databases (taskgame_shard_0/1) on 127.0.0.1:3306. Start the
-# databases first (`docker compose up -d`); a fresh volume creates the shard
-# schemas from etc/mysql-init.d. There is no separate SQLite target: set
-# Driver: sqlite explicitly in a copy of the config if you need one.
+# Default config etc/taskgame.yaml: three independent MySQL databases
+# (127.0.0.1:3307/3308/3309), each with the full schema and ~1/3 of the data.
+# Start them first (`docker compose up -d`). There is no primary database and
+# no separate SQLite target: set Driver: sqlite explicitly in a copy of the
+# config if you need one.
 run:
 	go run .
 
