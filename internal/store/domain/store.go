@@ -40,6 +40,9 @@ type Config struct {
 	// (a separate control-plane DB), assignment stays an idempotent out-of-tx
 	// write, as before.
 	DirectoryCoLocated bool
+	// Fence, when set, is checked before a write transaction begins. A key
+	// frozen for physical migration is rejected with plane.ErrFenced.
+	Fence plane.Fence
 }
 
 // Store is a store.Store whose tables are split by aggregate-root domain.
@@ -57,6 +60,7 @@ type Store struct {
 	opened []store.Store
 
 	directoryCoLocated bool
+	fence              plane.Fence
 }
 
 // Open creates one connection pool per distinct DSN. When several domains
@@ -80,6 +84,7 @@ func Open(cfg Config) (*Store, error) {
 	s := &Store{
 		strictTx:           cfg.StrictTx,
 		directoryCoLocated: cfg.DirectoryCoLocated,
+		fence:              cfg.Fence,
 		pools:              make(map[plane.Domain][]store.Store, len(allDomains)),
 		byDSN:              make(map[string]store.Store),
 	}
@@ -264,6 +269,15 @@ func (s *Store) InTx(ctx context.Context, fn func(ctx context.Context, r store.R
 	var p plane.Placement
 	writeDirectoryInTx := false
 	route, ok := RouteFrom(ctx)
+	if s.fence != nil && ok && route.Key != "" && route.Domain.Valid() {
+		fenced, err := s.fence.IsFenced(ctx, route.Domain, route.Key)
+		if err != nil {
+			return err
+		}
+		if fenced {
+			return fmt.Errorf("%w: %s/%s", plane.ErrFenced, route.Domain, route.Key)
+		}
+	}
 	if ok && route.Key != "" && route.Domain.Valid() {
 		var err error
 		p, err = s.placeWithTxWrite(ctx, route.Domain, route.Key, route.Create, true)

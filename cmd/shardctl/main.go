@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"taskgame/internal/plane"
 	"taskgame/internal/shardmigrate"
@@ -27,6 +28,11 @@ type options struct {
 	from        int
 	to          int
 	skipCleanup bool
+	domain      string
+	key         string
+	reason      string
+	owner       string
+	ttl         time.Duration
 }
 
 func (o *options) bind(fs *flag.FlagSet) {
@@ -42,6 +48,11 @@ func (o *options) bind(fs *flag.FlagSet) {
 	fs.IntVar(&o.from, "from", 0, "source shard index")
 	fs.IntVar(&o.to, "to", 0, "target shard index")
 	fs.BoolVar(&o.skipCleanup, "skip-cleanup", false, "cutover only: keep rows on the source shard")
+	fs.StringVar(&o.domain, "domain", "user", "fence domain: user, task or message")
+	fs.StringVar(&o.key, "key", "", "fence key (a root id, or * for the whole domain)")
+	fs.StringVar(&o.reason, "reason", "", "fence reason")
+	fs.StringVar(&o.owner, "owner", "shardctl", "fence owner")
+	fs.DurationVar(&o.ttl, "ttl", time.Hour, "fence time-to-live")
 }
 
 func (o *options) chatIDs() []string {
@@ -101,6 +112,12 @@ func main() {
 		err = runCleanup(ctx, os.Args[2:])
 	case "rollback":
 		err = runRollback(ctx, os.Args[2:])
+	case "fence-lock":
+		err = runFenceLock(ctx, os.Args[2:])
+	case "fence-unlock":
+		err = runFenceUnlock(ctx, os.Args[2:])
+	case "fence-list":
+		err = runFenceList(ctx, os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -128,6 +145,9 @@ Commands:
   cutover   flip directory rows, then delete source rows
   cleanup   delete source rows only
   rollback  copy back, flip directory rows back, delete moved rows
+  fence-lock    freeze a key (or a whole domain with -key '*') during migration
+  fence-unlock  release a frozen key
+  fence-list    list active maintenance fences
 
 plan/copy/verify/cutover/cleanup/rollback all accept -entity=message|user|task
 (default message). For user/task use -keys with user ids / task ids; a chat
@@ -157,6 +177,86 @@ func (o *options) require(fields ...string) error {
 		if !values[name] {
 			return fmt.Errorf("-%s is required", name)
 		}
+	}
+	return nil
+}
+
+func openFence(ctx context.Context, o *options) (*plane.SQLFence, error) {
+	return plane.OpenSQLFence(ctx, o.driver, o.control)
+}
+
+func runFenceLock(ctx context.Context, args []string) error {
+	o, err := parse("fence-lock", args)
+	if err != nil {
+		return err
+	}
+	if err := o.require("control", "key"); err != nil {
+		return err
+	}
+	d := plane.Domain(o.domain)
+	if !d.Valid() {
+		return fmt.Errorf("invalid -domain %q", o.domain)
+	}
+	f, err := openFence(ctx, o)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if err := f.Lock(ctx, d, o.key, o.reason, o.owner, o.ttl); err != nil {
+		return err
+	}
+	fmt.Printf("fenced %s/%s for %s (owner=%s, ttl=%s)\n", d, o.key, o.reason, o.owner, o.ttl)
+	return nil
+}
+
+func runFenceUnlock(ctx context.Context, args []string) error {
+	o, err := parse("fence-unlock", args)
+	if err != nil {
+		return err
+	}
+	if err := o.require("control", "key"); err != nil {
+		return err
+	}
+	d := plane.Domain(o.domain)
+	if !d.Valid() {
+		return fmt.Errorf("invalid -domain %q", o.domain)
+	}
+	f, err := openFence(ctx, o)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if err := f.Unlock(ctx, d, o.key); err != nil {
+		return err
+	}
+	fmt.Printf("unfenced %s/%s\n", d, o.key)
+	return nil
+}
+
+func runFenceList(ctx context.Context, args []string) error {
+	o, err := parse("fence-list", args)
+	if err != nil {
+		return err
+	}
+	if err := o.require("control"); err != nil {
+		return err
+	}
+	f, err := openFence(ctx, o)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	rows, err := f.List(ctx)
+	if err != nil {
+		return err
+	}
+	if len(rows) == 0 {
+		fmt.Println("no active fences")
+		return nil
+	}
+	for _, r := range rows {
+		fmt.Printf("%s/%-20s owner=%-16s expires=%s reason=%s\n",
+			r.Domain, r.Key, r.Owner, r.ExpiresAt.Format(time.RFC3339), r.Reason)
 	}
 	return nil
 }

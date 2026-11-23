@@ -61,6 +61,7 @@ type Runtime struct {
 	transport    notify.Transport
 	remote       *notify.RemoteFanout
 	directoryDB  *plane.SQLDirectory // non-nil when Scale.Directory.Enabled
+	Fence        plane.FenceStore    // maintenance write guard, co-located with directory
 	instanceID   string
 }
 
@@ -375,6 +376,14 @@ func (r *Runtime) wireDirectory(c config.ScaleConf, primary config.StoreConf, to
 		return nil, fmt.Errorf("SQL directory: %w", err)
 	}
 	r.directoryDB = sqlDir
+	// The maintenance fence shares the control-plane pool. It is cheap (a
+	// short-lived cache on the hot path) and lets shardctl freeze a key
+	// during physical migration without an out-of-band coordination system.
+	fence, ferr := plane.NewSQLFence(ctx, sqlDir.DB(), driver)
+	if ferr != nil {
+		return nil, fmt.Errorf("maintenance fence: %w", ferr)
+	}
+	r.Fence = fence
 	// Persist the configured topology so ShardCount is shared, and a process
 	// still rolling with an older, smaller config cannot shrink it.
 	for _, domain := range []plane.Domain{plane.DomainUser, plane.DomainTask, plane.DomainMessage} {

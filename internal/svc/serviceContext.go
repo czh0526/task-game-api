@@ -154,8 +154,10 @@ func openStore(c config.Config, rt *scale.Runtime) (store.Store, error) {
 			return nil, fmt.Errorf("Store.Mode=domain needs Store.Cells or per-domain DSNs")
 		}
 		var control *plane.ControlPlane
+		var fence plane.Fence
 		if rt != nil {
 			control = rt.ControlPlane
+			fence = rt.Fence
 		}
 		return domain.Open(domain.Config{
 			Driver:             c.Store.Driver,
@@ -163,6 +165,7 @@ func openStore(c config.Config, rt *scale.Runtime) (store.Store, error) {
 			InitialBalance:     c.Escrow.InitialBalance,
 			Control:            control,
 			DirectoryCoLocated: rt != nil && rt.DirectoryCoLocated(),
+			Fence:              fence,
 		})
 	}
 	// Horizontal cell sharding (plan A): N independent databases, each with
