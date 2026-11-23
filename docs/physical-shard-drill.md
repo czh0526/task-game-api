@@ -169,11 +169,12 @@ shardctl rollback -driver mysql -entity user -control "<control-dsn>" \
 - 迁移后写入（改余额/改任务状态）落在新的物理库；
 - 回滚后目录、数据、路由读全部恢复。
 
-## 7. 真正上生产还需要什么
+## 7. 生产化护栏（已实现）
 
-- **冻结写入或 CDC**：当前演练假设维护窗口内选中的聚合根没有并发写入。持续写入场景需要先接 CDC 或双写。
-- **跨 user/task 事务补偿**：分置后资金操作需要显式对账；详见 6.3 与方案文档第 6 节。
-- **控制面高可用**：SQLDirectory 当前单 DSN；生产至少要主从。
+- **冻结写入**：`plane.SQLFence` + `shardctl fence-lock/unlock/list` 可在迁移窗口冻结选中 key 或整个域；domain 存储写入前检查，命中返回 `plane.ErrFenced`。无需 CDC 也能保证窗口内无并发写（代价是冻结期间这些 key 不可写）。持续双写场景仍需 CDC。
+- **跨 user/task 事务补偿**：`internal/compensation` 的持久化 saga + 后台 reconciler，FundTask 在扣款前记录 intent，崩溃后按 escrow 权威金额重放或退款；通过 `Scale.Compensation.Enabled` 开启（需 `Scale.Directory.Enabled`）。
+- **控制面高可用**：`SQLDirectory` 增加读缓存与可选 `Scale.Directory.ReplicaDSN`（读走副本、故障自动回落主库）；目录行与业务行在共置时可经 `AssignInTx` 同事务写入。
+- **监控**：`/metrics` 暴露目录命中率、控制面 QPS、跨域事务数、冻结写、补偿次数。
 - **auto_increment 与游标（仅 message 域）**：`last_read_rowid` 已重写，但任何外部保存的 rowid/seq（如客户端游标）都需要同步失效。
 - **部分索引/生成列**：MySQL `chats.direct_pair`、`friend_requests.pending_pair` 是生成列，copy 不显式写它们；SQLite 无此列。两边 schema 差异已在工具中处理。
 
@@ -187,3 +188,18 @@ shardctl rollback -driver mysql -entity user -control "<control-dsn>" \
 - user 域搬迁后余额、积分、好友、分组、幂等记录与收件人视角全部正确，双写好友行未被误删；
 - task 域搬迁后任务、投递、托管账本与流水、邀请完整，写入落新片；
 - 三个域的完整回滚都能让目录、数据、路由读回到迁移前状态。
+
+## 9. 真机 MySQL + 双进程演练（未实测项）
+
+`scripts/drill-mysql.sh` 是真机演练的可执行脚本：拉起第 4 个 MySQL cell（3310）+ 控制面库，跑 `shardctl init/backfill/plan/copy/verify/cutover`，然后以新拓扑重启 8891/8892 两个 API 进程验证跨进程 SSE 与历史消息，最后 rollback。它覆盖运行手册第 5 节的全部步骤。
+
+**状态：脚本已编写并通过 `bash -n` 语法校验，但未在真实 MySQL 环境执行。** 撰写环境没有 Docker / MySQL / Redis（端口 3307-3311、6379 均未监听，也没有相应可执行文件），因此真机行为——尤其是 MySQL 生成列、`DATETIME` 解析、`INSERT IGNORE` 并发语义和双进程 Redis pub/sub——**尚未实测**。测试等价物是 SQLite 自动化演练（`go test ./internal/shardmigrate/...`），它验证了除 MySQL 方言差异外的全部逻辑。
+
+在有 Docker 的机器上执行：
+
+```bash
+bash scripts/drill-mysql.sh           # 全量演练，结束自动清理
+bash scripts/drill-mysql.sh --keep    # 保留容器与进程，便于人工核对
+```
+
+脚本phase 2 会打印提示；真机上需把创建出的 chat id 传给 phase 3/5 的 `shardctl -chats <id>`（这部分保留为显式手工步骤，避免自动选取错误的会话）。跨进程 SSE 订阅 `/v1/events/stream` 的断言同样保留为人工核对项。
