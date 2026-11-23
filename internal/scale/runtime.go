@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"taskgame/internal/archive"
+	"taskgame/internal/compensation"
 	"taskgame/internal/config"
 	"taskgame/internal/id"
 	"taskgame/internal/notify"
@@ -55,6 +56,8 @@ type Runtime struct {
 	Projector    *search.Projector
 	Lease        projection.Lease
 	Bus          projection.Bus
+	Compensation *compensation.Coordinator
+	compLog      compensation.Log
 	transport    notify.Transport
 	remote       *notify.RemoteFanout
 	directoryDB  *plane.SQLDirectory // non-nil when Scale.Directory.Enabled
@@ -160,6 +163,22 @@ func New(c config.ScaleConf, primary config.StoreConf) (*Runtime, error) {
 		return nil, err
 	}
 	rt.DomainRouter = dr
+
+	// P0: cross-domain saga reconciler. It reuses the control-plane pool when
+	// a persistent directory is configured; otherwise it stays off because a
+	// process-local directory cannot coordinate a physical domain split.
+	if c.Compensation.Enabled && rt.directoryDB != nil {
+		compDir := c.Directory.Driver
+		compLog, lerr := compensation.NewSQLLog(context.Background(), rt.directoryDB.DB(), compDir)
+		if lerr != nil {
+			_ = rt.Close()
+			return nil, fmt.Errorf("compensation log: %w", lerr)
+		}
+		rt.compLog = compLog
+		rt.Compensation = compensation.NewCoordinator(compLog, instanceID,
+			compensation.WithLeaseTTL(c.Compensation.LeaseTTL),
+			compensation.WithMaxRetries(c.Compensation.MaxRetry))
+	}
 
 	// P3: cold tier / large objects.
 	if c.Archive.Enabled {
@@ -416,6 +435,13 @@ func (r *Runtime) ProjectionLeaseTTL() time.Duration {
 	return r.cfg.Projection.LeaseTTL
 }
 
+func (r *Runtime) CompensationInterval() time.Duration {
+	if r == nil || r.cfg.Compensation.Interval <= 0 {
+		return 5 * time.Second
+	}
+	return r.cfg.Compensation.Interval
+}
+
 // Transport exposes the bus so a second process (or a test) can attach.
 func (r *Runtime) Transport() notify.Transport {
 	if r == nil {
@@ -450,6 +476,13 @@ func (r *Runtime) Close() error {
 	if r.directoryDB != nil {
 		if derr := r.directoryDB.Close(); err == nil {
 			err = derr
+		}
+	}
+	// compLog shares the directory DB when enabled; Close is a no-op then,
+	// but call it for completeness (it only closes a pool it owns).
+	if r.compLog != nil {
+		if cerr := r.compLog.Close(); err == nil {
+			err = cerr
 		}
 	}
 	return err

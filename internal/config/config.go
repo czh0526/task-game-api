@@ -79,15 +79,26 @@ type StoreConf struct {
 // With Enabled=false the process behaves exactly like PR #38: no new package
 // is constructed, no config file needs a Scale section.
 type ScaleConf struct {
-	Enabled    bool                `json:",optional"`
-	PubSub     string              `json:",optional"` // local (default) | shared | redis
-	InstanceID string              `json:",optional"` // identifies this API process on the bus
-	Redis      RedisScaleConf      `json:",optional"` // used only when PubSub=redis
-	Projection ProjectionScaleConf `json:",optional"` // shared-lease outbox projection
-	Directory  DirectoryScaleConf  `json:",optional"` // SQL-backed routing directory
-	Domains    DomainScaleConf     `json:",optional"`
-	Archive    ArchiveScaleConf    `json:",optional"`
-	Search     SearchScaleConf     `json:",optional"`
+	Enabled      bool                  `json:",optional"`
+	PubSub       string                `json:",optional"` // local (default) | shared | redis
+	InstanceID   string                `json:",optional"` // identifies this API process on the bus
+	Redis        RedisScaleConf        `json:",optional"` // used only when PubSub=redis
+	Projection   ProjectionScaleConf   `json:",optional"` // shared-lease outbox projection
+	Directory    DirectoryScaleConf    `json:",optional"` // SQL-backed routing directory
+	Domains      DomainScaleConf       `json:",optional"`
+	Archive      ArchiveScaleConf      `json:",optional"`
+	Search       SearchScaleConf       `json:",optional"`
+	Compensation CompensationScaleConf `json:",optional"` // cross-domain saga reconciler
+}
+
+// CompensationScaleConf enables the durable saga reconciler for cross-domain
+// operations (currently fund_hold). The log lives in the control-plane DB, so
+// a single process or several can reconcile without double-compensating.
+type CompensationScaleConf struct {
+	Enabled  bool          `json:",optional"`
+	Interval time.Duration `json:",optional,default=5s"`
+	LeaseTTL time.Duration `json:",optional,default=30s"`
+	MaxRetry int           `json:",optional,default=5"`
 }
 
 // ProjectionScaleConf turns message_outbox crash recovery into a coordinated
@@ -227,6 +238,12 @@ func (c ScaleConf) Validate() error {
 	case "", "memory":
 	default:
 		return fmt.Errorf("Scale.Search.Driver %q is not implemented in the skeleton", c.Search.Driver)
+	}
+	if c.Compensation.Interval < 0 || c.Compensation.LeaseTTL < 0 {
+		return fmt.Errorf("Scale.Compensation durations cannot be negative")
+	}
+	if c.Compensation.MaxRetry < 0 {
+		return fmt.Errorf("Scale.Compensation.MaxRetry cannot be negative")
 	}
 	return nil
 }

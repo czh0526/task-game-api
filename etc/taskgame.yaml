@@ -126,3 +126,11 @@ Scale:
   #   Message:
   #     Shards: 3
   #     DSNs: [...]   # change to dedicated message DSNs to cut this domain over
+  # Cross-domain saga reconciler (opt-in; requires Directory.Enabled for the log DB).
+  # Enable it before physically splitting user and task domains so a crash
+  # between the balance deduction and escrow insert can be replayed/compensated.
+  # Compensation:
+  #   Enabled: true
+  #   Interval: 5s
+  #   LeaseTTL: 30s
+  #   MaxRetry: 5

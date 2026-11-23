@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"taskgame/internal/account"
+	"taskgame/internal/compensation"
 	"taskgame/internal/config"
 	"taskgame/internal/engine"
 	"taskgame/internal/id"
@@ -89,6 +90,19 @@ func NewServiceContext(c config.Config) (*ServiceContext, error) {
 		locator = cs.Locator()
 	}
 	_, domainMode := st.(*domain.Store)
+	engineOpts := []engine.Option{
+		engine.WithTimeouts(engine.TimeoutConfig{
+			OpenTimeout:       c.AutoSettle.OpenTimeout,
+			StartTimeout:      c.AutoSettle.StartTimeout,
+			SeatTimeout:       c.AutoSettle.SeatTimeout,
+			WinnerSelectHours: c.AutoSettle.WinnerSelectHours,
+		}),
+		engine.WithArbiters(c.Escrow.ArbiterUserIds),
+		engine.WithSignalNotifier(notifier),
+	}
+	if rt != nil && rt.Compensation != nil {
+		engineOpts = append(engineOpts, engine.WithCompensation(rt.Compensation))
+	}
 	// P0: when a persistent control plane is enabled, route registration and
 	// login through global_unique(email -> user_id) + Snowflake ids. When it
 	// is off, account.New keeps the original behavior.
@@ -97,18 +111,9 @@ func NewServiceContext(c config.Config) (*ServiceContext, error) {
 		accountOpts = append(accountOpts, account.WithIdentity(rt.ControlPlane.Unique, rt.ControlPlane.IDs))
 	}
 	sc := &ServiceContext{
-		Config: c,
-		Auth:   middleware.NewAuthMiddlewareWithDomain(c.Auth, domainMode, locator).Handle,
-		Engine: engine.New(st, c.Escrow.Currency,
-			engine.WithTimeouts(engine.TimeoutConfig{
-				OpenTimeout:       c.AutoSettle.OpenTimeout,
-				StartTimeout:      c.AutoSettle.StartTimeout,
-				SeatTimeout:       c.AutoSettle.SeatTimeout,
-				WinnerSelectHours: c.AutoSettle.WinnerSelectHours,
-			}),
-			engine.WithArbiters(c.Escrow.ArbiterUserIds),
-			engine.WithSignalNotifier(notifier),
-		),
+		Config:   c,
+		Auth:     middleware.NewAuthMiddlewareWithDomain(c.Auth, domainMode, locator).Handle,
+		Engine:   engine.New(st, c.Escrow.Currency, engineOpts...),
 		Accounts: account.New(st, c.Auth.JwtSecret, c.Auth.TokenTTL, accountOpts...),
 		Store:    st,
 		Notifier: notifier,
@@ -118,6 +123,11 @@ func NewServiceContext(c config.Config) (*ServiceContext, error) {
 			Timeout:     c.Webhook.Timeout,
 			MaxAttempts: c.Webhook.MaxAttempts,
 		}),
+	}
+	// P0: attach the fund-hold handler so the saga reconciler can replay or
+	// compensate a cross-domain balance deduction after a crash.
+	if rt != nil && rt.Compensation != nil {
+		rt.Compensation.RegisterHandler(compensation.KindFundHold, compensation.NewFundHoldHandler(st))
 	}
 	// P1 #2: attach the shared-lease coordinator to the primary DB and build
 	// the worker that reacts to wake-up hints. The store type is asserted
@@ -268,6 +278,12 @@ func (sc *ServiceContext) StartBackground(ctx context.Context) {
 	sc.loop(ctx, sc.Config.Webhook.Interval, 2*time.Second, "webhook", func() error {
 		return sc.Dispatcher.DeliverPending(ctx)
 	})
+	if sc.Scale != nil && sc.Scale.Compensation != nil {
+		sc.loop(ctx, sc.Scale.CompensationInterval(), 5*time.Second, "compensation", func() error {
+			_, err := sc.Scale.Compensation.ReconcileOnce(ctx, 32)
+			return err
+		})
+	}
 }
 
 // backgroundContexts returns one context per cell. In a single-database

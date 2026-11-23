@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"taskgame/internal/biz"
+	"taskgame/internal/compensation"
 	"taskgame/internal/id"
 	"taskgame/internal/model"
 	"taskgame/internal/store"
@@ -53,6 +54,7 @@ type Engine struct {
 	timeouts TimeoutConfig
 	arbiters map[string]struct{}
 	notifier SignalNotifier
+	comp     *compensation.Coordinator // optional cross-domain saga driver
 }
 
 // Option configures an Engine.
@@ -75,6 +77,14 @@ func WithArbiters(ids []string) Option {
 			}
 		}
 	}
+}
+
+// WithCompensation attaches the cross-domain saga driver. When set (and the
+// user/task domains are physically split), FundTask records the fund hold as
+// a saga so a crash between the balance deduction and the escrow insert can
+// be replayed or compensated by the background reconciler.
+func WithCompensation(c *compensation.Coordinator) Option {
+	return func(e *Engine) { e.comp = c }
 }
 
 // IsArbiter reports whether userID is configured as an escrow arbiter.
