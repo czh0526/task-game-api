@@ -371,7 +371,7 @@ func (r *Runtime) wireDirectory(c config.ScaleConf, primary config.StoreConf, to
 	// from hanging the process forever.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	sqlDir, err := plane.OpenSQLDirectory(ctx, driver, dsn, topo)
+	sqlDir, err := plane.OpenSQLDirectoryWithReplica(ctx, driver, dsn, c.Directory.ReplicaDSN, topo)
 	if err != nil {
 		return nil, fmt.Errorf("SQL directory: %w", err)
 	}

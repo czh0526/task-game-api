@@ -178,6 +178,7 @@ func TestUserDomainPhysicalCutover(t *testing.T) {
 	if err := shardmigrate.CutoverEntity(ctx, "sqlite", env.control, plane.DomainUser, keys, 0, 3, env.dsns[3]); err != nil {
 		t.Fatalf("cutover user: %v", err)
 	}
+	env.directory.InvalidateAll() // cutover ran in another directory instance
 	if _, err := shardmigrate.CleanupEntity(ctx, "sqlite", env.dsns[0], shardmigrate.UserSpec, keys); err != nil {
 		t.Fatalf("cleanup user: %v", err)
 	}
@@ -227,6 +228,7 @@ func TestUserDomainPhysicalCutover(t *testing.T) {
 		shardmigrate.UserSpec, 0, 3, keys); err != nil {
 		t.Fatalf("rollback user: %v", err)
 	}
+	env.directory.InvalidateAll()
 	if p, err = env.cp.Resolver.ResolveExisting(ctx, plane.DomainUser, a); err != nil || p.Shard != 0 {
 		t.Fatalf("placement after rollback = %+v err=%v", p, err)
 	}
@@ -298,6 +300,7 @@ func TestTaskDomainPhysicalCutover(t *testing.T) {
 	if err := shardmigrate.CutoverEntity(ctx, "sqlite", env.control, plane.DomainTask, keys, 0, 3, env.dsns[3]); err != nil {
 		t.Fatalf("cutover task: %v", err)
 	}
+	env.directory.InvalidateAll()
 	if _, err := shardmigrate.CleanupEntity(ctx, "sqlite", env.dsns[0], shardmigrate.TaskSpec, keys); err != nil {
 		t.Fatalf("cleanup task: %v", err)
 	}
@@ -338,6 +341,7 @@ func TestTaskDomainPhysicalCutover(t *testing.T) {
 		shardmigrate.TaskSpec, 0, 3, keys); err != nil {
 		t.Fatalf("rollback task: %v", err)
 	}
+	env.directory.InvalidateAll()
 	if p, err = env.cp.Resolver.ResolveExisting(ctx, plane.DomainTask, taskID); err != nil || p.Shard != 0 {
 		t.Fatalf("placement after rollback = %+v err=%v", p, err)
 	}

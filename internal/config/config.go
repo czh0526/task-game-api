@@ -122,9 +122,10 @@ type ProjectionScaleConf struct {
 // multi-machine deployment should point DSN at a shared MySQL database that
 // every process can reach; an explicit Driver must match the DSN's dialect.
 type DirectoryScaleConf struct {
-	Enabled bool   `json:",optional"`
-	Driver  string `json:",optional"` // sqlite | mysql; default: inherit Store.Driver
-	DSN     string `json:",optional"` // default: inherit Store.DSN
+	Enabled    bool   `json:",optional"`
+	Driver     string `json:",optional"` // sqlite | mysql; default: inherit Store.Driver
+	DSN        string `json:",optional"` // default: inherit Store.DSN
+	ReplicaDSN string `json:",optional"` // optional read replica for Lookup; writes always use DSN
 }
 
 // RedisScaleConf is the real cross-process signal bus. Every API process of

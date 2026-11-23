@@ -42,8 +42,27 @@ type SQLDirectory struct {
 	now    func() time.Time
 	ownsDB bool
 
+	// readDB serves Lookup when a read replica is configured; writes always
+	// go to db (the primary). A failed replica read falls back to the primary.
+	readDB      *sql.DB
+	ownsRead    bool
+	cacheTTL    time.Duration
+	lookupMu    sync.RWMutex
+	lookupCache map[dirCacheKey]dirCacheEntry
+
 	closeOnce sync.Once
 	closeErr  error
+}
+
+type dirCacheKey struct {
+	domain Domain
+	key    string
+}
+
+type dirCacheEntry struct {
+	shard     int
+	ok        bool
+	expiresAt time.Time
 }
 
 // OpenSQLDirectory connects to the control-plane database, applies Schema and
@@ -89,6 +108,43 @@ func OpenSQLDirectory(ctx context.Context, driverName, dsn string, topo *Topolog
 	return d, nil
 }
 
+// OpenSQLDirectoryWithReplica is OpenSQLDirectory plus an optional read
+// replica. Lookup reads are served from the replica (with primary fallback on
+// error); all writes still target the primary. This is the HA shape for the
+// control plane: the directory survives a replica outage and reads are
+// offloaded from the primary. Empty replicaDSN behaves like OpenSQLDirectory.
+func OpenSQLDirectoryWithReplica(ctx context.Context, driverName, dsn, replicaDSN string, topo *Topology) (*SQLDirectory, error) {
+	d, err := OpenSQLDirectory(ctx, driverName, dsn, topo)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(replicaDSN) == "" || replicaDSN == dsn {
+		return d, nil
+	}
+	driver, _ := normalizeDriver(driverName)
+	if driver == "sqlite" {
+		if err := ensureSQLiteDir(replicaDSN); err != nil {
+			_ = d.Close()
+			return nil, fmt.Errorf("plane: prepare replica sqlite dir: %w", err)
+		}
+	}
+	readDB, err := sql.Open(driver, replicaDSN)
+	if err != nil {
+		_ = d.Close()
+		return nil, fmt.Errorf("plane: open directory replica: %w", err)
+	}
+	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := readDB.PingContext(pingCtx); err != nil {
+		_ = readDB.Close()
+		_ = d.Close()
+		return nil, fmt.Errorf("plane: ping directory replica: %w", err)
+	}
+	d.readDB = readDB
+	d.ownsRead = true
+	return d, nil
+}
+
 // NewSQLDirectory wraps an existing *sql.DB (for example the primary store's
 // pool) and applies Schema. It does NOT own the pool: Close is a no-op.
 func NewSQLDirectory(ctx context.Context, db *sql.DB, driverName string, topo *Topology) (*SQLDirectory, error) {
@@ -104,11 +160,13 @@ func NewSQLDirectory(ctx context.Context, db *sql.DB, driverName string, topo *T
 
 func newSQLDirectory(ctx context.Context, db *sql.DB, driver string, topo *Topology, owns bool) (*SQLDirectory, error) {
 	d := &SQLDirectory{
-		db:     db,
-		driver: driver,
-		topo:   topo,
-		now:    time.Now,
-		ownsDB: owns,
+		db:          db,
+		driver:      driver,
+		topo:        topo,
+		now:         time.Now,
+		ownsDB:      owns,
+		cacheTTL:    2 * time.Second,
+		lookupCache: make(map[dirCacheKey]dirCacheEntry),
 	}
 	if err := d.Migrate(ctx); err != nil {
 		return nil, err
@@ -133,21 +191,70 @@ func (d *SQLDirectory) Migrate(ctx context.Context) error {
 }
 
 // Lookup returns the authoritative shard for a key. A miss is not an error.
+// Results (including misses) are cached briefly to keep the control plane off
+// the hot path; Assign invalidates the entry so this process sees its own
+// writes immediately. Other processes see a change within cacheTTL.
 func (d *SQLDirectory) Lookup(ctx context.Context, domain Domain, key string) (int, bool, error) {
 	if !domain.Valid() {
 		return 0, false, fmt.Errorf("plane: invalid domain %q", domain)
 	}
+	ck := dirCacheKey{domain: domain, key: key}
+	d.lookupMu.RLock()
+	entry, cached := d.lookupCache[ck]
+	d.lookupMu.RUnlock()
+	if cached && d.now().Before(entry.expiresAt) {
+		return entry.shard, entry.ok, nil
+	}
+
+	reader := d.db
+	if d.readDB != nil {
+		reader = d.readDB
+	}
 	var shard int
-	err := d.db.QueryRowContext(ctx,
+	err := reader.QueryRowContext(ctx,
 		`SELECT shard FROM shard_directory WHERE domain = ? AND shard_key = ?`,
 		string(domain), key).Scan(&shard)
+	if err != nil && d.readDB != nil {
+		// Replica failed: fall back to the primary rather than failing the
+		// request (an HA control plane must survive a replica outage).
+		err = d.db.QueryRowContext(ctx,
+			`SELECT shard FROM shard_directory WHERE domain = ? AND shard_key = ?`,
+			string(domain), key).Scan(&shard)
+	}
+	ok := true
 	if errors.Is(err, sql.ErrNoRows) {
-		return 0, false, nil
+		shard, ok = 0, false
+		err = nil
 	}
 	if err != nil {
 		return 0, false, fmt.Errorf("plane: lookup %s/%s: %w", domain, key, err)
 	}
-	return shard, true, nil
+	d.lookupMu.Lock()
+	d.lookupCache[ck] = dirCacheEntry{shard: shard, ok: ok, expiresAt: d.now().Add(d.cacheTTL)}
+	d.lookupMu.Unlock()
+	return shard, ok, nil
+}
+
+// Invalidate drops one cached lookup. A control-plane writer in another
+// process (e.g. shardctl cutover) cannot push an invalidation here; callers
+// that just performed an out-of-band directory change can use this to refresh
+// immediately instead of waiting out cacheTTL.
+func (d *SQLDirectory) Invalidate(domain Domain, key string) {
+	d.invalidateLookup(domain, key)
+}
+
+// InvalidateAll clears the entire lookup cache.
+func (d *SQLDirectory) InvalidateAll() {
+	d.lookupMu.Lock()
+	d.lookupCache = make(map[dirCacheKey]dirCacheEntry)
+	d.lookupMu.Unlock()
+}
+
+// invalidateLookup drops a cached entry after a write.
+func (d *SQLDirectory) invalidateLookup(domain Domain, key string) {
+	d.lookupMu.Lock()
+	delete(d.lookupCache, dirCacheKey{domain: domain, key: key})
+	d.lookupMu.Unlock()
 }
 
 // Assign writes a directory row in a transaction. An existing row wins: the
@@ -168,6 +275,7 @@ func (d *SQLDirectory) Assign(ctx context.Context, domain Domain, key string, sh
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("plane: commit assign: %w", err)
 	}
+	d.invalidateLookup(domain, key)
 	return nil
 }
 
@@ -283,6 +391,11 @@ func (d *SQLDirectory) Close() error {
 	d.closeOnce.Do(func() {
 		if d.ownsDB && d.db != nil {
 			d.closeErr = d.db.Close()
+		}
+		if d.ownsRead && d.readDB != nil {
+			if rerr := d.readDB.Close(); d.closeErr == nil {
+				d.closeErr = rerr
+			}
 		}
 	})
 	return d.closeErr

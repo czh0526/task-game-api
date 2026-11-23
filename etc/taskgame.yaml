@@ -126,6 +126,13 @@ Scale:
   #   Message:
   #     Shards: 3
   #     DSNs: [...]   # change to dedicated message DSNs to cut this domain over
+  # Directory HA: optional read replica. Writes always go to Directory.DSN;
+  # Lookup reads use the replica with automatic fallback to the primary.
+  # Directory:
+  #   Enabled: true
+  #   Driver: mysql
+  #   DSN: "root:123456@tcp(127.0.0.1:3307)/taskgame_control?..."
+  #   ReplicaDSN: "root:123456@tcp(127.0.0.1:3311)/taskgame_control?..."
   # Cross-domain saga reconciler (opt-in; requires Directory.Enabled for the log DB).
   # Enable it before physically splitting user and task domains so a crash
   # between the balance deduction and escrow insert can be replayed/compensated.

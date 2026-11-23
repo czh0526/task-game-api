@@ -64,6 +64,10 @@ func (d *SQLDirectory) ReassignBatch(ctx context.Context, domain Domain, from, t
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("plane: commit reassign: %w", err)
 	}
+	// Dropped cached values so this process immediately sees the new shards.
+	for _, key := range keys {
+		d.invalidateLookup(domain, key)
+	}
 	return nil
 }
 

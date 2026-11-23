@@ -125,6 +125,7 @@ func TestPhysicalCutoverDrill(t *testing.T) {
 	if _, err := directory.DB().ExecContext(ctx, `DELETE FROM shard_directory`); err != nil {
 		t.Fatal(err)
 	}
+	directory.InvalidateAll() // out-of-band mutation; refresh this process's cache
 	report, err := shardmigrate.Backfill(ctx, "sqlite", controlDSN, base,
 		[]plane.Domain{plane.DomainUser, plane.DomainTask, plane.DomainMessage})
 	if err != nil {
@@ -183,6 +184,7 @@ func TestPhysicalCutoverDrill(t *testing.T) {
 	if err := shardmigrate.Cutover(ctx, "sqlite", controlDSN, chatPlans, 0, 3, dsns[3]); err != nil {
 		t.Fatalf("cutover: %v", err)
 	}
+	directory.InvalidateAll() // cutover ran in another directory instance
 	if removed, err := shardmigrate.Cleanup(ctx, "sqlite", dsns[0], []string{chat.ID}); err != nil || removed != 1 {
 		t.Fatalf("cleanup: removed=%d err=%v", removed, err)
 	}
@@ -229,6 +231,7 @@ func TestPhysicalCutoverDrill(t *testing.T) {
 	if err := shardmigrate.Rollback(ctx, "sqlite", controlDSN, dsns[0], dsns[3], 0, 3, []string{chat.ID}); err != nil {
 		t.Fatalf("rollback: %v", err)
 	}
+	directory.InvalidateAll()
 	for _, key := range []string{chat.ID, chatKey} {
 		shard, ok, err := directory.Lookup(ctx, plane.DomainMessage, key)
 		if err != nil || !ok || shard != 0 {
