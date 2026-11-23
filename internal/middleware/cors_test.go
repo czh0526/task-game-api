@@ -15,6 +15,8 @@ func TestLocalDevOriginsCoverVite(t *testing.T) {
 	for _, origin := range []string{
 		"http://localhost:5137",
 		"http://127.0.0.1:5137",
+		"http://localhost:5138",
+		"http://127.0.0.1:5138",
 		"http://localhost:5173",
 		"http://127.0.0.1:5173",
 		"http://[::1]:5173",
@@ -27,6 +29,9 @@ func TestLocalDevOriginsCoverVite(t *testing.T) {
 	}
 	if _, ok := set["https://evil.example"]; ok {
 		t.Fatal("non-local origin was allowed")
+	}
+	if _, ok := set["http://localhost:5139"]; ok {
+		t.Fatal("unlisted port was allowed")
 	}
 	if _, ok := set["http://localhost:5172"]; ok {
 		t.Fatal("unlisted port was allowed")

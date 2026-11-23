@@ -323,10 +323,10 @@ CGO_ENABLED=0 go run . -f /tmp/taskgame-8892.yaml                     # 实例 B
 
 ```bash
 cd web && npm run dev -- --port 5137                                                    # 前端 A → 8891
-cd web && VITE_TASKGAME_BASE_URL=http://127.0.0.1:8892 npm run dev -- --port 5173      # 前端 B → 8892
+cd web && VITE_TASKGAME_BASE_URL=http://127.0.0.1:8892 npm run dev -- --port 5138      # 前端 B → 8892
 ```
 
-`5173` 在 CORS 白名单（`5137`、`4173`、`5173`–`5185`）内。环境变量只在 `loadSettings()` 作 fallback，新 origin 的 localStorage 是空的，所以各自生效。生产环境没这个问题——A、B 是不同设备上的浏览器，localStorage 天然不共享；只有单机模拟才需要靠不同 origin 隔离。
+`5137`、`5138`、`4173`、`5173`–`5185` 都在后端 CORS 白名单内。环境变量只在 `loadSettings()` 作 fallback，新 origin 的 localStorage 是空的，所以各自生效；若之前已在该端口存过设置，`VITE_TASKGAME_BASE_URL` 会被 localStorage 覆盖，需要在「设置」页手动改服务地址。生产环境没这个问题——A、B 是不同设备上的浏览器，localStorage 天然不共享；只有单机模拟才需要靠不同 origin 隔离。
 
 开发用的静态密钥在 `etc/taskgame.yaml` 的 `Auth.ApiKeys`：
 
@@ -465,10 +465,10 @@ Verified: a JWT issued by A works on B; messages posted on A are readable on B a
 
 ```bash
 cd web && npm run dev -- --port 5137                                                    # frontend A → 8891
-cd web && VITE_TASKGAME_BASE_URL=http://127.0.0.1:8892 npm run dev -- --port 5173      # frontend B → 8892
+cd web && VITE_TASKGAME_BASE_URL=http://127.0.0.1:8892 npm run dev -- --port 5138      # frontend B → 8892
 ```
 
-Port `5173` is in the CORS allowlist (`5137`, `4173`, `5173`–`5185`). The env var is only a fallback in `loadSettings()`, and a fresh origin has empty localStorage, so each one takes effect. Production has no such problem: A and B are browsers on different devices with separate localStorage; distinct origins are only needed when simulating both users on one machine.
+Ports `5137`, `5138`, `4173` and `5173`–`5185` are all in the CORS allowlist. The env var is only a fallback in `loadSettings()`, and a fresh origin has empty localStorage, so each one takes effect; if settings were saved earlier on that port, localStorage wins and the service URL must be changed in the Settings page. Production has no such problem: A and B are browsers on different devices with separate localStorage; distinct origins are only needed when simulating both users on one machine.
 
 ## Run
 

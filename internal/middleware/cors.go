@@ -8,13 +8,15 @@ import (
 )
 
 // Local Vite dev servers. 5173 is the original dev port and Vite walks
-// forward when it is taken; 5137 is the public landing page port.
+// forward when it is taken; 5137 is the public landing page port and 5138 is
+// the second local UI (two frontends / two users on one machine).
 // 4173 is `vite preview`.
 const (
-	publicLandingPort = 5137
-	viteDevPortMin    = 5173
-	viteDevPortMax    = 5185
-	vitePreview       = 4173
+	publicLandingPort  = 5137
+	secondFrontendPort = 5138
+	viteDevPortMin     = 5173
+	viteDevPortMax     = 5185
+	vitePreview        = 4173
 )
 
 // Headers the browser preflights. The client sends JSON plus X-Api-Key or
@@ -36,7 +38,7 @@ func setLocalDevCORSHeaders(header http.Header) {
 
 func localDevOrigins() []string {
 	hosts := []string{"http://localhost", "http://127.0.0.1", "http://[::1]"}
-	ports := []int{vitePreview, publicLandingPort}
+	ports := []int{vitePreview, publicLandingPort, secondFrontendPort}
 	for port := viteDevPortMin; port <= viteDevPortMax; port++ {
 		ports = append(ports, port)
 	}
