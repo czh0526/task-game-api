@@ -91,6 +91,52 @@ func findAcross[T any](s *Store, ctx context.Context, d plane.Domain, fn func(st
 	return zero, store.ErrNotFound
 }
 
+// collectAcross fans a read out to every shard of a domain and concatenates
+// the results. It is the counterpart of cell.allAcross: friend requests are
+// stored in the requester's shard but must be visible in the recipient's
+// incoming list, so that list cannot be a single-shard point read.
+func collectAcross[T any](s *Store, ctx context.Context, d plane.Domain, fn func(store.Repos) ([]T, error)) ([]T, error) {
+	var out []T
+	var walkErr error
+	_ = s.allRepos(ctx, d, func(r store.Repos) error {
+		part, err := fn(r)
+		if err != nil {
+			walkErr = err
+			return err
+		}
+		out = append(out, part...)
+		return nil
+	})
+	if walkErr != nil {
+		return nil, walkErr
+	}
+	if out == nil {
+		out = []T{}
+	}
+	return out, nil
+}
+
+// sumAcross fans a count out to every shard of a domain and adds the results.
+// A friend request counts toward the requester's outgoing quota regardless of
+// which shard holds it, so the count must not be a single-shard point read.
+func sumAcross(s *Store, ctx context.Context, d plane.Domain, fn func(store.Repos) (int, error)) (int, error) {
+	total := 0
+	var walkErr error
+	_ = s.allRepos(ctx, d, func(r store.Repos) error {
+		n, err := fn(r)
+		if err != nil {
+			walkErr = err
+			return err
+		}
+		total += n
+		return nil
+	})
+	if walkErr != nil {
+		return 0, walkErr
+	}
+	return total, nil
+}
+
 // writeAcross broadcasts an id-only operation to one domain. Only the owning
 // shard changes a row; the others return ErrNotFound, which is not an error
 // for a fan-out. It is used where no aggregate-root key is available (for

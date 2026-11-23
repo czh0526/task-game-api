@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"taskgame/internal/model"
@@ -132,32 +133,41 @@ func (r *friendRepo) FindPendingBetween(ctx context.Context, a, b string) (model
 }
 
 func (r *friendRepo) ListPending(ctx context.Context, userID, direction string) ([]model.FriendRequest, error) {
-	repos, err := r.s.userRepos(ctx, userID, false)
-	if err != nil {
-		return nil, err
-	}
-	return repos.Friends().ListPending(ctx, userID, direction)
+	return collectAcross(r.s, ctx, plane.DomainUser, func(repos store.Repos) ([]model.FriendRequest, error) {
+		return repos.Friends().ListPending(ctx, userID, direction)
+	})
 }
 
 func (r *friendRepo) CountPendingOutgoing(ctx context.Context, userID string) (int, error) {
-	repos, err := r.s.userRepos(ctx, userID, false)
-	if err != nil {
-		return 0, err
-	}
-	return repos.Friends().CountPendingOutgoing(ctx, userID)
+	return sumAcross(r.s, ctx, plane.DomainUser, func(repos store.Repos) (int, error) {
+		return repos.Friends().CountPendingOutgoing(ctx, userID)
+	})
 }
 
 // InsertFriendship keeps the existing double-write: one row in each member's
-// user shard. In a co-located deployment both writes hit the same database.
-// After a physical split this stays two local writes with idempotent repair;
-// it is never a 2PC transaction.
+// user shard. Two members may resolve to the SAME shard (co-located cells or a
+// hash collision), so dedupe by placement and treat ErrConflict as success —
+// exactly like cell.overlayFriendRepo. Otherwise a second insert into the same
+// database violates the primary key and surfaces as a bogus "already friends".
+// This is never a 2PC transaction: after a physical split it stays two local
+// writes with idempotent repair.
 func (r *friendRepo) InsertFriendship(ctx context.Context, row model.Friendship) error {
+	seen := map[int]bool{}
 	for _, uid := range []string{row.UserLow, row.UserHigh} {
-		repos, err := r.s.userRepos(ctx, uid, false)
+		p, err := r.s.place(ctx, plane.DomainUser, uid, false)
 		if err != nil {
 			return err
 		}
-		if err := repos.Friends().InsertFriendship(ctx, row); err != nil {
+		if seen[p.Shard] {
+			continue
+		}
+		seen[p.Shard] = true
+		repos, err := r.s.pickPlacement(ctx, p)
+		if err != nil {
+			return err
+		}
+		if err := repos.Friends().InsertFriendship(ctx, row); err != nil &&
+			!errors.Is(err, store.ErrConflict) {
 			return err
 		}
 	}
@@ -189,7 +199,24 @@ func (r *friendRepo) ListFriendEdges(ctx context.Context, userID string) ([]mode
 	if err != nil {
 		return nil, err
 	}
-	return repos.Friends().ListFriendEdges(ctx, userID)
+	edges, err := repos.Friends().ListFriendEdges(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	// The SQL LEFT JOIN only sees users in the shard that owns the friendship
+	// view. Peers may live in another shard, so re-read each peer through the
+	// cross-shard Users().Get and overwrite the local join's snapshot. This
+	// mirrors cell.routingFriendRepo.ListFriendEdges.
+	for i := range edges {
+		u, gerr := r.s.Users().Get(ctx, edges[i].UserID)
+		if gerr != nil {
+			continue
+		}
+		edges[i].Nickname = u.Nickname
+		edges[i].Integrity = u.Integrity
+		edges[i].Ability = u.Ability
+	}
+	return edges, nil
 }
 
 func (r *friendRepo) InsertGroup(ctx context.Context, row model.FriendGroup) error {

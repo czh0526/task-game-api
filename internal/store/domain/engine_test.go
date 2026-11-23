@@ -2,6 +2,7 @@ package domain_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -94,6 +95,108 @@ func withRequest(ctx context.Context, method, path, userID string) context.Conte
 		return ctx
 	}
 	return domain.WithRoute(ctx, route.Domain, route.Key, route.Create)
+}
+
+// TestCrossShardFriendFlows covers the three fan-out fixes found by the real
+// smoke in domain mode: a friend request must appear in the recipient's
+// incoming list (writer and reader live in different shards), accepting must
+// be idempotent when both members hash to the same shard, and each friend card
+// must show the peer's nickname re-read from the peer's own shard.
+func TestCrossShardFriendFlows(t *testing.T) {
+	st, _ := openDomain(t, nil)
+	ctx := context.Background()
+	accounts := account.New(st, "test-jwt-secret-0123456789", 24*time.Hour, account.WithBcryptCost(bcrypt.MinCost))
+	eng := engine.New(st, "credits")
+
+	// Register enough users to find a pair on DIFFERENT shards: that is the
+	// case the single-shard point reads got wrong. Names are unique so each
+	// user keeps a distinct nickname for the later re-read assertion.
+	type candidate struct {
+		id, nick string
+		shard    int
+	}
+	var pool []candidate
+	for i := 0; i < 12; i++ {
+		nick := fmt.Sprintf("昵称%d", i)
+		u, err := accounts.Register(ctx, fmt.Sprintf("friend-domain-%d@example.com", i), "password-123", &nick)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, err := st.Control().Resolver.ResolveExisting(ctx, plane.DomainUser, u.UserID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pool = append(pool, candidate{id: u.UserID, nick: nick, shard: p.Shard})
+	}
+	var a, b candidate
+	found := false
+	for i := range pool {
+		for j := i + 1; j < len(pool); j++ {
+			if pool[i].shard != pool[j].shard {
+				a, b, found = pool[i], pool[j], true
+				break
+			}
+		}
+		if found {
+			break
+		}
+	}
+	if !found {
+		t.Fatal("test setup: all users landed on one shard; cannot exercise cross-shard reads")
+	}
+	t.Logf("cross-shard pair: %s@%d (%s) / %s@%d (%s)", a.id, a.shard, a.nick, b.id, b.shard, b.nick)
+	nickA, nickB := a.nick, b.nick
+
+	reqCtx := withRequest(ctx, "POST", "/v1/friends/requests", a.id)
+	created, err := eng.CreateFriendRequest(reqCtx, a.id, &types.CreateFriendRequestReq{UserId: b.id})
+	if err != nil {
+		t.Fatalf("create friend request: %v", err)
+	}
+
+	incoming, err := eng.ListFriendRequests(withRequest(ctx, "GET", "/v1/friend-requests", b.id), b.id, "incoming")
+	if err != nil {
+		t.Fatalf("list incoming: %v", err)
+	}
+	if len(incoming.Items) != 1 || incoming.Items[0].Id != created.Id {
+		t.Fatalf("recipient incoming list: %+v", incoming)
+	}
+	if incoming.Items[0].FromNickname != nickA || incoming.Items[0].ToNickname != nickB {
+		t.Fatalf("request nicknames: from=%q to=%q", incoming.Items[0].FromNickname, incoming.Items[0].ToNickname)
+	}
+
+	acceptCtx := withRequest(ctx, "POST", "/v1/friend-requests/"+created.Id+"/accept", b.id)
+	if _, err := eng.AcceptFriendRequest(acceptCtx, b.id, &types.FriendRequestActionReq{RequestId: created.Id}); err != nil {
+		t.Fatalf("accept friend request: %v", err)
+	}
+
+	for _, tc := range []struct {
+		viewer, peer, wantNick string
+	}{
+		{a.id, b.id, nickB},
+		{b.id, a.id, nickA},
+	} {
+		friends, err := eng.ListFriends(withRequest(ctx, "GET", "/v1/friends", tc.viewer), tc.viewer)
+		if err != nil {
+			t.Fatalf("list friends for %s: %v", tc.viewer, err)
+		}
+		var cards []types.Friend
+		cards = append(cards, friends.Ungrouped...)
+		for _, g := range friends.Groups {
+			cards = append(cards, g.Friends...)
+		}
+		found := false
+		for _, c := range cards {
+			if c.UserId == tc.peer {
+				found = true
+				if c.Nickname != tc.wantNick {
+					t.Fatalf("viewer %s: peer %s nickname=%q want %q", tc.viewer, tc.peer, c.Nickname, tc.wantNick)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("viewer %s: friend %s missing from list", tc.viewer, tc.peer)
+		}
+	}
 }
 
 func TestRouteForRequest(t *testing.T) {
