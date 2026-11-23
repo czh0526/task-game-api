@@ -106,7 +106,7 @@ npm run build
 
 ## 调用开发服务
 
-在仓库根目录先 `docker compose up -d`（启动 MySQL 主库 `taskgame` 与两个消息片库），再 `make run`（加载 `etc/taskgame.yaml`）。进程地址是 `http://127.0.0.1:8891`。`baseUrl` 可以是这个 origin，也可以是以 `/v1` 结尾的 OpenAPI 服务器 URL。`health()` 请求 origin 上的 `/health`，其余方法请求 `/v1/...`。
+在仓库根目录先 `docker compose up -d`（启动 3 个独立 MySQL 实例 3307/3308/3309，每个都是完整 schema），再 `make run`（加载 `etc/taskgame.yaml`）。进程地址是 `http://127.0.0.1:8891`。`baseUrl` 可以是这个 origin，也可以是以 `/v1` 结尾的 OpenAPI 服务器 URL。`health()` 请求 origin 上的 `/health`，其余方法请求 `/v1/...`。
 
 鉴权只带一个头。`apiKey(...)` 发送 `X-Api-Key`，`bearer(...)` 发送 `Authorization: Bearer`。`etc/taskgame.yaml` 里的开发密钥：
 

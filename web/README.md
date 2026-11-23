@@ -7,7 +7,7 @@
 终端 1，在仓库根目录启动 API：
 
 ```bash
-docker compose up -d   # MySQL 主库 taskgame + 两个消息片库
+docker compose up -d   # 3 个独立 MySQL 实例（3307/3308/3309），各自全表
 make run               # etc/taskgame.yaml，API http://127.0.0.1:8891
 ```
 
