@@ -146,9 +146,9 @@ func TestDefaultConfigIsThreeMySQLCells(t *testing.T) {
 	if c.Scale.Redis.Addr != "127.0.0.1:6379" || c.Scale.Redis.Channel == "" {
 		t.Fatalf("default redis endpoint not configured: %+v", c.Scale.Redis)
 	}
-	if c.Scale.InstanceID == "" {
-		t.Fatal("Scale.InstanceID is required")
-	}
+	// InstanceID is optional. An empty value makes each API process generate
+	// its own unique id, so two instances copied from this file do not drop
+	// each other's SSE signals as echoes.
 	if c.Scale.Projection.Enabled || c.Scale.Directory.Enabled ||
 		c.Scale.Domains.UserShards != 0 || c.Scale.Archive.Enabled || c.Scale.Search.Enabled {
 		t.Fatalf("default config must not enable the legacy skeleton sub-systems: %+v", c.Scale)

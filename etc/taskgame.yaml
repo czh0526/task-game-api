@@ -90,14 +90,17 @@ AutoSettle:
   WinnerSelectHours: 72
 
 # Cross-process SSE signal bus. Every API process in one deployment must use
-# the same Redis Addr and Channel, but each process needs a UNIQUE InstanceID
-# (copy this file and change it for the second instance). The other Scale
-# sub-systems (Projection / Directory / Domains / Archive / Search) stay
-# disabled: they belong to the legacy message-sharding prototype.
+# the same Redis Addr and Channel. Leave InstanceID empty: each process then
+# generates a unique id at startup, so copying this file for a second API
+# process only needs a different Port. A fixed InstanceID is still accepted,
+# but MUST be unique (never reuse the same value in two processes), otherwise
+# the echo filter drops the other process's signals.
+# The other Scale sub-systems (Projection / Directory / Domains / Archive /
+# Search) stay disabled: they belong to the legacy message-sharding prototype.
 Scale:
   Enabled: true
   PubSub: redis
-  InstanceID: api-local
+  # InstanceID: api-a   # optional; empty = auto-generated unique id per process
   Redis:
     Addr: "127.0.0.1:6379"
     Channel: "taskgame.signals"

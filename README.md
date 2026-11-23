@@ -61,7 +61,7 @@ Mint a dev JWT with `make token` (subject defaults to `usr_publisher`).
 
 默认 `etc/taskgame.yaml` 是 **3 个彼此独立的 MySQL 实例**（`127.0.0.1:3307` / `3308` / `3309`），每个实例一个 `taskgame` 库，**三套表结构完全相同**。每个库保存约 **1/3** 的 `users`、`tasks`、`messages` 及其余全部业务表；**不存在保存全量数据的主库**。
 
-另外默认开启了 `Scale.PubSub: redis`（Redis 在 `127.0.0.1:6379`，由 `docker compose up -d` 与三个库一起启动），只用于跨 API 进程的 SSE 信号广播——**Redis 里不存任何业务数据**。多实例时每个进程复制一份配置，只改 `Port` 和唯一的 `Scale.InstanceID`，其余（三个 DSN、Redis 地址与频道）保持一致。
+另外默认开启了 `Scale.PubSub: redis`（Redis 在 `127.0.0.1:6379`，由 `docker compose up -d` 与三个库一起启动），只用于跨 API 进程的 SSE 信号广播——**Redis 里不存任何业务数据**。多实例时每个进程复制一份配置，**只改 `Port`**；`Scale.InstanceID` 留空即可，进程启动时会自动生成唯一 id。若手写固定值，必须保证每个进程不同，否则对方的信号会被当成“自己发的回声”丢掉。其余（三个 DSN、Redis 地址与频道）保持一致。
 
 ```
 请求 ──► Auth 中间件（user_id，或 URL 里的 taskId / chatId / userId）
@@ -174,13 +174,13 @@ CGO_ENABLED=0 go run . -f /tmp/taskgame-3inst.yaml
 
 `internal/notify/redis.go` 实现了 `Transport`：**发布**走带短超时的连接池（Redis 卡住也不会阻塞产生信号的请求），**订阅**走另一条关闭读写超时的连接（阻塞订阅不能被默认的 3s 读超时反复打断）。构造时 `PING` 校验，Redis 不可用会**直接启动失败**，避免多实例静默退化成互不通信的单机。`Envelope` 用 JSON 编码，坏帧／非本系统的帧直接丢弃，不会卡住接收循环。
 
-默认 `etc/taskgame.yaml` 末尾已包含下面的 `Scale` 段（`InstanceID` 默认 `api-local`），`docker compose up -d` 会一并启动 Redis，因此无需手工添加：
+默认 `etc/taskgame.yaml` 末尾已包含下面的 `Scale` 段（`InstanceID` 默认留空、自动生成），`docker compose up -d` 会一并启动 Redis，因此无需手工添加：
 
 ```yaml
 Scale:
   Enabled: true
   PubSub: redis
-  InstanceID: api-local
+  # InstanceID: api-a   # 可选；留空 = 每个进程自动生成唯一 id
   Redis:
     Addr: "127.0.0.1:6379"
     Channel: "taskgame.signals"
@@ -191,7 +191,7 @@ docker compose up -d    # 3 个 MySQL cell + Redis
 make run                # 或 CGO_ENABLED=0 go run .
 ```
 
-第二个 API 实例复制这份配置，改 `Port`（如 8892）与 `Scale.InstanceID`（如 `api-b`），**指向同一个 `Scale.Redis.Addr` 和 `Scale.Redis.Channel`**；两个进程各建一条订阅，A 进程产生的信号经 Redis 广播给 B 进程的 SSE 连接。注意 Redis pub/sub 是 **at-most-once**：进程宕机期间的信号会丢，但信号只带 id、不落库，浏览器 45s 兜底轮询会补上，因此不需要换成 Redis Stream。`Scale.PubSub: shared` 仍是进程内总线，只用于测试；默认配置的 `Store` 已是三库单元化，真多机只要所有进程都能连到同一批库和同一个 Redis 即可。
+第二个 API 实例复制这份配置，**只改 `Port`（如 8892）**，`Scale.InstanceID` 留空即可自动生成本进程唯一 id；**指向同一个 `Scale.Redis.Addr` 和 `Scale.Redis.Channel`**。两个进程各建一条订阅，A 进程产生的信号经 Redis 广播给 B 进程的 SSE 连接。若你显式写了 `InstanceID`，务必给两个进程写不同的值：回声过滤按 `Origin == 本进程 InstanceID` 丢包，写重了会导致对方永远收不到实时消息（只剩 45s 兜底轮询）。注意 Redis pub/sub 是 **at-most-once**：进程宕机期间的信号会丢，但信号只带 id、不落库，浏览器 45s 兜底轮询会补上，因此不需要换成 Redis Stream。`Scale.PubSub: shared` 仍是进程内总线，只用于测试；默认配置的 `Store` 已是三库单元化，真多机只要所有进程都能连到同一批库和同一个 Redis 即可。
 
 ### 用共享租约投影 `message_outbox`（`Scale.Projection`）
 
@@ -306,7 +306,7 @@ CGO_ENABLED=0 go run . -f /tmp/taskgame-3inst.yaml
 
 独立项目名 `taskgame-3inst` 不会动到默认的 3306 容器。停掉用 `docker compose -f docker-compose.3instances.yml -p taskgame-3inst down`（加 `-v` 会连数据卷一起删）。
 
-**多个 API 实例**：默认就是 `Driver: mysql`（SQLite 是单连接文件，两个进程不能共用一个文件）。两个进程要共用同一份主库 DSN，且 `ShardDSNs` 列表**顺序与内容完全一致**——路由按片序号取模，顺序错了消息会落到错误的库。端口只能靠不同配置文件区分（`conf.MustLoad` 不读环境变量）：
+**多个 API 实例**：三库单元化配置下，所有进程连同一组 Cell DSN（顺序也要一致），并共用同一个 Redis 地址与频道；SQLite 是单连接文件，不能给两个进程共用。端口只能靠不同配置文件区分（`conf.MustLoad` 不读环境变量）。`InstanceID` 留空时每个进程自动生成唯一 id，复制配置只改 `Port` 就够了：
 
 ```bash
 docker compose up -d
@@ -315,9 +315,9 @@ sed 's/^Port: 8891/Port: 8892/' etc/taskgame.yaml > /tmp/taskgame-8892.yaml
 CGO_ENABLED=0 go run . -f /tmp/taskgame-8892.yaml                     # 实例 B: 8892
 ```
 
-实测过：A 注册并签发 JWT，B 用同一个 token 能直接读；A 发消息 B 能读、B 发消息 A 能读；`chat_shards` 目录在主库共享，两个进程对同一会话定位到同一个片。两个进程都会跑自动结算与 webhook 投递，靠事务锁和 `delivering` 认领避免重复处理。
+实测过：A 注册并签发 JWT，B 用同一个 token 能直接读；A 发消息 B 能读、B 发消息 A 能读；同一个会话按 `chat_id` 稳定路由到同一个 Cell。两个进程都会跑自动结算与 webhook 投递，靠事务锁和 `delivering` 认领避免重复处理。
 
-**已知边界**：`notify.Broker` 是进程内的。B 用户的 SSE 挂在实例 B 上时，A 实例提交的消息**不会**推过来，只能等前端 45s 兜底轮询；挂在同一实例上的连接能立刻收到 `chat.message`。真正的多机实时推送需要把 SSE 信号换成共享 pub/sub。
+**已知边界**：默认 `Scale.PubSub: redis` 时，A 实例提交的消息会通过 Redis 广播给挂在 B 实例上的 SSE 连接，实时刷新。Redis pub/sub 是 at-most-once，宕机期间的信号会丢，前端 45s 兜底轮询会补上；只有把 `PubSub` 改成 `local`/`shared` 时才会退回“收不到另一进程信号”。
 
 **两个前端服务，各连一个后端**：前端是静态资源、本身无状态，起几个 Vite 进程不改变架构；真正决定隔离性的是浏览器 **origin**（协议 + host + 端口）。`settings.ts` 把 `baseUrl` 存在 `localStorage`，且 `loadSettings()` 里已有的 localStorage 会**覆盖** `VITE_TASKGAME_BASE_URL`；`readSync.ts` / `avatarUtils.ts` 的 `BroadcastChannel` 也按 origin 广播。所以在**同一个 origin 开两个标签页模拟两个用户**是不成立的：两个窗口共用 localStorage，后改的服务地址会覆盖先改的，已读/头像事件还会互相串扰。要用两个不同 origin：
 
@@ -397,13 +397,13 @@ CGO_ENABLED=0 go test ./internal/engine -run 'TestAutoSettleCompetitiveDoesNotPi
 - `Escrow.InitialBalance`：用户第一次出现时记入的模拟积分（开发配置是 1000000）
 - `Webhook.Mode`：`log` 只记录签名，不发 HTTP；`post` 才真正 POST
 - `AutoSettle`：到 `review_deadline` 后自动结算。竞争任务如果有多份提交，不会猜赢家，保持 `in_review`
-- `Scale.PubSub`：**默认 `redis`**，跨进程 SSE 信号总线；`Scale.InstanceID` 每个进程唯一，`Scale.Redis.Addr` / `Channel` 全部署一致。Redis 由 compose 启动，未启动则 API 启动失败。其它 Scale 子项默认关闭
+- `Scale.PubSub`：**默认 `redis`**，跨进程 SSE 信号总线；`Scale.InstanceID` 留空则每进程自动生成唯一 id（手写则必须互不相同），`Scale.Redis.Addr` / `Channel` 全部署一致。Redis 由 compose 启动，未启动则 API 启动失败。其它 Scale 子项默认关闭
 
 错误响应是 JSON：`{"code":"...","message":"..."}`。
 
 ## Horizontal cells (default, plan A)
 
-The shipped `etc/taskgame.yaml` opens **three independent MySQL instances** (`127.0.0.1:3307` / `3308` / `3309`), each with one `taskgame` database and the **same full schema**. Each cell owns about **one third** of `users`, `tasks`, `messages` and every other business table. **No primary database holds all rows.** It also enables `Scale.PubSub: redis` on `127.0.0.1:6379` (started by the same compose file) for cross-process SSE signals only — Redis holds no business data. For multiple API processes, copy the config and change only `Port` and the unique `Scale.InstanceID`.
+The shipped `etc/taskgame.yaml` opens **three independent MySQL instances** (`127.0.0.1:3307` / `3308` / `3309`), each with one `taskgame` database and the **same full schema**. Each cell owns about **one third** of `users`, `tasks`, `messages` and every other business table. **No primary database holds all rows.** It also enables `Scale.PubSub: redis` on `127.0.0.1:6379` (started by the same compose file) for cross-process SSE signals only — Redis holds no business data. For multiple API processes, copy the config and change only `Port`; leave `Scale.InstanceID` empty so each process generates a unique id. If you set it explicitly, every process must use a different value — a duplicate id makes the echo filter drop the other process's signals.
 
 - **Routing** (`internal/store/cell`): an authenticated request is routed by `user_id`; `/v1/tasks/{id}`, `/v1/chats/{id}` and `/v1/users/{id}` are routed by the id in the URL, so every participant of a task or chat lands on the same cell.
 - **Writes**: `InTx` opens a transaction in exactly one cell. Cross-cell work inside a transaction (`Ensure`, friendships) is idempotent or commutative best-effort; there is no 2PC.
@@ -450,7 +450,7 @@ CGO_ENABLED=0 go run . -f /tmp/taskgame-3inst.yaml
 
 After that edit the primary DSN points at `3307/taskgame` and `ShardDSNs` at `3308/taskgame_shard_0` and `3309/taskgame_shard_1`. **Every API process connects to all N + 1 instances** (`openStore` opens one primary pool plus N shard pools); processes are not split across shards, since any request may route to any shard. All processes must use the same `ShardDSNs` list in the same order. Verified: the three containers have distinct hostnames; the primary instance holds `chat_shards` / `message_outbox` and an empty `messages` table, while each shard instance holds only `messages` for its own chats with an independent `chat_seq`.
 
-**Multiple API instances**: use `Driver: mysql` (SQLite is a single-connection file; never point two processes at one file). Both processes must share the same primary DSN and an identical `ShardDSNs` list in the same order, because routing picks a shard by index. Ports are set per config file (`conf.MustLoad` does not read environment variables):
+**Multiple API instances**: in the default three-cell setup, every process connects to the same Cell DSNs (same order) and the same Redis address/channel; SQLite is a single-connection file and cannot be shared. Ports are set per config file (`conf.MustLoad` does not read environment variables). Leave `InstanceID` empty so each process generates a unique id — copying the config then only needs a different `Port`:
 
 ```bash
 docker compose up -d
@@ -459,7 +459,7 @@ sed 's/^Port: 8891/Port: 8892/' etc/taskgame.yaml > /tmp/taskgame-8892.yaml
 CGO_ENABLED=0 go run . -f /tmp/taskgame-8892.yaml                     # instance B: 8892
 ```
 
-Verified: a JWT issued by A works on B; messages posted on A are readable on B and vice versa; `chat_shards` lives in the shared primary database so both processes resolve the same shard. Auto-settle and webhook delivery run on both processes safely (transaction locks and `delivering` claims). Known limit: a browser's SSE stream attached to B receives no `chat.message` signal for a message committed on A, and only the 45s fallback poll refreshes it; a connection on the same instance receives it immediately. A shared pub/sub is needed for real multi-machine push.
+Verified: a JWT issued by A works on B; messages posted on A are readable on B and vice versa; a chat routes to the same cell from both processes. Auto-settle and webhook delivery run on both processes safely (transaction locks and `delivering` claims). With the default `Scale.PubSub: redis`, a message committed on A is broadcast over Redis to the SSE stream attached to B, so the peer's panel refreshes immediately. Redis pub/sub is at-most-once — signals lost while a process is down are repaired by the browser's 45s fallback poll. Cross-process push only degrades if `PubSub` is set to `local`/`shared`, or if two processes reuse the same `InstanceID`.
 
 **Two frontends, one backend each**: the frontend is stateless static assets, so the number of Vite processes does not change the architecture; what matters is the browser **origin** (scheme + host + port). `settings.ts` stores `baseUrl` in `localStorage`, and existing localStorage **overrides** `VITE_TASKGAME_BASE_URL` in `loadSettings()`. `readSync.ts` / `avatarUtils.ts` broadcast over `BroadcastChannel`, also scoped to one origin. Two tabs on a **single origin** therefore cannot model two users: they share localStorage (the last edited base URL wins) and their read/avatar events cross-contaminate. Use two distinct origins:
 
@@ -594,7 +594,7 @@ CGO_ENABLED=0 go test ./internal/engine -run 'TestAutoSettleCompetitiveDoesNotPi
 - `Escrow.InitialBalance`: simulated credits granted the first time a user is seen (1000000 in the dev file)
 - `Webhook.Mode`: `log` records the signature and does not POST; `post` delivers HTTP
 - `AutoSettle`: settles when `review_deadline` passes. A competitive task with more than one submission stays `in_review` until `winner_select_deadline`, then refunds. `OpenTimeout`, `StartTimeout`, and `SeatTimeout` default to 72h
-- `Scale.PubSub`: **`redis` by default**, the cross-process SSE signal bus. `Scale.InstanceID` must be unique per API process; `Scale.Redis.Addr` / `Channel` must be identical across the deployment. Redis is started by compose and is required at startup; other Scale sub-systems stay off
+- `Scale.PubSub`: **`redis` by default**, the cross-process SSE signal bus. Leave `Scale.InstanceID` empty to auto-generate a unique id per process; if set explicitly it must be unique per API process. `Scale.Redis.Addr` / `Channel` must be identical across the deployment. Redis is started by compose and is required at startup; other Scale sub-systems stay off
 - `Escrow.ArbiterUserIds`: users who may `POST /v1/tasks/{taskId}/arbitrate`. Dev config lists `usr_arbiter` (`make token USER_ID=usr_arbiter` or `X-Api-Key: dev-arbiter-key`)
 
 Error bodies are JSON: `{"code":"...","message":"..."}`.

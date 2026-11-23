@@ -58,3 +58,49 @@ func TestRedisPubSubWiresRealTransport(t *testing.T) {
 		t.Fatal("second process did not receive the signal over Redis")
 	}
 }
+
+// Two API processes copied from the default config leave InstanceID empty.
+// Each must get a different id, otherwise RemoteFanout.receive treats the
+// other process's envelope as its own echo and the browser never sees the
+// chat.message signal in real time.
+func TestRedisPubSubAutoInstanceIDsAreUnique(t *testing.T) {
+	mr := miniredis.RunT(t)
+	cfg := config.ScaleConf{
+		Enabled: true,
+		PubSub:  "redis",
+		Redis: config.RedisScaleConf{
+			Addr:    mr.Addr(),
+			Channel: "taskgame.test.auto",
+			Timeout: 500 * time.Millisecond,
+		},
+	}
+	a, err := New(cfg, config.StoreConf{Shards: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	b, err := New(cfg, config.StoreConf{Shards: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+
+	if a.InstanceID() == "" || b.InstanceID() == "" {
+		t.Fatalf("empty InstanceID should be generated, got %q / %q", a.InstanceID(), b.InstanceID())
+	}
+	if a.InstanceID() == b.InstanceID() {
+		t.Fatalf("two processes share InstanceID %q; cross-process signals would be dropped", a.InstanceID())
+	}
+
+	ch, unsub := b.Fanout.Subscribe("usr_b")
+	defer unsub()
+	a.Fanout.Publish([]string{"usr_b"}, notify.Signal{Type: notify.SignalChatMessage, ChatID: "cht_auto"})
+	select {
+	case s := <-ch:
+		if s.ChatID != "cht_auto" {
+			t.Fatalf("got %+v", s)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("second process did not receive the signal with auto-generated ids")
+	}
+}
