@@ -1,3 +1,22 @@
+# Default config: MySQL with message sharding enabled.
+#
+# One MySQL server holds three separate databases. Each database owns a
+# different part of the data, so no single database carries all the rows or
+# all the writes:
+#
+#   taskgame          primary: users, tasks, ledger, friends, chats, webhooks
+#   taskgame_shard_0  about half of the chat messages (by chat id)
+#   taskgame_shard_1  the other half
+#
+# Start the databases first (a fresh compose volume creates the shard
+# databases from etc/mysql-init.d):
+#   docker compose up -d
+#   CGO_ENABLED=0 go run .            # this file is loaded by default
+#
+# To put each shard on its own MySQL machine, change only the ShardDSNs
+# entries below (for example 3308 / 3309). The primary DSN stays as it is.
+# Adding a shard means appending one more DSN and raising Shards; existing
+# rows keep their assignment, so no data has to be moved.
 Name: taskgame-api
 Host: 0.0.0.0
 Port: 8891
@@ -23,15 +42,17 @@ Auth:
     - Key: dev-arbiter-key
       UserId: usr_arbiter
 
-# sqlite: one connection, local file, the default. mysql: MySQL 8.0.19+ pool for
-# more than one API process. Do not point two processes at one SQLite file.
-# A ready mysql config is etc/taskgame.mysql.yaml. clientFoundRows and utf8mb4
-# are applied when the DSN does not already set them.
 Store:
-  Driver: sqlite
-  DSN: "file:data/taskgame.db?mode=rwc&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_txlock=immediate"
-  # Driver: mysql
-  # DSN: "root:123456@tcp(127.0.0.1:3306)/taskgame?charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=false"
+  Driver: mysql
+  # Primary database. Holds everything except message bodies.
+  DSN: "root:123456@tcp(127.0.0.1:3306)/taskgame?charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=false"
+  # Message bodies are split across these databases by chat id. One DSN per
+  # shard, in shard order; every API process must use the same list.
+  Shards: 2
+  ShardDriver: mysql
+  ShardDSNs:
+    - "root:123456@tcp(127.0.0.1:3306)/taskgame_shard_0?charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=false"
+    - "root:123456@tcp(127.0.0.1:3306)/taskgame_shard_1?charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=false"
 
 # Simulated credits. InitialBalance is granted the first time a user is seen.
 # ArbiterUserIds may POST /v1/tasks/{taskId}/arbitrate. They are not the publisher or the executor.

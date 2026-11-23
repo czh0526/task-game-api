@@ -25,6 +25,15 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      # The default config (etc/taskgame.yaml) enables message sharding, so the
+      # smoke server needs the two shard schemas in addition to MYSQL_DATABASE.
+      - name: create message shard databases
+        run: |
+          if ! command -v mysql >/dev/null 2>&1; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq default-mysql-client
+          fi
+          mysql -h 127.0.0.1 -uroot -p123456 -e \
+            "CREATE DATABASE IF NOT EXISTS taskgame_shard_0 CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; CREATE DATABASE IF NOT EXISTS taskgame_shard_1 CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
       - name: unit and MySQL tests
         env:
           CGO_ENABLED: "0"
@@ -35,7 +44,7 @@ jobs:
         env:
           CGO_ENABLED: "0"
         run: |
-          go run . -f etc/taskgame.mysql.yaml > /tmp/taskgame.log 2>&1 &
+          go run . > /tmp/taskgame.log 2>&1 &
           echo $! > /tmp/taskgame.pid
           ok=0
           for _ in $(seq 1 40); do

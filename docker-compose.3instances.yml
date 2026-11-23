@@ -2,7 +2,11 @@
 # Each instance owns exactly one schema, so the three databases can live on
 # three different machines. Start with:
 #   docker compose -f docker-compose.3instances.yml -p taskgame-3inst up -d
-#   CGO_ENABLED=0 go run . -f etc/taskgame.mysql-3instances.yaml
+# Then copy the single default config and repoint the three DSNs:
+#   cp etc/taskgame.yaml /tmp/taskgame-3inst.yaml
+#   # primary -> 3307/taskgame, shard 0 -> 3308/taskgame_shard_0,
+#   # shard 1 -> 3309/taskgame_shard_1
+#   CGO_ENABLED=0 go run . -f /tmp/taskgame-3inst.yaml
 # The project name is separate from the default docker-compose.yml so the
 # existing 3306 container and its data are untouched.
 services:

@@ -1,8 +1,8 @@
-.PHONY: tidy build test run run-sqlite smoke token generate sdk
+.PHONY: tidy build test test-mysql run smoke token generate sdk
 
-# modernc.org/sqlite does not need cgo. Export so build, test, and run stay
-# reproducible on machines without a C compiler. Override on the command line
-# or in the environment if you really want cgo.
+# modernc.org/sqlite needs no cgo, so unit tests and builds stay reproducible
+# without a C compiler. The shipped default config uses MySQL (see `run`).
+# Override on the command line or in the environment if you really want cgo.
 export CGO_ENABLED ?= 0
 
 # Regenerate handlers, types, and routes from taskgame.api.
@@ -27,14 +27,13 @@ test-mysql:
 	TASKGAME_MYSQL_DSN="$${TASKGAME_MYSQL_DSN:-root:123456@tcp(127.0.0.1:3306)/taskgame?charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=false}" \
 	TASKGAME_MYSQL_REQUIRED=1 go test ./...
 
-# Local MySQL from etc/taskgame.mysql.yaml: root/123456, database taskgame,
-# 127.0.0.1:3306. Start the server first (`docker compose up -d`).
+# Default config etc/taskgame.yaml: one MySQL primary (taskgame) plus two
+# message shard databases (taskgame_shard_0/1) on 127.0.0.1:3306. Start the
+# databases first (`docker compose up -d`); a fresh volume creates the shard
+# schemas from etc/mysql-init.d. There is no separate SQLite target: set
+# Driver: sqlite explicitly in a copy of the config if you need one.
 run:
-	go run . -f etc/taskgame.mysql.yaml
-
-# SQLite file from etc/taskgame.yaml (data/taskgame.db). Store.Driver there stays sqlite.
-run-sqlite:
-	go run . -f etc/taskgame.yaml
+	go run .
 
 # The API must already be listening (make run). scripts/smoke.sh covers
 # exclusive, competitive winner_take_all, collaborative on_dropout=replace,

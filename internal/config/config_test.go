@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -18,8 +19,122 @@ func loadExample(t *testing.T, name string) Config {
 	return c
 }
 
-func TestDefaultConfigLeavesScaleDisabled(t *testing.T) {
+// The Scale example configs were removed when etc/ was reduced to the single
+// default file. Keep their parsing coverage by writing inline YAML to a temp
+// file and loading it through the same conf.Load path as the real process.
+func loadInline(t *testing.T, body string) Config {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "inline.yaml")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write inline config: %v", err)
+	}
+	var c Config
+	if err := conf.Load(path, &c); err != nil {
+		t.Fatalf("conf.Load(inline): %v", err)
+	}
+	return c
+}
+
+// conf.Load requires every non-optional section, so inline configs share a
+// complete header and only differ in the Scale block under test.
+const inlineHeader = `
+Name: taskgame-api
+Host: 0.0.0.0
+Port: 8891
+Log:
+  Mode: console
+  Encoding: plain
+  Level: info
+  Stat: false
+Auth:
+  JwtSecret: dev-jwt-secret-change-me-32b
+  TokenTTL: 24h
+  ApiKeys:
+    - Key: dev-publisher-key
+      UserId: usr_publisher
+Store:
+  Driver: mysql
+  DSN: "root:123456@tcp(127.0.0.1:3306)/taskgame?charset=utf8mb4"
+Escrow:
+  InitialBalance: 1000000
+  Currency: credits
+  ArbiterUserIds:
+    - usr_arbiter
+Webhook:
+  Mode: log
+  Interval: 2s
+  Timeout: 5s
+  MaxAttempts: 3
+AutoSettle:
+  Enabled: true
+  Interval: 30s
+  OpenTimeout: 72h
+  StartTimeout: 72h
+  SeatTimeout: 72h
+  WinnerSelectHours: 72
+Scale:
+`
+
+const skeletonYAML = inlineHeader + `  Enabled: true
+  PubSub: shared
+  InstanceID: api-a
+  Directory:
+    Enabled: true
+    Driver: sqlite
+    DSN: "file:data/control-plane.db"
+  Domains:
+    UserShards: 4
+    TaskShards: 2
+  Archive:
+    Enabled: true
+    Dir: "data/blobs"
+    HotWindow: 2160h
+  Search:
+    Enabled: true
+    Driver: memory
+  Projection:
+    Enabled: true
+    Interval: 5s
+    LeaseTTL: 30s
+`
+
+const redisYAML = inlineHeader + `  Enabled: true
+  PubSub: redis
+  InstanceID: api-a
+  Redis:
+    Addr: "127.0.0.1:6379"
+    Channel: "taskgame.signals"
+    Timeout: 2s
+  Directory:
+    Enabled: true
+    Driver: sqlite
+    DSN: "file:data/control-plane.db"
+  Projection:
+    Enabled: true
+    Interval: 5s
+    LeaseTTL: 30s
+    Channel: "taskgame.outbox"
+`
+
+func TestDefaultConfigIsMySQLWithMessageShards(t *testing.T) {
 	c := loadExample(t, "taskgame.yaml")
+	if c.Store.Driver != "mysql" {
+		t.Fatalf("Store.Driver = %q, want mysql", c.Store.Driver)
+	}
+	if c.Store.Shards != 2 {
+		t.Fatalf("Store.Shards = %d, want 2", c.Store.Shards)
+	}
+	if c.Store.ShardDriver != "mysql" {
+		t.Fatalf("Store.ShardDriver = %q, want mysql", c.Store.ShardDriver)
+	}
+	if len(c.Store.ShardDSNs) != c.Store.Shards {
+		t.Fatalf("got %d ShardDSNs for %d shards", len(c.Store.ShardDSNs), c.Store.Shards)
+	}
+	for i, dsn := range c.Store.ShardDSNs {
+		if dsn == "" || dsn == c.Store.DSN {
+			t.Fatalf("ShardDSNs[%d] is empty or equals the primary DSN", i)
+		}
+	}
 	if c.Scale.Enabled {
 		t.Fatal("the default config must not enable the skeleton")
 	}
@@ -28,13 +143,13 @@ func TestDefaultConfigLeavesScaleDisabled(t *testing.T) {
 	}
 }
 
-func TestScaleSkeletonExampleLoads(t *testing.T) {
-	c := loadExample(t, "taskgame.scale-skeleton.yaml")
+func TestScaleSkeletonConfigLoads(t *testing.T) {
+	c := loadInline(t, skeletonYAML)
 	if !c.Scale.Enabled {
-		t.Fatal("Scale.Enabled should be true in the example")
+		t.Fatal("Scale.Enabled should be true")
 	}
 	if err := c.Scale.Validate(); err != nil {
-		t.Fatalf("example config is invalid: %v", err)
+		t.Fatalf("config is invalid: %v", err)
 	}
 	if c.Scale.PubSub != "shared" || c.Scale.InstanceID != "api-a" {
 		t.Fatalf("pub/sub config not parsed: %+v", c.Scale)
@@ -57,10 +172,10 @@ func TestScaleSkeletonExampleLoads(t *testing.T) {
 	}
 }
 
-func TestScaleRedisExampleLoads(t *testing.T) {
-	c := loadExample(t, "taskgame.scale-redis.yaml")
+func TestScaleRedisConfigLoads(t *testing.T) {
+	c := loadInline(t, redisYAML)
 	if !c.Scale.Enabled || c.Scale.PubSub != "redis" {
-		t.Fatalf("redis pub/sub not enabled in example: %+v", c.Scale)
+		t.Fatalf("redis pub/sub not enabled: %+v", c.Scale)
 	}
 	if c.Scale.Redis.Addr == "" || c.Scale.Redis.Channel == "" {
 		t.Fatalf("redis endpoint not parsed: %+v", c.Scale.Redis)
@@ -75,7 +190,7 @@ func TestScaleRedisExampleLoads(t *testing.T) {
 		t.Fatalf("SQL directory config not parsed: %+v", c.Scale.Directory)
 	}
 	if err := c.Scale.Validate(); err != nil {
-		t.Fatalf("example config is invalid: %v", err)
+		t.Fatalf("config is invalid: %v", err)
 	}
 }
 

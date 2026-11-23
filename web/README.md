@@ -7,9 +7,8 @@
 终端 1，在仓库根目录启动 API：
 
 ```bash
-make run
-# etc/taskgame.mysql.yaml → MySQL 127.0.0.1:3306，API http://127.0.0.1:8891
-# SQLite：make run-sqlite（etc/taskgame.yaml）
+docker compose up -d   # MySQL 主库 taskgame + 两个消息片库
+make run               # etc/taskgame.yaml，API http://127.0.0.1:8891
 ```
 
 终端 2：
@@ -82,8 +81,8 @@ make token USER_ID=usr_extra
 ## Run
 
 ```bash
-make run
-# MySQL via etc/taskgame.mysql.yaml. SQLite: make run-sqlite (etc/taskgame.yaml)
+docker compose up -d   # MySQL: primary taskgame + 2 message shard databases
+make run               # etc/taskgame.yaml, API on http://127.0.0.1:8891
 cd web && npm install && npm run dev
 ```
 

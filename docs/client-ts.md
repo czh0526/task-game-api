@@ -7,9 +7,8 @@ Package layout, `npm test`, and a short snippet are in [`sdk/ts/README.md`](../s
 Start the API from the repository root before calling it:
 
 ```bash
-make run
-# etc/taskgame.mysql.yaml, MySQL on 127.0.0.1:3306, listens on http://127.0.0.1:8891
-# SQLite: make run-sqlite (etc/taskgame.yaml)
+docker compose up -d   # MySQL: primary taskgame + 2 message shard databases
+make run               # etc/taskgame.yaml, listens on http://127.0.0.1:8891
 ```
 
 Development keys (`etc/taskgame.yaml`):
