@@ -1,6 +1,6 @@
 # 按域分片改造方案（P2）
 
-状态：阶段 0（`43044ee` 之后的 `764398d`）与阶段 1 的**域仓储骨架**已实现于 `internal/store/domain`，但**仍未接入 ServiceContext**：默认运行时继续走 cell 模式。阶段 2 起才涉及物理数据切分。对应 `internal/scale.TODOs` 中的 P2 两条：
+状态：阶段 0/1/2 已实现并接线（默认运行时仍为 cell 模式）；阶段 4 的**物理切分演练**已实现，可执行的 runbook 见 `docs/physical-shard-drill.md`，自动化演练见 `go test ./internal/shardmigrate/... -run TestPhysicalCutoverDrill`。对应 `internal/scale.TODOs` 中的 P2 两条：
 
 - `split User and Task repositories into per-domain stores guarded by shard.TxScope`
 - `add global_unique(email -> user_id) and a Snowflake IDGenerator`
@@ -206,6 +206,8 @@
 2. **共置阶段不需要搬数据**：三域 DSN 都指向原三库，物理数据一行不动。
 3. **单域切分时才搬数据**：以消息域为例，按 `ChatKey` 把选中的 chat 及其 messages 复制到新库，校验行数与 checksum，再切目录行指向新片，最后删旧行。整个过程在维护窗口做，`PlanShrink` 只枚举 key、不执行迁移。
 4. **回滚**：逻辑分域阶段把开关拨回 `cell` 即可；物理切分之后回滚需要反向迁移目录行与数据，因此每个域的切分必须单独可回滚、单独验证。
+
+**阶段 4 演练实现状态**：第 1 项目录回填由 `shardmigrate.Backfill` 实现（幂等，冲突只报告不覆盖）；第 3/4 项在 message 域已实现为 `cmd/shardctl` 的 `init / plan / copy / verify / cutover / cleanup / rollback`，数据搬迁覆盖 chats、messages、chat_reads、legacy chat_shards，并重建消息序号与阅读游标的映射。目录改写走 `SQLDirectory.ReassignBatch` 的 CAS + 单事务，避免过期脚本覆盖已有映射。演练同时修复了 `Resolver.Place` 不返回目录权威片号的问题。user/task 域的数据搬迁、CDC/冻结写入仍属后续工作。
 
 ---
 
