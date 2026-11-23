@@ -256,10 +256,19 @@ CGO_ENABLED=0 go build ./...
 先启动数据库再启动服务：
 
 ```bash
-docker compose up -d          # 起 3 个独立实例
+docker compose up -d          # 起 3 个 MySQL 实例 + Redis
 make run
 # 或：CGO_ENABLED=0 go run .
 ```
+
+指定别的配置文件（例如多实例的第二份配置）：
+
+```bash
+make run CONFIG=taskgame.yaml           # 等价于 go run . -f taskgame.yaml
+make run GOARGS="-f taskgame.yaml"      # 直接透传完整参数
+```
+
+`-f` **不能**紧跟 `make run`：它是 make 自己的「指定 makefile」选项，会被 make 截走（报 `taskgame.yaml: No such file or directory`）。用 `CONFIG=` 或 `GOARGS=` 传。`make token` 也接受同样的变量。
 
 每个实例的库由 `MYSQL_DATABASE` 在首次启动时创建；服务启动时只自建表，**不建库**。端口刻意用 3307/3308/3309，不会碰本机已有的 3306。要改成一机三库，把三个 DSN 的端口都改成 3306、库名分别改成 `taskgame_cell_0/1/2` 即可。
 
@@ -488,6 +497,15 @@ docker compose up -d          # three independent MySQL cells + Redis
 make run
 # or: CGO_ENABLED=0 go run .
 ```
+
+To use another config file (for example a second API instance), pass it through make:
+
+```bash
+make run CONFIG=taskgame.yaml           # same as go run . -f taskgame.yaml
+make run GOARGS="-f taskgame.yaml"      # pass the full flag through
+```
+
+Do **not** write `make run -f taskgame.yaml`: make consumes `-f` as its own "use this makefile" option and looks for `taskgame.yaml` as a makefile. `make token` accepts `CONFIG=` / `GOARGS=` too.
 
 `MYSQL_DATABASE` creates each cell's database on first boot; the service creates tables but **not databases**. The ports are deliberately 3307/3308/3309 so an existing local MySQL on 3306 is untouched. To run all three cells on one server, point all three DSNs at 3306 and use `taskgame_cell_0/1/2` as schema names.
 
