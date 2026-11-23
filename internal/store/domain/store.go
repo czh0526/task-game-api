@@ -26,16 +26,23 @@ type Config struct {
 	// ChatRouter is the legacy FNV router used to pin a NEW chat before a
 	// directory row exists. Zero value means "derive from the message DSNs".
 	ChatRouter shard.Router
+	// StrictTx makes TxScope reject every same-domain cross-shard access.
+	// It is off by default: in a co-located deployment several domains share
+	// one physical store, so a cross-domain call still uses the same SQL
+	// transaction. Once domains point at different DSNs, non-strict mode uses
+	// separate pools (eventual consistency) and strict mode fails loudly.
+	StrictTx bool
 }
 
 // Store is a store.Store whose tables are split by aggregate-root domain.
 // Every domain owns an ordered DSN list; a placement (not a global hash)
 // decides which physical store serves a repository call.
 type Store struct {
-	control *plane.ControlPlane
-	topo    *plane.Topology
-	chat    shard.Router
-	domain  *shard.DomainRouter
+	control  *plane.ControlPlane
+	topo     *plane.Topology
+	chat     shard.Router
+	domain   *shard.DomainRouter
+	strictTx bool
 
 	pools  map[plane.Domain][]store.Store
 	byDSN  map[string]store.Store
@@ -61,8 +68,9 @@ func Open(cfg Config) (*Store, error) {
 	}
 
 	s := &Store{
-		pools: make(map[plane.Domain][]store.Store, len(allDomains)),
-		byDSN: make(map[string]store.Store),
+		strictTx: cfg.StrictTx,
+		pools:    make(map[plane.Domain][]store.Store, len(allDomains)),
+		byDSN:    make(map[string]store.Store),
 	}
 	if cfg.Control != nil {
 		if cfg.Control.Resolver == nil || cfg.Control.Topology == nil {
@@ -198,38 +206,53 @@ func (s *Store) pickPlacement(ctx context.Context, p plane.Placement) (store.Rep
 		return nil, err
 	}
 	scope := scopeFrom(ctx)
-	if scope == nil {
+	if scope == nil || scope.txStore == nil {
 		return pool, nil
 	}
-	if err := scope.tx.Pin(p); err != nil {
-		return nil, err
-	}
-	if txRepos, ok := scope.repos[p.Domain]; ok {
-		if n, pinned := scope.tx.Shard(p.Domain); pinned && n == p.Shard {
-			return txRepos, nil
+	// Co-located domains resolve to the SAME pool. Reuse the transaction's
+	// connection, whatever table the caller touches: users + tasks in one
+	// CreateTask really are one local transaction in this deployment.
+	if pool == scope.txStore {
+		for _, repos := range scope.repos {
+			if repos != nil {
+				return repos, nil
+			}
 		}
 	}
-	if p.Domain == scope.mainDomain {
-		return nil, fmt.Errorf("%w: %s/%s resolves to shard %d while the transaction is pinned to another shard",
-			shard.ErrCrossShard, p.Domain, p.Key, p.Shard)
+	if s.strictTx {
+		if err := scope.tx.Pin(p); err != nil {
+			return nil, err
+		}
+		if p.Domain == scope.mainDomain {
+			return nil, fmt.Errorf("%w: %s/%s resolves to shard %d while the transaction is pinned to another shard",
+				shard.ErrCrossShard, p.Domain, p.Key, p.Shard)
+		}
 	}
-	// Cross-domain access is a stage-1 skeleton limitation: it uses a separate
-	// pool and is NOT part of the surrounding transaction. Stage 4 replaces it
-	// with explicit outbox compensation for the operations that need atomicity.
+	// Physically split domains use a separate pool, so the write is NOT part
+	// of the surrounding transaction. Stage 4 replaces this with outbox
+	// compensation for the operations that need atomicity.
 	return pool, nil
 }
 
-// InTx pins the transaction to the domain/key in ctx. All repos passed to fn
-// route through the same TxScope, so a same-domain cross-shard access fails
-// loudly instead of becoming an implicit distributed transaction.
+// InTx opens the transaction on the shard named by the request route. Without
+// a route (registration, background sweeps) it starts on the first user shard
+// and lets each repository resolve its own placement; in a co-located
+// deployment those calls still share the same physical pool and transaction.
 func (s *Store) InTx(ctx context.Context, fn func(ctx context.Context, r store.Repos) error) error {
+	var p plane.Placement
 	route, ok := RouteFrom(ctx)
-	if !ok || route.Key == "" || !route.Domain.Valid() {
-		return fmt.Errorf("domain: InTx needs WithRoute(domain, key, create)")
-	}
-	p, err := s.place(ctx, route.Domain, route.Key, route.Create)
-	if err != nil {
-		return err
+	if ok && route.Key != "" && route.Domain.Valid() {
+		var err error
+		p, err = s.place(ctx, route.Domain, route.Key, route.Create)
+		if err != nil {
+			return err
+		}
+	} else {
+		dsn, err := s.topo.DSN(plane.DomainUser, 0)
+		if err != nil {
+			return err
+		}
+		p = plane.Placement{Domain: plane.DomainUser, Shard: 0, DSN: dsn}
 	}
 	pool, err := s.StoreFor(p.Domain, p.Shard)
 	if err != nil {
@@ -241,8 +264,10 @@ func (s *Store) InTx(ctx context.Context, fn func(ctx context.Context, r store.R
 		txStore:    pool,
 		repos:      make(map[plane.Domain]store.Repos),
 	}
-	if err := scope.tx.Pin(p); err != nil {
-		return err
+	if s.strictTx {
+		if err := scope.tx.Pin(p); err != nil {
+			return err
+		}
 	}
 	txCtx := withScope(ctx, scope)
 	return pool.InTx(txCtx, func(ctx context.Context, repos store.Repos) error {
@@ -259,8 +284,13 @@ func (s *Store) allRepos(ctx context.Context, d plane.Domain, fn func(store.Repo
 	for _, st := range s.pools[d] {
 		var repos store.Repos = st
 		if scope != nil && st == scope.txStore {
-			if txRepos, ok := scope.repos[d]; ok && txRepos != nil {
-				repos = txRepos
+			// The transaction connection belongs to ONE physical store, but
+			// its full schema serves every domain in a co-located deployment.
+			for _, txRepos := range scope.repos {
+				if txRepos != nil {
+					repos = txRepos
+					break
+				}
 			}
 		}
 		if err := fn(repos); err != nil {
@@ -286,8 +316,11 @@ func (s *Store) byRouteOrAll(ctx context.Context, d plane.Domain, id string) ([]
 	for _, st := range s.pools[d] {
 		var repos store.Repos = st
 		if scope != nil && st == scope.txStore {
-			if txRepos, ok := scope.repos[d]; ok && txRepos != nil {
-				repos = txRepos
+			for _, txRepos := range scope.repos {
+				if txRepos != nil {
+					repos = txRepos
+					break
+				}
 			}
 		}
 		out = append(out, repos)

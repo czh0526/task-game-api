@@ -173,6 +173,52 @@ func New(c config.ScaleConf, primary config.StoreConf) (*Runtime, error) {
 	return rt, nil
 }
 
+// DomainDSNs returns the physical DSN list each domain should use. Explicit
+// Scale.Domains.<Name>.DSNs always win. In Store.Mode=domain a domain without
+// explicit DSNs inherits Store.Cells (or Store.DSN), which is how a staged
+// rollout keeps untouched domains co-located. Outside domain mode the map is
+// empty so the legacy skeleton path stays byte-for-byte compatible.
+func DomainDSNs(c config.ScaleConf, primary config.StoreConf) map[plane.Domain][]string {
+	out := make(map[plane.Domain][]string, 3)
+	if c.Domains.User.DSNs != nil && len(c.Domains.User.DSNs) > 0 {
+		out[plane.DomainUser] = c.Domains.User.DSNs
+	}
+	if c.Domains.Task.DSNs != nil && len(c.Domains.Task.DSNs) > 0 {
+		out[plane.DomainTask] = c.Domains.Task.DSNs
+	}
+	if c.Domains.Message.DSNs != nil && len(c.Domains.Message.DSNs) > 0 {
+		out[plane.DomainMessage] = c.Domains.Message.DSNs
+	}
+	if primary.Mode != "domain" {
+		return out
+	}
+	base := primary.Cells
+	if len(base) == 0 && primary.DSN != "" {
+		base = []string{primary.DSN}
+	}
+	if len(base) == 0 {
+		return out
+	}
+	for _, pair := range []struct {
+		domain plane.Domain
+		conf   config.DomainDSNsConf
+	}{
+		{plane.DomainUser, c.Domains.User},
+		{plane.DomainTask, c.Domains.Task},
+		{plane.DomainMessage, c.Domains.Message},
+	} {
+		if _, ok := out[pair.domain]; ok {
+			continue
+		}
+		dsns := base
+		if pair.conf.Shards > 0 && pair.conf.Shards < len(dsns) {
+			dsns = dsns[:pair.conf.Shards]
+		}
+		out[pair.domain] = dsns
+	}
+	return out
+}
+
 // registerDomains seeds the topology. Each domain prefers the real DSN list
 // declared under Scale.Domains.<Name>.DSNs; when a domain has none, it falls
 // back to the legacy skeleton source so existing configs keep loading:
@@ -183,19 +229,23 @@ func New(c config.ScaleConf, primary config.StoreConf) (*Runtime, error) {
 // physical databases; it does not, by itself, move any table or change any
 // API response.
 func registerDomains(topo *plane.Topology, c config.ScaleConf, primary config.StoreConf) error {
+	wired := DomainDSNs(c, primary)
 	n := primary.Shards
 	if n < 1 {
 		n = 1
 	}
-	message := make([]string, n)
-	for i := range message {
-		switch {
-		case i < len(primary.ShardDSNs) && primary.ShardDSNs[i] != "":
-			message[i] = primary.ShardDSNs[i]
-		case strings.Contains(primary.ShardDSN, "%d"):
-			message[i] = fmt.Sprintf(primary.ShardDSN, i)
-		default:
-			message[i] = fmt.Sprintf("skeleton://message/shard-%d", i)
+	message := wired[plane.DomainMessage]
+	if len(message) == 0 {
+		message = make([]string, n)
+		for i := range message {
+			switch {
+			case i < len(primary.ShardDSNs) && primary.ShardDSNs[i] != "":
+				message[i] = primary.ShardDSNs[i]
+			case strings.Contains(primary.ShardDSN, "%d"):
+				message[i] = fmt.Sprintf(primary.ShardDSN, i)
+			default:
+				message[i] = fmt.Sprintf("skeleton://message/shard-%d", i)
+			}
 		}
 	}
 	if err := topo.Register(plane.DomainMessage, effectiveDSNs(c.Domains.Message, plane.DomainMessage, message)); err != nil {
@@ -212,9 +262,12 @@ func registerDomains(topo *plane.Topology, c config.ScaleConf, primary config.St
 		if count < 1 {
 			count = 1
 		}
-		placeholder := make([]string, count)
-		for i := range placeholder {
-			placeholder[i] = fmt.Sprintf("skeleton://%s/shard-%d (not wired)", d.domain, i)
+		placeholder := wired[d.domain]
+		if len(placeholder) == 0 {
+			placeholder = make([]string, count)
+			for i := range placeholder {
+				placeholder[i] = fmt.Sprintf("skeleton://%s/shard-%d (not wired)", d.domain, i)
+			}
 		}
 		var declared config.DomainDSNsConf
 		switch d.domain {

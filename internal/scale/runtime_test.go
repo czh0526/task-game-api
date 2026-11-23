@@ -158,3 +158,39 @@ func TestSharedPubSubReachesAnotherProcess(t *testing.T) {
 		t.Fatal("second process did not receive the signal")
 	}
 }
+
+func TestModeDomainInheritsCellsAndOverridesOneDomain(t *testing.T) {
+	rt, err := New(config.ScaleConf{
+		Enabled:    true,
+		PubSub:     "shared",
+		InstanceID: "api-1",
+		Domains: config.DomainScaleConf{
+			// Only the message domain is physically cut over; user and task
+			// inherit the existing cell DSNs.
+			Message: config.DomainDSNsConf{Shards: 2, DSNs: []string{"m0", "m1"}},
+		},
+	}, config.StoreConf{Mode: "domain", Driver: "mysql", Cells: []string{"c0", "c1", "c2"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Close()
+	topo := rt.ControlPlane.Topology
+	for _, tc := range []struct {
+		domain plane.Domain
+		want   []string
+	}{
+		{plane.DomainUser, []string{"c0", "c1", "c2"}},
+		{plane.DomainTask, []string{"c0", "c1", "c2"}},
+		{plane.DomainMessage, []string{"m0", "m1"}},
+	} {
+		if topo.Len(tc.domain) != len(tc.want) {
+			t.Fatalf("%s Len = %d, want %d", tc.domain, topo.Len(tc.domain), len(tc.want))
+		}
+		for i, want := range tc.want {
+			got, err := topo.DSN(tc.domain, i)
+			if err != nil || got != want {
+				t.Fatalf("%s DSN[%d] = %q (%v), want %q", tc.domain, i, got, err, want)
+			}
+		}
+	}
+}

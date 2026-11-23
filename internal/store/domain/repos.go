@@ -51,6 +51,17 @@ func (s *Store) chatRepos(ctx context.Context, chatID string, create bool) (stor
 	return s.pick(ctx, plane.DomainMessage, chatID, create)
 }
 
+// createPlacement keeps a newly created aggregate root co-located with the
+// request's routing key (usually the authenticated user). The generated id is
+// then pinned to that shard in the directory. This preserves the cell-mode
+// guarantee that a user, their tasks and their chats live in one database.
+func (s *Store) createPlacement(ctx context.Context, d plane.Domain, newKey string) (plane.Placement, error) {
+	if route, ok := RouteFrom(ctx); ok && route.Domain == d && route.Key != "" {
+		return s.place(ctx, d, route.Key, false)
+	}
+	return s.place(ctx, d, newKey, true)
+}
+
 var errFound = errors.New("domain: found")
 
 // findAcross fans a read out to every shard of a domain and returns the first

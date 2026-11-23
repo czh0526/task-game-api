@@ -16,7 +16,14 @@ import (
 type taskRepo struct{ s *Store }
 
 func (r *taskRepo) Insert(ctx context.Context, t model.Task) error {
-	repos, err := r.s.taskRepos(ctx, t.ID, true)
+	p, err := r.s.createPlacement(ctx, plane.DomainTask, t.ID)
+	if err != nil {
+		return err
+	}
+	if _, err := r.s.control.Resolver.Place(ctx, plane.DomainTask, t.ID, p.Shard); err != nil {
+		return err
+	}
+	repos, err := r.s.pickPlacement(ctx, p)
 	if err != nil {
 		return err
 	}

@@ -51,6 +51,11 @@ Auth:
 
 Store:
   Driver: mysql
+  # P2 per-domain routing is OFF by default. Set Mode: domain to route each
+  # aggregate-root family through its own DSN list. Domains without explicit
+  # Scale.Domains.<Name>.DSNs inherit Cells below, so a staged rollout starts
+  # with all data still co-located; only change one domain's DSNs at a time.
+  # Mode: domain
   # One DSN per cell, in cell order. Every API process must use the same
   # ordered list. No DSN / Shards setting is used when Cells is present.
   Cells:
@@ -105,3 +110,19 @@ Scale:
     Addr: "127.0.0.1:6379"
     Channel: "taskgame.signals"
     Timeout: 2s
+  # Per-domain physical placement, consumed only when Store.Mode=domain.
+  # Every domain may be cut over independently: omit a domain to keep it on
+  # Store.Cells. Keep DSN order identical on every API process.
+  # Domains:
+  #   User:
+  #     Shards: 3
+  #     DSNs:
+  #       - "root:123456@tcp(127.0.0.1:3307)/taskgame?..."
+  #       - "root:123456@tcp(127.0.0.1:3308)/taskgame?..."
+  #       - "root:123456@tcp(127.0.0.1:3309)/taskgame?..."
+  #   Task:
+  #     Shards: 3
+  #     DSNs: [...]   # same three DSNs while co-located
+  #   Message:
+  #     Shards: 3
+  #     DSNs: [...]   # change to dedicated message DSNs to cut this domain over

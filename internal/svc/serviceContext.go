@@ -11,10 +11,12 @@ import (
 	"taskgame/internal/id"
 	"taskgame/internal/middleware"
 	"taskgame/internal/notify"
+	"taskgame/internal/plane"
 	"taskgame/internal/projection"
 	"taskgame/internal/scale"
 	"taskgame/internal/store"
 	"taskgame/internal/store/cell"
+	"taskgame/internal/store/domain"
 	"taskgame/internal/store/mysql"
 	"taskgame/internal/store/shard"
 	"taskgame/internal/store/sqlite"
@@ -66,7 +68,7 @@ func NewServiceContext(c config.Config) (*ServiceContext, error) {
 	if err != nil {
 		return nil, fmt.Errorf("scale: %w", err)
 	}
-	st, err := openStore(c)
+	st, err := openStore(c, rt)
 	if err != nil {
 		if rt != nil {
 			_ = rt.Close()
@@ -86,9 +88,10 @@ func NewServiceContext(c config.Config) (*ServiceContext, error) {
 	if cs, ok := st.(*cell.Store); ok {
 		locator = cs.Locator()
 	}
+	_, domainMode := st.(*domain.Store)
 	sc := &ServiceContext{
 		Config: c,
-		Auth:   middleware.NewAuthMiddleware(c.Auth, locator).Handle,
+		Auth:   middleware.NewAuthMiddlewareWithDomain(c.Auth, domainMode, locator).Handle,
 		Engine: engine.New(st, c.Escrow.Currency,
 			engine.WithTimeouts(engine.TimeoutConfig{
 				OpenTimeout:       c.AutoSettle.OpenTimeout,
@@ -124,7 +127,26 @@ func NewServiceContext(c config.Config) (*ServiceContext, error) {
 	return sc, nil
 }
 
-func openStore(c config.Config) (store.Store, error) {
+func openStore(c config.Config, rt *scale.Runtime) (store.Store, error) {
+	// Per-domain sharding (P2): every aggregate-root family has its own ordered
+	// DSN list. Domains without explicit DSNs inherit Store.Cells, so the first
+	// cutover is logical only and keeps all data co-located.
+	if c.Store.Mode == "domain" {
+		dsns := scale.DomainDSNs(c.Scale, c.Store)
+		if len(dsns) == 0 {
+			return nil, fmt.Errorf("Store.Mode=domain needs Store.Cells or per-domain DSNs")
+		}
+		var control *plane.ControlPlane
+		if rt != nil {
+			control = rt.ControlPlane
+		}
+		return domain.Open(domain.Config{
+			Driver:         c.Store.Driver,
+			DSNs:           dsns,
+			InitialBalance: c.Escrow.InitialBalance,
+			Control:        control,
+		})
+	}
 	// Horizontal cell sharding (plan A): N independent databases, each with
 	// the full schema and roughly 1/N of every table. No primary database.
 	if len(c.Store.Cells) > 0 {

@@ -15,7 +15,7 @@ import (
 	"taskgame/internal/store/shard"
 )
 
-func openDomain(t *testing.T, control *plane.ControlPlane) (*domain.Store, []string) {
+func openDomain(t *testing.T, control *plane.ControlPlane, strict ...bool) (*domain.Store, []string) {
 	t.Helper()
 	dir := t.TempDir()
 	dsns := make([]string, 3)
@@ -32,6 +32,7 @@ func openDomain(t *testing.T, control *plane.ControlPlane) (*domain.Store, []str
 		DSNs:           byDomain,
 		InitialBalance: 1_000_000,
 		Control:        control,
+		StrictTx:       len(strict) > 0 && strict[0],
 	})
 	if err != nil {
 		t.Fatalf("open domain store: %v", err)
@@ -101,7 +102,7 @@ func TestUsersDistributeAndDirectoryIsAuthoritative(t *testing.T) {
 }
 
 func TestInTxPinsAndRejectsSameDomainCrossShard(t *testing.T) {
-	st, _ := openDomain(t, nil)
+	st, _ := openDomain(t, nil, true)
 	ctx := context.Background()
 
 	var first, other string

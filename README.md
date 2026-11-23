@@ -80,6 +80,12 @@ Mint a dev JWT with `make token` (subject defaults to `usr_publisher`).
 - **扩展**：`Store.Cells` 是**有序列表**，下标就是单元编号。加/减单元属于数据迁移（按 `user_id` 重算归属并搬迁该单元的数据），不能只改配置完成；当前原型没有在线迁移工具。
 - **边界**：这是可运行的单元化原型。跨单元的余额/积分更新、好友关系双写是最终一致（`Ensure` 幂等、`UPDATE` 可重放），没有分布式事务；单条消息只有一份，落在会话所在单元。
 
+### 按域分片（P2，可选，默认关闭）
+
+设置 `Store.Mode: domain` 后，user / task / message 三个域各自按 `Scale.Domains.<Name>.DSNs` 路由；**未声明 DSNs 的域自动继承 `Store.Cells`**，所以第一步可以把三个域都指向原来的三库，API 行为与单元化模式一致。之后每次只给一个域声明新的 DSN 列表即可逐域切分（例如消息域先迁到 6 个专用库）。详见 `docs/per-domain-sharding-plan.md` 的阶段 2。
+
+当前仍是骨架：切换某个域的物理 DSN 之前必须自行迁移历史数据并回填目录；物理分置后跨域写入退化为最终一致，资金类操作的补偿在阶段 4 处理。
+
 ## 消息分片（旧模式，非默认）
 
 下面是 PR #38 的**消息级**分片原型，只在 `Store.Shards > 1` 时启用；默认配置已改为上面的三库单元化。原说明保留如下，便于对照。**注意：下文提到的 `docker-compose.3instances.yml` 与 `etc/mysql-init.d` 已随默认配置切换而删除；要重跑旧模式，按下面的 YAML 片段自行准备 1 个主库 + N 个片库。**

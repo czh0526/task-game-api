@@ -144,6 +144,12 @@
 
 验收：两进程 8891/8892 + Redis 的跨进程 SSE smoke；A(DB0) 与 B(DB1) 聊天，双方消息都落在消息域的同一片（沿用现有 `direct_chat_test.go`、`domains_test.go` 的对称性断言）。
 
+**阶段 2 实现状态**：`Store.Mode: domain` 已在 `openStore()` 接线；`Scale.Domains.<Name>.DSNs` 可单独为某个域声明物理库，未声明的域自动继承 `Store.Cells`，因此可以一次只改一个域。`middleware` 会从请求路径写入 `domain.Route`，`engine.call` 的事务据此选择主域。已验证注册 → 建任务 → 建直聊 → 发消息 → 对方读取的完整链路在共置配置下全部通过，且 user/task/chat 仍落在同一物理库；`go vet ./...` 与 `go test ./...` 全绿。
+
+共置的关键实现：`domain.Store` 按 DSN 去重连接池，事务内无论操作哪个域，只要 placement 落在同一个物理 store，就复用该事务的连接（因此仍是单库事务）。只有当某个域被切到不同 DSN 时，跨域调用才走独立连接池并退化为最终一致。`StrictTx`（可选，配置尚未暴露）会在这种场景下直接返回 `ErrCrossShard`，作为阶段 4 事务治理的护栏。
+
+当前**未做**的是物理数据搬迁：改变某个域的 DSNs 之前仍需按第 7 节回填目录并迁移数据，否则新 DSN 里没有历史行。
+
 ### 阶段 3：全局唯一约束与 ID 生成器
 
 1. 实现 `SQLUnique`（`plane.Schema.global_unique` 表已就绪）：`Reserve` 用 `INSERT IGNORE` / `INSERT OR IGNORE`，冲突且 owner 不同返回 `ErrConflict`；`Owner` 走主键点查。过程内加一层缓存，避免每次注册都打到控制面。

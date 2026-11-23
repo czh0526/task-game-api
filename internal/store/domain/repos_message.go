@@ -7,6 +7,7 @@ import (
 	"taskgame/internal/model"
 	"taskgame/internal/plane"
 	"taskgame/internal/store"
+	"taskgame/internal/store/shard"
 )
 
 type chatRepo struct{ s *Store }
@@ -16,8 +17,20 @@ type chatRepo struct{ s *Store }
 // recorded so later id-only calls (ListMessages, AdvanceRead, ...) can resolve
 // it from the directory instead of searching every message shard.
 func (r *chatRepo) InsertChat(ctx context.Context, c model.Chat) error {
-	p, err := r.s.placeChat(ctx, c, true)
+	var p plane.Placement
+	var err error
+	if route, ok := RouteFrom(ctx); ok && route.Domain == plane.DomainMessage && route.Key != "" {
+		// Inside a request, keep the new chat on the initiator's shard so the
+		// surrounding transaction stays local. The directory rows below make
+		// both members agree afterwards.
+		p, err = r.s.place(ctx, plane.DomainMessage, route.Key, false)
+	} else {
+		p, err = r.s.placeChat(ctx, c, true)
+	}
 	if err != nil {
+		return err
+	}
+	if _, err := r.s.control.Resolver.Place(ctx, plane.DomainMessage, shard.ChatKey(c), p.Shard); err != nil {
 		return err
 	}
 	if _, err := r.s.control.Resolver.Place(ctx, plane.DomainMessage, c.ID, p.Shard); err != nil {
