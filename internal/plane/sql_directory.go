@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"taskgame/internal/metrics"
+
 	// Register both SQL drivers so OpenSQLDirectory works from any importer.
 	_ "github.com/go-sql-driver/mysql"
 	_ "modernc.org/sqlite"
@@ -198,14 +200,17 @@ func (d *SQLDirectory) Lookup(ctx context.Context, domain Domain, key string) (i
 	if !domain.Valid() {
 		return 0, false, fmt.Errorf("plane: invalid domain %q", domain)
 	}
+	metrics.Inc(metrics.LookupTotal, 1)
 	ck := dirCacheKey{domain: domain, key: key}
 	d.lookupMu.RLock()
 	entry, cached := d.lookupCache[ck]
 	d.lookupMu.RUnlock()
 	if cached && d.now().Before(entry.expiresAt) {
+		metrics.Inc(metrics.LookupCacheHit, 1)
 		return entry.shard, entry.ok, nil
 	}
 
+	metrics.Inc(metrics.ControlQPS, 1)
 	reader := d.db
 	if d.readDB != nil {
 		reader = d.readDB

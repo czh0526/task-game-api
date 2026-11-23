@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"taskgame/internal/metrics"
 )
 
 // Handler executes the forward effect of a saga kind and, if the caller says
@@ -177,6 +179,7 @@ func (c *Coordinator) ReconcileOnce(ctx context.Context, limit int) (int, error)
 			if err := c.log.MarkCompensated(ctx, rec.ID); err != nil {
 				return processed, err
 			}
+			metrics.Inc(metrics.SagaCompensated, 1)
 		}
 		processed++
 	}

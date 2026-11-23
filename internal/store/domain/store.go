@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"taskgame/internal/metrics"
 	"taskgame/internal/model"
 	"taskgame/internal/plane"
 	"taskgame/internal/store"
@@ -256,8 +257,9 @@ func (s *Store) pickPlacement(ctx context.Context, p plane.Placement) (store.Rep
 		}
 	}
 	// Physically split domains use a separate pool, so the write is NOT part
-	// of the surrounding transaction. Stage 4 replaces this with outbox
-	// compensation for the operations that need atomicity.
+	// of the surrounding transaction. Compensation (compensation.Coordinator)
+	// handles the operations that need atomicity.
+	metrics.Inc(metrics.CrossDomainTxn, 1)
 	return pool, nil
 }
 
@@ -275,6 +277,7 @@ func (s *Store) InTx(ctx context.Context, fn func(ctx context.Context, r store.R
 			return err
 		}
 		if fenced {
+			metrics.Inc(metrics.FencedWrites, 1)
 			return fmt.Errorf("%w: %s/%s", plane.ErrFenced, route.Domain, route.Key)
 		}
 	}

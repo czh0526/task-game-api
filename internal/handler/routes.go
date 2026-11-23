@@ -10,6 +10,7 @@ import (
 	events "taskgame/internal/handler/events"
 	friend "taskgame/internal/handler/friend"
 	health "taskgame/internal/handler/health"
+	metrics "taskgame/internal/handler/metrics"
 	session "taskgame/internal/handler/session"
 	task "taskgame/internal/handler/task"
 	user "taskgame/internal/handler/user"
@@ -65,6 +66,11 @@ func RegisterHandlers(server *rest.Server, serverCtx *svc.ServiceContext) {
 				Method:  http.MethodGet,
 				Path:    "/health",
 				Handler: health.HealthHandler(serverCtx),
+			},
+			{
+				Method:  http.MethodGet,
+				Path:    "/metrics",
+				Handler: metrics.MetricsHandler(),
 			},
 		},
 	)
