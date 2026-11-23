@@ -131,6 +131,24 @@ func New(c config.ScaleConf, primary config.StoreConf) (*Runtime, error) {
 		_ = rt.Close()
 		return nil, err
 	}
+	// P0: with a persistent control plane, upgrade the in-memory defaults to
+	// the real global unique index and Snowflake generator. Both write to the
+	// SAME control-plane database (or inherit its pool), so email claims and
+	// worker-id allocation survive restarts and are shared across processes.
+	if rt.directoryDB != nil {
+		unique, uerr := plane.NewSQLUnique(context.Background(), rt.directoryDB.DB(), c.Directory.Driver)
+		if uerr != nil {
+			_ = rt.Close()
+			return nil, fmt.Errorf("global unique index: %w", uerr)
+		}
+		gen, gerr := plane.NewSnowflakeIDGenerator(context.Background(), unique, instanceID)
+		if gerr != nil {
+			_ = rt.Close()
+			return nil, fmt.Errorf("snowflake generator: %w", gerr)
+		}
+		cp.Unique = unique
+		cp.IDs = gen
+	}
 	rt.ControlPlane = cp
 	chatShards := primary.Shards
 	if chatShards < 1 {

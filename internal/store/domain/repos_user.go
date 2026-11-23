@@ -30,6 +30,18 @@ func (r *userRepo) Get(ctx context.Context, id string) (model.User, error) {
 	return repos.Users().Get(ctx, id)
 }
 
+// GetCredentials reads the password-bearing user from the shard that owns id,
+// resolving through the directory. Used by control-plane login.
+func (r *userRepo) GetCredentials(ctx context.Context, id string) (model.User, error) {
+	repos, err := r.s.userRepos(ctx, id, false)
+	if err != nil {
+		return model.User{}, err
+	}
+	return repos.Users().(interface {
+		GetCredentials(context.Context, string) (model.User, error)
+	}).GetCredentials(ctx, id)
+}
+
 func (r *userRepo) InsertRegistered(ctx context.Context, id, email, passwordHash string, now time.Time) (model.User, error) {
 	repos, err := r.s.userRepos(ctx, id, true)
 	if err != nil {

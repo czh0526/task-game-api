@@ -89,6 +89,13 @@ func NewServiceContext(c config.Config) (*ServiceContext, error) {
 		locator = cs.Locator()
 	}
 	_, domainMode := st.(*domain.Store)
+	// P0: when a persistent control plane is enabled, route registration and
+	// login through global_unique(email -> user_id) + Snowflake ids. When it
+	// is off, account.New keeps the original behavior.
+	accountOpts := []account.Option{}
+	if rt != nil && rt.ControlPlane != nil && rt.ControlPlane.Unique != nil && rt.ControlPlane.IDs != nil {
+		accountOpts = append(accountOpts, account.WithIdentity(rt.ControlPlane.Unique, rt.ControlPlane.IDs))
+	}
 	sc := &ServiceContext{
 		Config: c,
 		Auth:   middleware.NewAuthMiddlewareWithDomain(c.Auth, domainMode, locator).Handle,
@@ -102,7 +109,7 @@ func NewServiceContext(c config.Config) (*ServiceContext, error) {
 			engine.WithArbiters(c.Escrow.ArbiterUserIds),
 			engine.WithSignalNotifier(notifier),
 		),
-		Accounts: account.New(st, c.Auth.JwtSecret, c.Auth.TokenTTL),
+		Accounts: account.New(st, c.Auth.JwtSecret, c.Auth.TokenTTL, accountOpts...),
 		Store:    st,
 		Notifier: notifier,
 		Scale:    rt,
