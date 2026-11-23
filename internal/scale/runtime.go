@@ -173,9 +173,15 @@ func New(c config.ScaleConf, primary config.StoreConf) (*Runtime, error) {
 	return rt, nil
 }
 
-// registerDomains seeds the topology. Message uses the REAL PR #38 shard
-// configuration; User / Task use clearly-marked placeholder DSNs because
-// their repositories have not been split yet.
+// registerDomains seeds the topology. Each domain prefers the real DSN list
+// declared under Scale.Domains.<Name>.DSNs; when a domain has none, it falls
+// back to the legacy skeleton source so existing configs keep loading:
+//   - Message: Store.Shards / ShardDSNs (the PR #38 message-shard prototype)
+//   - User/Task: skeleton:// placeholders (their repos live in the primary store)
+//
+// Using the real DSN list is what makes Store.Mode=domain route to distinct
+// physical databases; it does not, by itself, move any table or change any
+// API response.
 func registerDomains(topo *plane.Topology, c config.ScaleConf, primary config.StoreConf) error {
 	n := primary.Shards
 	if n < 1 {
@@ -192,7 +198,7 @@ func registerDomains(topo *plane.Topology, c config.ScaleConf, primary config.St
 			message[i] = fmt.Sprintf("skeleton://message/shard-%d", i)
 		}
 	}
-	if err := topo.Register(plane.DomainMessage, message); err != nil {
+	if err := topo.Register(plane.DomainMessage, effectiveDSNs(c.Domains.Message, plane.DomainMessage, message)); err != nil {
 		return err
 	}
 	for _, d := range []struct {
@@ -206,15 +212,43 @@ func registerDomains(topo *plane.Topology, c config.ScaleConf, primary config.St
 		if count < 1 {
 			count = 1
 		}
-		list := make([]string, count)
-		for i := range list {
-			list[i] = fmt.Sprintf("skeleton://%s/shard-%d (not wired)", d.domain, i)
+		placeholder := make([]string, count)
+		for i := range placeholder {
+			placeholder[i] = fmt.Sprintf("skeleton://%s/shard-%d (not wired)", d.domain, i)
 		}
-		if err := topo.Register(d.domain, list); err != nil {
+		var declared config.DomainDSNsConf
+		switch d.domain {
+		case plane.DomainUser:
+			declared = c.Domains.User
+		case plane.DomainTask:
+			declared = c.Domains.Task
+		}
+		if err := topo.Register(d.domain, effectiveDSNs(declared, d.domain, placeholder)); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// effectiveDSNs returns the declared DSN list when present, otherwise the
+// legacy fallback. A declared shard count with no DSNs still wins on count:
+// it lets a domain reserve N shards before their DSNs are assigned.
+func effectiveDSNs(d config.DomainDSNsConf, domain plane.Domain, fallback []string) []string {
+	if len(d.DSNs) > 0 {
+		return d.DSNs
+	}
+	if d.Shards > 0 && len(fallback) != d.Shards {
+		out := make([]string, d.Shards)
+		for i := range out {
+			if i < len(fallback) {
+				out[i] = fallback[i]
+			} else {
+				out[i] = fmt.Sprintf("skeleton://%s/shard-%d (not wired)", domain, i)
+			}
+		}
+		return out
+	}
+	return fallback
 }
 
 // wireDirectory chooses the routing directory. With Scale.Directory.Enabled

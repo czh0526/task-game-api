@@ -72,6 +72,68 @@ func TestEnabledWiresEveryComponent(t *testing.T) {
 	}
 }
 
+func TestDeclaredDomainDSNsPopulateTopology(t *testing.T) {
+	rt, err := New(config.ScaleConf{
+		Enabled:    true,
+		PubSub:     "shared",
+		InstanceID: "api-1",
+		Domains: config.DomainScaleConf{
+			User:    config.DomainDSNsConf{Shards: 2, DSNs: []string{"u0", "u1"}},
+			Task:    config.DomainDSNsConf{Shards: 3, DSNs: []string{"t0", "t1", "t2"}},
+			Message: config.DomainDSNsConf{Shards: 2, DSNs: []string{"m0", "m1"}},
+		},
+	}, config.StoreConf{Driver: "mysql", Cells: []string{"c0", "c1", "c2"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Close()
+	topo := rt.ControlPlane.Topology
+	for _, tc := range []struct {
+		domain plane.Domain
+		want   []string
+	}{
+		{plane.DomainUser, []string{"u0", "u1"}},
+		{plane.DomainTask, []string{"t0", "t1", "t2"}},
+		{plane.DomainMessage, []string{"m0", "m1"}},
+	} {
+		if topo.Len(tc.domain) != len(tc.want) {
+			t.Fatalf("%s Len = %d, want %d", tc.domain, topo.Len(tc.domain), len(tc.want))
+		}
+		for i, want := range tc.want {
+			got, err := topo.DSN(tc.domain, i)
+			if err != nil || got != want {
+				t.Fatalf("%s DSN[%d] = %q (%v), want %q", tc.domain, i, got, err, want)
+			}
+		}
+	}
+}
+
+func TestCoLocatedDomainsShareTheSameDSNs(t *testing.T) {
+	cells := []string{"db0", "db1", "db2"}
+	rt, err := New(config.ScaleConf{
+		Enabled:    true,
+		PubSub:     "shared",
+		InstanceID: "api-1",
+		Domains: config.DomainScaleConf{
+			User:    config.DomainDSNsConf{Shards: 3, DSNs: cells},
+			Task:    config.DomainDSNsConf{Shards: 3, DSNs: cells},
+			Message: config.DomainDSNsConf{Shards: 3, DSNs: cells},
+		},
+	}, config.StoreConf{Driver: "mysql", Cells: cells})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Close()
+	for _, domain := range []plane.Domain{plane.DomainUser, plane.DomainTask, plane.DomainMessage} {
+		for i, want := range cells {
+			got, _ := rt.ControlPlane.Topology.DSN(domain, i)
+			if got != want {
+				t.Fatalf("co-located %s DSN[%d] = %q, want %q", domain, i, got, want)
+			}
+		}
+	}
+}
+
 func TestSharedPubSubReachesAnotherProcess(t *testing.T) {
 	rt, err := New(config.ScaleConf{Enabled: true, PubSub: "shared", InstanceID: "api-1"},
 		config.StoreConf{Shards: 2})

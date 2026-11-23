@@ -45,6 +45,13 @@ type ApiKeyConf struct {
 // ShardDSNs, which keeps a primary database). SQLite is available for local
 // single-process debugging by setting Driver: sqlite explicitly.
 type StoreConf struct {
+	// Mode selects the store implementation:
+	//   - "" or "cell" (default): unit-based sharding over Cells (plan A).
+	//   - "domain": per-aggregate-root stores (P2). Requires Scale.Directory and
+	//     Scale.Domains DSN lists; see docs/per-domain-sharding-plan.md.
+	// Keeping the default empty preserves byte-for-byte behaviour of existing
+	// configs: no new package is constructed unless "domain" is requested.
+	Mode string `json:",optional"`
 	// Driver is sqlite or mysql. When omitted, openStore falls back to sqlite
 	// for backwards compatibility with old local configs.
 	Driver string `json:",optional,options=sqlite|mysql"`
@@ -120,12 +127,50 @@ type RedisScaleConf struct {
 	Timeout  time.Duration `json:",optional,default=2s"`
 }
 
-// DomainScaleConf declares how many databases each aggregate-root domain would
-// have. User / Task counts are scaffolding only: their repositories still live
-// in the primary store. Message is taken from Store.Shards, NOT from here.
+// DomainScaleConf declares, per aggregate-root domain, the ordered DSN list
+// and shard count used by Store.Mode=domain. Each domain may point at a
+// different set of databases; a deployment that wants logical domains without
+// physical separation simply repeats the same cell DSNs for all three.
+//
+// UserShards / TaskShards are the legacy skeleton counts (their repositories
+// used to live in the primary store). They are still parsed for backwards
+// compatibility but DSNs, when present, take precedence over them.
 type DomainScaleConf struct {
-	UserShards int `json:",optional"`
-	TaskShards int `json:",optional"`
+	UserShards int            `json:",optional"`
+	TaskShards int            `json:",optional"`
+	User       DomainDSNsConf `json:",optional"`
+	Task       DomainDSNsConf `json:",optional"`
+	Message    DomainDSNsConf `json:",optional"`
+}
+
+// DomainDSNsConf is one domain's physical placement. Shards is the declared
+// count (used as the fallback hash modulus for legacy keys); DSNs[i] is the
+// DSN of shard i. A missing DSNs list falls back to the legacy skeleton path
+// so existing configs keep loading unchanged.
+type DomainDSNsConf struct {
+	Shards int      `json:",optional"`
+	DSNs   []string `json:",optional"`
+}
+
+// Validate checks that a domain's DSN list and shard count agree. An empty
+// config is valid: it means "not wired", and registerDomains keeps the legacy
+// placeholder behaviour.
+func (d DomainDSNsConf) Validate(domain string) error {
+	if d.Shards < 0 {
+		return fmt.Errorf("Scale.Domains.%s.Shards cannot be negative", domain)
+	}
+	if len(d.DSNs) == 0 {
+		return nil
+	}
+	if d.Shards > 0 && len(d.DSNs) != d.Shards {
+		return fmt.Errorf("Scale.Domains.%s: %d DSNs but Shards=%d", domain, len(d.DSNs), d.Shards)
+	}
+	for i, dsn := range d.DSNs {
+		if dsn == "" {
+			return fmt.Errorf("Scale.Domains.%s.DSNs[%d] is empty", domain, i)
+		}
+	}
+	return nil
 }
 
 type ArchiveScaleConf struct {
@@ -164,6 +209,13 @@ func (c ScaleConf) Validate() error {
 	}
 	if c.Domains.UserShards < 0 || c.Domains.TaskShards < 0 {
 		return fmt.Errorf("Scale.Domains shard counts cannot be negative")
+	}
+	for name, d := range map[string]DomainDSNsConf{
+		"User": c.Domains.User, "Task": c.Domains.Task, "Message": c.Domains.Message,
+	} {
+		if err := d.Validate(name); err != nil {
+			return err
+		}
 	}
 	if c.Archive.Enabled && c.Archive.Dir == "" {
 		return fmt.Errorf("Scale.Archive.Dir is required when archive is enabled")
