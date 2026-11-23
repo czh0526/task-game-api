@@ -138,8 +138,20 @@ func TestDefaultConfigIsThreeMySQLCells(t *testing.T) {
 	if c.Store.Shards != 0 || len(c.Store.ShardDSNs) != 0 {
 		t.Fatalf("cell mode must not enable message-only sharding: %+v", c.Store)
 	}
-	if c.Scale.Enabled {
-		t.Fatal("the default config must not enable the skeleton")
+	// The default config enables only the cross-process SSE signal bus.
+	// Other Scale sub-systems stay off in cell mode.
+	if !c.Scale.Enabled || c.Scale.PubSub != "redis" {
+		t.Fatalf("default config must enable redis pub/sub, got %+v", c.Scale)
+	}
+	if c.Scale.Redis.Addr != "127.0.0.1:6379" || c.Scale.Redis.Channel == "" {
+		t.Fatalf("default redis endpoint not configured: %+v", c.Scale.Redis)
+	}
+	if c.Scale.InstanceID == "" {
+		t.Fatal("Scale.InstanceID is required")
+	}
+	if c.Scale.Projection.Enabled || c.Scale.Directory.Enabled ||
+		c.Scale.Domains.UserShards != 0 || c.Scale.Archive.Enabled || c.Scale.Search.Enabled {
+		t.Fatalf("default config must not enable the legacy skeleton sub-systems: %+v", c.Scale)
 	}
 	if err := c.Scale.Validate(); err != nil {
 		t.Fatal(err)

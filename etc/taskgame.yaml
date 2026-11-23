@@ -12,9 +12,13 @@
 # the URL) to exactly one cell, and its transaction stays inside that cell.
 # No 2PC. Global reads (market listing, login by email) fan out and merge.
 #
-# Start the three databases first:
+# Start the three databases and Redis first (compose starts all four):
 #   docker compose up -d
 #   CGO_ENABLED=0 go run .            # this file is loaded by default
+#
+# Redis is REQUIRED by this config: Scale.PubSub=redis publishes SSE signals
+# on a shared channel and PINGs Redis at startup, so `make run` fails fast
+# when 6379 is unreachable. Redis carries signals only, never business rows.
 #
 # To run all three cells on ONE MySQL server instead, keep the same port and
 # give each DSN a different schema name (for example taskgame_cell_0/1/2).
@@ -84,3 +88,17 @@ AutoSettle:
   StartTimeout: 72h
   SeatTimeout: 72h
   WinnerSelectHours: 72
+
+# Cross-process SSE signal bus. Every API process in one deployment must use
+# the same Redis Addr and Channel, but each process needs a UNIQUE InstanceID
+# (copy this file and change it for the second instance). The other Scale
+# sub-systems (Projection / Directory / Domains / Archive / Search) stay
+# disabled: they belong to the legacy message-sharding prototype.
+Scale:
+  Enabled: true
+  PubSub: redis
+  InstanceID: api-local
+  Redis:
+    Addr: "127.0.0.1:6379"
+    Channel: "taskgame.signals"
+    Timeout: 2s

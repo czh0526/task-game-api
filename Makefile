@@ -29,10 +29,11 @@ test-mysql:
 	TASKGAME_MYSQL_REQUIRED=1 go test ./...
 
 # Default config etc/taskgame.yaml: three independent MySQL databases
-# (127.0.0.1:3307/3308/3309), each with the full schema and ~1/3 of the data.
-# Start them first (`docker compose up -d`). There is no primary database and
-# no separate SQLite target: set Driver: sqlite explicitly in a copy of the
-# config if you need one.
+# (127.0.0.1:3307/3308/3309), each with the full schema and ~1/3 of the data,
+# plus Redis on 6379 for the cross-process SSE signal bus. Start all four
+# first (`docker compose up -d`); the API PINGs Redis at startup and fails
+# fast if it is missing. There is no primary database and no separate SQLite
+# target: set Driver: sqlite explicitly in a copy of the config if you need one.
 run:
 	go run .
 

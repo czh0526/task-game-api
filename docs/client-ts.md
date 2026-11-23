@@ -7,7 +7,7 @@ Package layout, `npm test`, and a short snippet are in [`sdk/ts/README.md`](../s
 Start the API from the repository root before calling it:
 
 ```bash
-docker compose up -d   # 3 independent MySQL cells on 3307/3308/3309
+docker compose up -d   # 3 independent MySQL cells on 3307/3308/3309 + Redis (default SSE bus)
 make run               # etc/taskgame.yaml, listens on http://127.0.0.1:8891
 ```
 

@@ -23,7 +23,7 @@ Node.js 18 or newer. The client uses global `fetch`.
 
 ## Call the dev server
 
-Start the API from the repo root (`docker compose up -d` for the three independent MySQL cells on 3307/3308/3309, then `make run`, which loads `etc/taskgame.yaml`). It listens on `http://127.0.0.1:8891`. Pass that origin, or the OpenAPI server URL ending in `/v1`. `health()` calls `/health` on the origin. Every other method calls `/v1/...`.
+Start the API from the repo root (`docker compose up -d` for the three independent MySQL cells on 3307/3308/3309 plus Redis, which the default config requires for SSE signals, then `make run`, which loads `etc/taskgame.yaml`). It listens on `http://127.0.0.1:8891`. Pass that origin, or the OpenAPI server URL ending in `/v1`. `health()` calls `/health` on the origin. Every other method calls `/v1/...`.
 
 Auth is one header. `apiKey(...)` sends `X-Api-Key`. `bearer(...)` sends `Authorization: Bearer`. Development keys in `etc/taskgame.yaml`:
 
@@ -106,7 +106,7 @@ npm run build
 
 ## 调用开发服务
 
-在仓库根目录先 `docker compose up -d`（启动 3 个独立 MySQL 实例 3307/3308/3309，每个都是完整 schema），再 `make run`（加载 `etc/taskgame.yaml`）。进程地址是 `http://127.0.0.1:8891`。`baseUrl` 可以是这个 origin，也可以是以 `/v1` 结尾的 OpenAPI 服务器 URL。`health()` 请求 origin 上的 `/health`，其余方法请求 `/v1/...`。
+在仓库根目录先 `docker compose up -d`（启动 3 个独立 MySQL 实例 3307/3308/3309 与 Redis；默认配置需要 Redis 做 SSE 信号广播），再 `make run`（加载 `etc/taskgame.yaml`）。进程地址是 `http://127.0.0.1:8891`。`baseUrl` 可以是这个 origin，也可以是以 `/v1` 结尾的 OpenAPI 服务器 URL。`health()` 请求 origin 上的 `/health`，其余方法请求 `/v1/...`。
 
 鉴权只带一个头。`apiKey(...)` 发送 `X-Api-Key`，`bearer(...)` 发送 `Authorization: Bearer`。`etc/taskgame.yaml` 里的开发密钥：
 

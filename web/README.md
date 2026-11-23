@@ -7,7 +7,7 @@
 终端 1，在仓库根目录启动 API：
 
 ```bash
-docker compose up -d   # 3 个独立 MySQL 实例（3307/3308/3309），各自全表
+docker compose up -d   # 3 个独立 MySQL 实例（3307/3308/3309）+ Redis（默认 SSE 信号总线）
 make run               # etc/taskgame.yaml，API http://127.0.0.1:8891
 ```
 
@@ -81,7 +81,7 @@ make token USER_ID=usr_extra
 ## Run
 
 ```bash
-docker compose up -d   # 3 independent MySQL cells on 3307/3308/3309
+docker compose up -d   # 3 independent MySQL cells on 3307/3308/3309 + Redis (default SSE bus)
 make run               # etc/taskgame.yaml, API on http://127.0.0.1:8891
 cd web && npm install && npm run dev
 ```

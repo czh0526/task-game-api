@@ -18,7 +18,7 @@
 #                   score views, duplicate display names, and rejected values.
 #
 # Start the databases and the API first, from the repo root:
-#   docker compose up -d                    # 3 independent MySQL cell databases
+#   docker compose up -d                    # 3 independent MySQL cell databases + Redis
 #   CGO_ENABLED=0 go run .                  # loads etc/taskgame.yaml by default
 #   # or: make run
 #

@@ -45,7 +45,7 @@ Mint a dev JWT with `make token` (subject defaults to `usr_publisher`).
 - 连接建立时发 `hello`；带 `Last-Event-ID` 重连时改发 `resync`。两种帧都让前端重新拉一次，覆盖断线期间漏掉的消息；每 15 秒另发 `: ping` 注释帧保活。
 - `POST /chats/{id}/messages` 在事务**提交之后**才广播 `chat.message`（只含 `chat_id` / `message_id` / `sender_id`）。幂等重放不会重复通知。它和 `chat.message.created` webhook 是两条独立链路：webhook 面向第三方 URL 且在事务内入队，SSE 面向当前登录用户的浏览器。
 - 前端保留 45 秒兜底轮询，防止信号丢失或流连不上；不可见标签页依旧不发请求。
-- 订阅表默认在进程内存里（`internal/notify`），**只在单进程部署下有效**；多实例要么打开 `Scale.PubSub: redis`（见「P1+ 多数据库骨架」），要么让客户端退回轮询。反向代理需禁用响应缓冲（服务端已发 `X-Accel-Buffering: no`）。
+- 订阅表本身在进程内存里（`internal/notify`），但默认配置已开启 `Scale.PubSub: redis`：跨进程信号走 Redis 广播，多实例下也能实时推送。Redis 由 `docker compose up -d` 一并启动；未启动时 API 会在启动阶段直接失败（不静默退化成单机）。客户端仍保留 45 秒兜底轮询。反向代理需禁用响应缓冲（服务端已发 `X-Accel-Buffering: no`）。
 
 ## 展示层：全局未读角标与桌面通知
 
@@ -60,6 +60,8 @@ Mint a dev JWT with `make token` (subject defaults to `usr_publisher`).
 ## 水平三库单元化（默认，方案 A）
 
 默认 `etc/taskgame.yaml` 是 **3 个彼此独立的 MySQL 实例**（`127.0.0.1:3307` / `3308` / `3309`），每个实例一个 `taskgame` 库，**三套表结构完全相同**。每个库保存约 **1/3** 的 `users`、`tasks`、`messages` 及其余全部业务表；**不存在保存全量数据的主库**。
+
+另外默认开启了 `Scale.PubSub: redis`（Redis 在 `127.0.0.1:6379`，由 `docker compose up -d` 与三个库一起启动），只用于跨 API 进程的 SSE 信号广播——**Redis 里不存任何业务数据**。多实例时每个进程复制一份配置，只改 `Port` 和唯一的 `Scale.InstanceID`，其余（三个 DSN、Redis 地址与频道）保持一致。
 
 ```
 请求 ──► Auth 中间件（user_id，或 URL 里的 taskId / chatId / userId）
@@ -129,7 +131,7 @@ CGO_ENABLED=0 go run . -f /tmp/taskgame-3inst.yaml
 - **序号**：每个片库有自己的 `chat_seq` 自增列，只保证**会话内有序**；`chat_reads.last_read_rowid` 存的就是它。全局全序从来不需要，跨片序号重复不影响未读判定。
 - **读取**：`ListMessages` / `MessageRowID` / `LatestMessageRow` / `CountUnread` 先查目录定位片再查；`ListDirectUnreads` 在主库取会话与游标、再逐片查未读数（不再跨片 join）。
 - **未改动**：`store.Store` / `Repos` 接口、引擎、handler、OpenAPI、SDK、前端、SSE 与展示层全部不变，API 语义与响应字段保持一致。
-- **边界**：这是**原型**，只分片了消息本体。`chats`、`chat_reads`、幂等键、`webhooks`、任务账本仍在主库；默认路径下投影仍由写入方进程在事务提交后本地执行（崩溃靠启动时 `Recover` 补投），SSE 的 `notify.Broker` 也只在进程内扇出，没有 2PC。打开下面「P1+ 多数据库骨架」的 `Scale` 段后，Redis 总线、共享租约投影与 SQL 目录才生效。`emit()` 仍在事务内查主库订阅、`idempotency_keys` 仍按 `user_id` 建主键；给幂等键加上片维度仍属后续工作。
+- **边界**：这是**原型**，只分片了消息本体。`chats`、`chat_reads`、幂等键、`webhooks`、任务账本仍在主库；默认路径下投影仍由写入方进程在事务提交后本地执行（崩溃靠启动时 `Recover` 补投），没有 2PC。SSE 信号总线现已在默认配置里开启（`Scale.PubSub: redis`，只广播信号、不迁数据）；共享租约投影与 SQL 目录仍属旧原型的可选子项，默认关闭（见「P1+ 多数据库骨架」）。`emit()` 仍在事务内查主库订阅、`idempotency_keys` 仍按 `user_id` 建主键；给幂等键加上片维度仍属后续工作。
 
 ### 调整分片数量（扩容 / 缩容 / 换实例）
 
@@ -155,9 +157,9 @@ CGO_ENABLED=0 go run . -f /tmp/taskgame-3inst.yaml
 
 **只换机器/端口**（风险最低）：`Shards` 不变，用 `mysqldump` 或物理备份把该片 `messages` 搬到新实例，只改 `ShardDSNs` 对应下标的 DSN，目录表、`chat_seq`、已读游标全部不动。
 
-## P1+ 多数据库骨架（可选，默认关闭）
+## P1+ 多数据库骨架（默认只开 Redis 总线，其余关闭）
 
-`Scale.Enabled=false`（默认 `etc/taskgame.yaml` 不写 `Scale` 段）时，`scale.New` 直接返回 `nil`，`ServiceContext.Notifier` 仍是原来的进程内 `*notify.Broker`，**行为与 PR #38 逐字节一致**。在配置里显式加 `Scale` 段才会装配下列骨架；**没有搬走任何一张表，没有改动 `store.Store` / `Repos` 接口、引擎、handler、OpenAPI、SDK 与前端，API 响应不变**（`Scale.Directory.Enabled` 会额外创建 3 张控制面小表，但不迁移任何业务表）。
+默认 `etc/taskgame.yaml` 已包含 `Scale.Enabled: true` + `PubSub: redis`，**只装配跨进程 SSE 信号总线**，Redis 由 `docker compose up -d` 一起启动，是默认部署的必需依赖（启动时 `PING` 校验，不通则直接失败）。其它子项（`Projection` / `Directory` / `Domains` / `Archive` / `Search`）默认仍关闭——它们属于旧消息分片原型或未完成的 P2/P3 骨架，三库单元化模式用不上。若显式设 `Scale.Enabled=false`，`scale.New` 返回 `nil`，`ServiceContext.Notifier` 退回进程内 `*notify.Broker`，这是旧的单进程行为。**没有搬走任何一张表，没有改动 `store.Store` / `Repos` 接口、引擎、handler、OpenAPI、SDK 与前端，API 响应不变**（`Scale.Directory.Enabled` 会额外创建 3 张控制面小表，但不迁移任何业务表）。
 
 | 阶段 | 新增位置 | 做了什么 | 明确没做 |
 |---|---|---|---|
@@ -172,24 +174,24 @@ CGO_ENABLED=0 go run . -f /tmp/taskgame-3inst.yaml
 
 `internal/notify/redis.go` 实现了 `Transport`：**发布**走带短超时的连接池（Redis 卡住也不会阻塞产生信号的请求），**订阅**走另一条关闭读写超时的连接（阻塞订阅不能被默认的 3s 读超时反复打断）。构造时 `PING` 校验，Redis 不可用会**直接启动失败**，避免多实例静默退化成互不通信的单机。`Envelope` 用 JSON 编码，坏帧／非本系统的帧直接丢弃，不会卡住接收循环。
 
-要打开 Redis 总线，在 `etc/taskgame.yaml` 末尾加一段 `Scale`（下面是最小可用配置），先起 Redis 再启动：
+默认 `etc/taskgame.yaml` 末尾已包含下面的 `Scale` 段（`InstanceID` 默认 `api-local`），`docker compose up -d` 会一并启动 Redis，因此无需手工添加：
 
 ```yaml
 Scale:
   Enabled: true
   PubSub: redis
-  InstanceID: api-a
+  InstanceID: api-local
   Redis:
     Addr: "127.0.0.1:6379"
     Channel: "taskgame.signals"
 ```
 
 ```bash
-docker run --rm -p 6379:6379 --name taskgame-redis redis:7-alpine
-CGO_ENABLED=0 go run .
+docker compose up -d    # 3 个 MySQL cell + Redis
+make run                # 或 CGO_ENABLED=0 go run .
 ```
 
-第二个 API 实例复制这份配置，改 `Port`（如 8892）与 `Scale.InstanceID`（如 `api-b`），**指向同一个 `Scale.Redis.Addr` 和 `Scale.Redis.Channel`**；两个进程各建一条订阅，A 进程产生的信号经 Redis 广播给 B 进程的 SSE 连接。注意 Redis pub/sub 是 **at-most-once**：进程宕机期间的信号会丢，但信号只带 id、不落库，浏览器 45s 兜底轮询会补上，因此不需要换成 Redis Stream。`Scale.PubSub: shared` 仍是进程内总线，只用于测试；默认配置的 `Store` 已是共享 MySQL 主库 + 片库，真多机只要所有进程都能连到同一批库即可。
+第二个 API 实例复制这份配置，改 `Port`（如 8892）与 `Scale.InstanceID`（如 `api-b`），**指向同一个 `Scale.Redis.Addr` 和 `Scale.Redis.Channel`**；两个进程各建一条订阅，A 进程产生的信号经 Redis 广播给 B 进程的 SSE 连接。注意 Redis pub/sub 是 **at-most-once**：进程宕机期间的信号会丢，但信号只带 id、不落库，浏览器 45s 兜底轮询会补上，因此不需要换成 Redis Stream。`Scale.PubSub: shared` 仍是进程内总线，只用于测试；默认配置的 `Store` 已是三库单元化，真多机只要所有进程都能连到同一批库和同一个 Redis 即可。
 
 ### 用共享租约投影 `message_outbox`（`Scale.Projection`）
 
@@ -227,7 +229,7 @@ Scale:
 
 ```bash
 go test ./internal/notify ./internal/projection ./internal/store/sqlstore ./internal/plane ./internal/store/shard ./internal/archive ./internal/search ./internal/scale ./internal/svc
-# 想打开骨架：在 etc/taskgame.yaml 末尾加 Scale 段（字段见 internal/config/config.go）
+# 默认配置只开 Scale.PubSub=redis；要试其它骨架，在配置副本中追加字段（见 internal/config/config.go）
 CGO_ENABLED=0 go run .
 ```
 
@@ -386,12 +388,13 @@ CGO_ENABLED=0 go test ./internal/engine -run 'TestAutoSettleCompetitiveDoesNotPi
 - `Escrow.InitialBalance`：用户第一次出现时记入的模拟积分（开发配置是 1000000）
 - `Webhook.Mode`：`log` 只记录签名，不发 HTTP；`post` 才真正 POST
 - `AutoSettle`：到 `review_deadline` 后自动结算。竞争任务如果有多份提交，不会猜赢家，保持 `in_review`
+- `Scale.PubSub`：**默认 `redis`**，跨进程 SSE 信号总线；`Scale.InstanceID` 每个进程唯一，`Scale.Redis.Addr` / `Channel` 全部署一致。Redis 由 compose 启动，未启动则 API 启动失败。其它 Scale 子项默认关闭
 
 错误响应是 JSON：`{"code":"...","message":"..."}`。
 
 ## Horizontal cells (default, plan A)
 
-The shipped `etc/taskgame.yaml` opens **three independent MySQL instances** (`127.0.0.1:3307` / `3308` / `3309`), each with one `taskgame` database and the **same full schema**. Each cell owns about **one third** of `users`, `tasks`, `messages` and every other business table. **No primary database holds all rows.**
+The shipped `etc/taskgame.yaml` opens **three independent MySQL instances** (`127.0.0.1:3307` / `3308` / `3309`), each with one `taskgame` database and the **same full schema**. Each cell owns about **one third** of `users`, `tasks`, `messages` and every other business table. **No primary database holds all rows.** It also enables `Scale.PubSub: redis` on `127.0.0.1:6379` (started by the same compose file) for cross-process SSE signals only — Redis holds no business data. For multiple API processes, copy the config and change only `Port` and the unique `Scale.InstanceID`.
 
 - **Routing** (`internal/store/cell`): an authenticated request is routed by `user_id`; `/v1/tasks/{id}`, `/v1/chats/{id}` and `/v1/users/{id}` are routed by the id in the URL, so every participant of a task or chat lands on the same cell.
 - **Writes**: `InTx` opens a transaction in exactly one cell. Cross-cell work inside a transaction (`Ensure`, friendships) is idempotent or commutative best-effort; there is no 2PC.
@@ -410,7 +413,7 @@ With `Store.Shards > 1`, message bodies leave the primary database and are route
 
 - `ShardDriver: sqlite`: `ShardDSN: "file:data/shard-%d.db"` expands into one local file per shard (single-process local debugging only).
 - `ShardDriver: mysql`: `ShardDSNs` gives **one DSN per shard, in shard order**, and may point at different hosts so every API process reaches the same shard databases over the network. This is the default; both DSNs point at `127.0.0.1:3306` on different schemas. The service creates the `messages` table but not the databases themselves.
-- Routing (FNV-1a, ordered pair for direct chats), `chat_shards` directory, transactional `message_outbox`, post-commit projection and startup `Recover` are unchanged. Only the `messages` table is sharded. In the base prototype projection is performed locally by the writing process and the SSE `notify.Broker` is process-local; the opt-in `Scale` skeleton described above adds a Redis pub/sub signal bus, a shared-lease outbox projection worker and a SQL-backed routing directory (`shard_directory` / `shard_topology`) shared by all processes. Neither path uses 2PC.
+- Routing (FNV-1a, ordered pair for direct chats), `chat_shards` directory, transactional `message_outbox`, post-commit projection and startup `Recover` are unchanged. Only the `messages` table is sharded. In the base prototype projection is performed locally by the writing process, and SSE fan-out is process-local only when `Scale` is disabled. The shipped config enables `Scale.PubSub: redis` for the cross-process signal bus; the optional P1/P2 skeleton additionally offers a shared-lease outbox projection worker and a SQL-backed routing directory (`shard_directory` / `shard_topology`) shared by all processes. Neither path uses 2PC.
 
 MySQL-backed shard tests (`internal/store/shard/mysql_test.go`, `internal/integration/sharded_mysql_messages_test.go`) run when `TASKGAME_MYSQL_DSN` is set and skip otherwise; they create and drop their own temporary databases.
 
@@ -478,10 +481,10 @@ There is one config: `etc/taskgame.yaml`, loaded by default by `go run .` and `m
 | `3308` | `taskgame` | cell 1: another ~1/3, identical schema |
 | `3309` | `taskgame` | cell 2: the last ~1/3 |
 
-Start the databases first, then the service:
+Start the databases and Redis first, then the service. Redis is required at startup because `Scale.PubSub: redis` PINGs it:
 
 ```bash
-docker compose up -d          # three independent instances
+docker compose up -d          # three independent MySQL cells + Redis
 make run
 # or: CGO_ENABLED=0 go run .
 ```
@@ -573,6 +576,7 @@ CGO_ENABLED=0 go test ./internal/engine -run 'TestAutoSettleCompetitiveDoesNotPi
 - `Escrow.InitialBalance`: simulated credits granted the first time a user is seen (1000000 in the dev file)
 - `Webhook.Mode`: `log` records the signature and does not POST; `post` delivers HTTP
 - `AutoSettle`: settles when `review_deadline` passes. A competitive task with more than one submission stays `in_review` until `winner_select_deadline`, then refunds. `OpenTimeout`, `StartTimeout`, and `SeatTimeout` default to 72h
+- `Scale.PubSub`: **`redis` by default**, the cross-process SSE signal bus. `Scale.InstanceID` must be unique per API process; `Scale.Redis.Addr` / `Channel` must be identical across the deployment. Redis is started by compose and is required at startup; other Scale sub-systems stay off
 - `Escrow.ArbiterUserIds`: users who may `POST /v1/tasks/{taskId}/arbitrate`. Dev config lists `usr_arbiter` (`make token USER_ID=usr_arbiter` or `X-Api-Key: dev-arbiter-key`)
 
 Error bodies are JSON: `{"code":"...","message":"..."}`.
