@@ -4,9 +4,11 @@
 // only things that actually shrink an online database are (1) moving cold rows
 // out, (2) moving large columns out, and (3) removing write amplification.
 //
-// SKELETON BOUNDARY: FileBlobStore is runnable and Archiver.Plan produces real
-// plans, but nothing is executed. Executing an archive (copy to cold storage,
-// verify, then delete online rows, per shard) is TODO.
+// FileBlobStore is runnable, Archiver.Plan produces real plans, and
+// Archiver.ExecuteBatch / ExecuteAll perform the copy → checksum-verify →
+// delete sequence per shard. Restore reverses it for drills and recovery.
+// Large-column offloading (LargeColumn.RefColumn) and emit() de-amplification
+// are still staged separately.
 package archive
 
 import (

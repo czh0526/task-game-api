@@ -5,12 +5,14 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"flag"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
+	"taskgame/internal/archive"
 	"taskgame/internal/plane"
 	"taskgame/internal/shardmigrate"
 )
@@ -33,6 +35,11 @@ type options struct {
 	reason      string
 	owner       string
 	ttl         time.Duration
+	archiveDir  string
+	table       string
+	ref         string
+	limit       int
+	hotWindow   time.Duration
 }
 
 func (o *options) bind(fs *flag.FlagSet) {
@@ -53,6 +60,11 @@ func (o *options) bind(fs *flag.FlagSet) {
 	fs.StringVar(&o.reason, "reason", "", "fence reason")
 	fs.StringVar(&o.owner, "owner", "shardctl", "fence owner")
 	fs.DurationVar(&o.ttl, "ttl", time.Hour, "fence time-to-live")
+	fs.StringVar(&o.archiveDir, "blob-dir", "", "cold blob directory for archive-run/restore")
+	fs.StringVar(&o.table, "table", "", "table to archive/restore")
+	fs.StringVar(&o.ref, "ref", "", "blob ref to restore")
+	fs.IntVar(&o.limit, "limit", 500, "max rows per archive batch")
+	fs.DurationVar(&o.hotWindow, "hot-window", 0, "override retention hot window")
 }
 
 func (o *options) chatIDs() []string {
@@ -118,6 +130,10 @@ func main() {
 		err = runFenceUnlock(ctx, os.Args[2:])
 	case "fence-list":
 		err = runFenceList(ctx, os.Args[2:])
+	case "archive-run":
+		err = runArchive(ctx, os.Args[2:])
+	case "archive-restore":
+		err = runArchiveRestore(ctx, os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -148,6 +164,8 @@ Commands:
   fence-lock    freeze a key (or a whole domain with -key '*') during migration
   fence-unlock  release a frozen key
   fence-list    list active maintenance fences
+  archive-run   archive cold rows from a table into blobs, then delete online
+  archive-restore restore an archived blob back into a table
 
 plan/copy/verify/cutover/cleanup/rollback all accept -entity=message|user|task
 (default message). For user/task use -keys with user ids / task ids; a chat
@@ -172,6 +190,7 @@ func (o *options) require(fields ...string) error {
 		"control": o.control != "", "dsns": o.dsns != "",
 		"source": o.source != "", "target": o.target != "",
 		"chats": len(o.chatIDs()) > 0, "keys": len(o.chatIDs()) > 0,
+		"blob-dir": o.archiveDir != "", "table": o.table != "", "ref": o.ref != "",
 	}
 	for _, name := range fields {
 		if !values[name] {
@@ -258,6 +277,90 @@ func runFenceList(ctx context.Context, args []string) error {
 		fmt.Printf("%s/%-20s owner=%-16s expires=%s reason=%s\n",
 			r.Domain, r.Key, r.Owner, r.ExpiresAt.Format(time.RFC3339), r.Reason)
 	}
+	return nil
+}
+
+func openArchiveDB(ctx context.Context, o *options, dsn string) (*sql.DB, error) {
+	db, err := sql.Open(o.driver, dsn)
+	if err != nil {
+		return nil, err
+	}
+	if err := db.PingContext(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
+func runArchive(ctx context.Context, args []string) error {
+	o, err := parse("archive-run", args)
+	if err != nil {
+		return err
+	}
+	if err := o.require("source", "blob-dir", "table"); err != nil {
+		return err
+	}
+	blobs, err := archive.NewFileBlobStore(o.archiveDir)
+	if err != nil {
+		return err
+	}
+	policies := archive.DefaultPolicies
+	if o.hotWindow > 0 {
+		policies = []archive.RetentionPolicy{{Table: o.table, TimeColumn: "created_at", HotWindow: o.hotWindow}}
+	} else {
+		var found *archive.RetentionPolicy
+		for i := range archive.DefaultPolicies {
+			if archive.DefaultPolicies[i].Table == o.table {
+				found = &archive.DefaultPolicies[i]
+			}
+		}
+		if found == nil {
+			return fmt.Errorf("no default retention policy for %q; set -hot-window", o.table)
+		}
+		policies = []archive.RetentionPolicy{*found}
+	}
+	a := archive.NewArchiver(blobs, policies)
+	db, err := openArchiveDB(ctx, o, o.source)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	batches, err := a.Plan(ctx, time.Now())
+	if err != nil {
+		return err
+	}
+	res, err := a.ExecuteBatch(ctx, db, o.driver, batches[0], o.limit)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("archived %d %s rows into %s (%d bytes, %d deleted online)\n",
+		res.Rows, res.Table, res.Ref, res.Bytes, res.Deleted)
+	return nil
+}
+
+func runArchiveRestore(ctx context.Context, args []string) error {
+	o, err := parse("archive-restore", args)
+	if err != nil {
+		return err
+	}
+	if err := o.require("source", "blob-dir", "table", "ref"); err != nil {
+		return err
+	}
+	blobs, err := archive.NewFileBlobStore(o.archiveDir)
+	if err != nil {
+		return err
+	}
+	a := archive.NewArchiver(blobs, nil)
+	db, err := openArchiveDB(ctx, o, o.source)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	n, err := a.Restore(ctx, db, o.driver, o.table, o.ref)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("restored %d rows into %s from %s\n", n, o.table, o.ref)
 	return nil
 }
 
