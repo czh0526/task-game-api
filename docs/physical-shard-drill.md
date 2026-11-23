@@ -1,12 +1,14 @@
-# 物理切分演练（按域，message 域优先）
+# 物理切分演练（按域）
 
-这是 `docs/per-domain-sharding-plan.md` 第 7 节和第 4 阶段的可执行 runbook。它只搬**一个域**（message）里选中的 chat，不碰 user/task 域，也不改任何 API 语义。工具在 `cmd/shardctl`，库实现在 `internal/shardmigrate`。
+这是 `docs/per-domain-sharding-plan.md` 第 7 节和第 4 阶段的可执行 runbook。它覆盖 message、user、task 三个域的物理搬迁，每次只切一个域，不改任何 API 语义。工具在 `cmd/shardctl`，库实现在 `internal/shardmigrate`。
 
 ## 1. 演练目标
 
 - 给一个已经运行的老系统（没有目录行、三库共置）回填权威目录；
-- 给 message 域加一个**第四物理库**，只让新会话落过去；
-- 把选中的旧 chat 及其消息、阅读游标、legacy `chat_shards` 行搬到新库；
+- 给某个域加一个**第四物理库**，只让新聚合根按新拓扑落过去；
+- message 域搬 chat 及其消息、阅读游标、legacy `chat_shards` 行；
+- user 域搬用户、余额/积分、积分事件、好友、分组、幂等记录；
+- task 域搬任务、投递、托管账本与流水、邀请；
 - 校验行数与内容，原子翻转目录，删源，验证读写切流；
 - 整套动作可原路回滚。
 
@@ -27,7 +29,15 @@
 go test ./internal/shardmigrate/... -run TestPhysicalCutoverDrill -v
 ```
 
-这个测试用四个 SQLite 文件模拟四个物理库，覆盖：目录回填 → `Topology.AddShard` → Copy → Verify → 幂等重试 Copy → Cutover → Cleanup → 重启 API → 读历史消息、读游标、查直聊、写新消息 → Rollback → 再次读。它也覆盖了回填时目录与实际数据不一致的早期发现（见第 9 节）。
+这个测试用四个 SQLite 文件模拟四个物理库，覆盖：目录回填 → `Topology.AddShard` → Copy → Verify → 幂等重试 Copy → Cutover → Cleanup → 重启 API → 读历史消息、读游标、查直聊、写新消息 → Rollback → 再次读。它也覆盖了回填时目录与实际数据不一致的早期发现。
+
+user / task 域各自的端到端演练：
+
+```bash
+go test ./internal/shardmigrate/... -run 'Test(User|Task)DomainPhysicalCutover' -v
+```
+
+覆盖用户余额/昵称/积分/积分事件、好友双写与分组、收到的好友请求、幂等记录；以及任务、投递、托管账本与流水、邀请。两者都验证了切流后的读、写和完整回滚。
 
 ## 5. 真机 MySQL 步骤
 
@@ -105,19 +115,75 @@ shardctl rollback -driver mysql \
 
 从新库反向 copy 回旧库 → verify → CAS 把目录翻回 0 → 删除新库行。目录 CAS 保证重复执行不会把别的 key 带回去。
 
-## 6. 真正上生产还需要什么
+## 6. user / task 域搬迁
 
-- **user/task 域的物理迁移**：`Backfill` 已支持扫这两域的目录，但 `shardctl` 的 copy/verify 只实现 message 域（chats 及其关联表）。资金/任务账本搬迁要单独设计。
-- **冻结写入或 CDC**：当前演练假设维护窗口内选中 chat 没有并发写入。持续写入场景需要先接 CDC 或双写。
+这两个域与 message 域用同一套命令，只是加 `-entity=user|task`，并用 `-keys` 传聚合根 id：
+
+```bash
+# 1) 规划（确认 key 在源库存在）
+shardctl plan -driver mysql -entity user -dsns "<dsn-0>,<dsn-1>,<dsn-2>" -from 0 -keys "usr_a,usr_b"
+
+# 2) 复制 + 校验（源行保留）
+shardctl copy -driver mysql -entity user -source "<dsn-0>" -target "<dsn-3>" -to 3 -keys "usr_a,usr_b"
+shardctl verify -driver mysql -entity user -source "<dsn-0>" -target "<dsn-3>" -to 3 -keys "usr_a,usr_b"
+
+# 3) 切目录 + 清源
+shardctl cutover -driver mysql -entity user -control "<control-dsn>" \
+  -source "<dsn-0>" -target "<dsn-3>" -from 0 -to 3 -keys "usr_a,usr_b"
+
+# 4) 回滚（同样是 copy back → verify → 翻目录 → 清目标）
+shardctl rollback -driver mysql -entity user -control "<control-dsn>" \
+  -source "<dsn-0>" -target "<dsn-3>" -from 0 -to 3 -keys "usr_a,usr_b"
+```
+
+把 `-entity` 换成 `task`、`-keys` 换成 task id 即完成任务域搬迁。
+
+### 6.1 迁移单元
+
+| 域 | 目录键 | 一起搬迁的表 |
+|---|---|---|
+| user | `user_id` | users（含头像与余额）、score_events、friend_requests（发送方所有）、friendships（双写）、friend_groups、friend_group_members、idempotency_keys |
+| task | `task_id` | tasks、submissions、escrow_accounts、escrow_entries（随所属托管账户）、invites |
+
+**不随任务搬迁的表**：`webhooks` 按 owner id 路由，`webhook_deliveries` 按 delivery id 路由，两者都不由 task_id 决定，搬迁后仍通过 scatter 读到达。
+
+### 6.2 与 message 域的三个关键差异
+
+1. **没有自增序号**：user/task 域的表都以 varchar 主键定位，没有 `messages.seq` 那样需要重映射的序号。复制按列原样搬运，不经过 model 结构体重新序列化，因此时间戳、JSON、BLOB 字节级保真。
+2. **好友关系是双写的**：`friendships` 在双方各自的 user 分片都有一行。搬迁时复制到新片，但**不删源行**——那一行可能是对端用户在本片的唯一本地视图。源库里 A 与 C（都留在旧片）的那一行同样保留。幂等复制保证重复执行不会制造重复主键。
+3. **目录键就是主键**：user 域 `user_id`、task 域 `task_id`（任务创建时会显式写目录行），因此 `PlanEntity` 只需确认主表存在该行。`Resolver.Place` 的修复确保预置目录行不会被忽略。
+
+### 6.3 事务边界的现实
+
+共置部署下，“发布任务扣发布者余额”是一次本地事务。user 与 task 分置到不同物理库后，这类跨 user/task 操作会退化为最终一致（非严格模式），或返回 `ErrCrossShard`（严格模式）。**资金相关操作建议保持 user/task 共置**，先只切 message 域；确需切分时必须有对账与补偿，这属于方案文档第 6 节的范围，不是本演练自动解决的内容。
+
+同理，新任务创建时若请求带路由 key（发布者 user id），`createPlacement` 仍按 pinned 片数定位，新物理片主要承接迁移过来的任务，而不是自动接收所有新任务。
+
+### 6.4 验证清单
+
+- `status` 中 user/task 域 shard 3 出现对应 key；
+- `Users().Get` 的余额、昵称、积分与迁移前一致，`ListScoreEvents` 完整；
+- `ListFriendEdges` 双向都能补到对端昵称；收件人的 incoming 好友请求仍可见；
+- 幂等记录 `Idem().Get` 命中；
+- `Tasks().Get`、投递列表、托管账户与流水、邀请列表完整；
+- 迁移后写入（改余额/改任务状态）落在新的物理库；
+- 回滚后目录、数据、路由读全部恢复。
+
+## 7. 真正上生产还需要什么
+
+- **冻结写入或 CDC**：当前演练假设维护窗口内选中的聚合根没有并发写入。持续写入场景需要先接 CDC 或双写。
+- **跨 user/task 事务补偿**：分置后资金操作需要显式对账；详见 6.3 与方案文档第 6 节。
 - **控制面高可用**：SQLDirectory 当前单 DSN；生产至少要主从。
-- **auto_increment 与游标**：迁移后的 `last_read_rowid` 已重写，但任何外部保存的 rowid/seq（如客户端游标）都需要同步失效。
-- **部分索引/生成列**：MySQL `chats.direct_pair` 是生成列，copy 不显式写它；SQLite 无此列。两边 schema 差异已在 `copy` 中处理。
+- **auto_increment 与游标（仅 message 域）**：`last_read_rowid` 已重写，但任何外部保存的 rowid/seq（如客户端游标）都需要同步失效。
+- **部分索引/生成列**：MySQL `chats.direct_pair`、`friend_requests.pending_pair` 是生成列，copy 不显式写它们；SQLite 无此列。两边 schema 差异已在工具中处理。
 
-## 7. 本次演练已经验证的事实
+## 8. 本次演练已经验证的事实
 
 - 目录回填能让“迁移前没目录”的老 key 全部被 `ResolveExisting` 命中；
 - `Resolver.Place` 已修复为返回**目录中的权威片号**（此前会返回调用方传入的片号，可能把数据写到与目录不同的库）；
 - `ReassignBatch` 的 CAS + 单事务能挡住过期脚本的重放；
 - message 域加片后，老消息仍可读、新消息落新库、跨片 `FindDirect` 正常；
 - 阅读游标在消息序号重建后仍然正确；
-- 完整回滚后目录、数据、路由读全部回到迁移前状态。
+- user 域搬迁后余额、积分、好友、分组、幂等记录与收件人视角全部正确，双写好友行未被误删；
+- task 域搬迁后任务、投递、托管账本与流水、邀请完整，写入落新片；
+- 三个域的完整回滚都能让目录、数据、路由读回到迁移前状态。

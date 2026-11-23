@@ -207,7 +207,7 @@
 3. **单域切分时才搬数据**：以消息域为例，按 `ChatKey` 把选中的 chat 及其 messages 复制到新库，校验行数与 checksum，再切目录行指向新片，最后删旧行。整个过程在维护窗口做，`PlanShrink` 只枚举 key、不执行迁移。
 4. **回滚**：逻辑分域阶段把开关拨回 `cell` 即可；物理切分之后回滚需要反向迁移目录行与数据，因此每个域的切分必须单独可回滚、单独验证。
 
-**阶段 4 演练实现状态**：第 1 项目录回填由 `shardmigrate.Backfill` 实现（幂等，冲突只报告不覆盖）；第 3/4 项在 message 域已实现为 `cmd/shardctl` 的 `init / plan / copy / verify / cutover / cleanup / rollback`，数据搬迁覆盖 chats、messages、chat_reads、legacy chat_shards，并重建消息序号与阅读游标的映射。目录改写走 `SQLDirectory.ReassignBatch` 的 CAS + 单事务，避免过期脚本覆盖已有映射。演练同时修复了 `Resolver.Place` 不返回目录权威片号的问题。user/task 域的数据搬迁、CDC/冻结写入仍属后续工作。
+**阶段 4 演练实现状态**：第 1 项目录回填由 `shardmigrate.Backfill` 实现（幂等，冲突只报告不覆盖）；第 3/4 项已实现为 `cmd/shardctl` 的 `init / plan / copy / verify / cutover / cleanup / rollback`，支持 `-entity=message|user|task`。message 域搬 chats、messages、chat_reads、legacy chat_shards，并重建消息序号与阅读游标的映射；user 域搬用户、余额/积分、积分事件、好友（双写行只复制不删源）、分组、幂等记录；task 域搬任务、投递、托管账本与流水、邀请。目录改写走 `SQLDirectory.ReassignBatch` 的 CAS + 单事务，避免过期脚本覆盖已有映射。演练同时修复了 `Resolver.Place` 不返回目录权威片号的问题。webhooks/deliveries 按 owner/delivery id 路由，不随任务搬迁；CDC/冻结写入与跨 user/task 资金事务补偿仍属后续工作。
 
 ---
 

@@ -21,6 +21,8 @@ type options struct {
 	source      string
 	target      string
 	chats       string
+	keys        string
+	entity      string
 	domains     string
 	from        int
 	to          int
@@ -34,14 +36,34 @@ func (o *options) bind(fs *flag.FlagSet) {
 	fs.StringVar(&o.source, "source", "", "source database DSN")
 	fs.StringVar(&o.target, "target", "", "target database DSN")
 	fs.StringVar(&o.chats, "chats", "", "comma-separated chat ids to move")
+	fs.StringVar(&o.keys, "keys", "", "comma-separated aggregate-root keys (alias of -chats)")
+	fs.StringVar(&o.entity, "entity", "message", "entity domain: message, user or task")
 	fs.StringVar(&o.domains, "domains", "user,task,message", "domains for backfill")
 	fs.IntVar(&o.from, "from", 0, "source shard index")
 	fs.IntVar(&o.to, "to", 0, "target shard index")
 	fs.BoolVar(&o.skipCleanup, "skip-cleanup", false, "cutover only: keep rows on the source shard")
 }
 
-func (o *options) chatIDs() []string { return split(o.chats) }
+func (o *options) chatIDs() []string {
+	if o.keys != "" {
+		return split(o.keys)
+	}
+	return split(o.chats)
+}
 func (o *options) dsnList() []string { return split(o.dsns) }
+
+// entitySpec returns a spec for user/task, or an empty spec for the legacy
+// message path so the existing CLI contract stays valid.
+func (o *options) entitySpec() (shardmigrate.EntitySpec, error) {
+	if o.entity == "message" {
+		return shardmigrate.EntitySpec{}, nil
+	}
+	spec, ok := shardmigrate.EntitySpecFor(o.entity)
+	if !ok {
+		return shardmigrate.EntitySpec{}, fmt.Errorf("unknown -entity %q (want message, user or task)", o.entity)
+	}
+	return spec, nil
+}
 
 func split(s string) []string {
 	var out []string
@@ -107,6 +129,10 @@ Commands:
   cleanup   delete source rows only
   rollback  copy back, flip directory rows back, delete moved rows
 
+plan/copy/verify/cutover/cleanup/rollback all accept -entity=message|user|task
+(default message). For user/task use -keys with user ids / task ids; a chat
+id list supplied through -chats works too.
+
 Run "shardctl <command> -h" for that command's flags.
 `)
 }
@@ -122,12 +148,13 @@ func parse(name string, args []string) (*options, error) {
 }
 
 func (o *options) require(fields ...string) error {
-	values := map[string]string{
-		"control": o.control, "dsns": o.dsns, "source": o.source,
-		"target": o.target, "chats": o.chats,
+	values := map[string]bool{
+		"control": o.control != "", "dsns": o.dsns != "",
+		"source": o.source != "", "target": o.target != "",
+		"chats": len(o.chatIDs()) > 0, "keys": len(o.chatIDs()) > 0,
 	}
 	for _, name := range fields {
-		if values[name] == "" {
+		if !values[name] {
 			return fmt.Errorf("-%s is required", name)
 		}
 	}
@@ -242,9 +269,23 @@ func runPlan(ctx context.Context, args []string) error {
 	if err := o.require("dsns", "chats"); err != nil {
 		return err
 	}
+	spec, err := o.entitySpec()
+	if err != nil {
+		return err
+	}
 	dsns := o.dsnList()
 	if o.from < 0 || o.from >= len(dsns) {
 		return fmt.Errorf("-from %d out of range for %d DSNs", o.from, len(dsns))
+	}
+	if spec.Domain != "" {
+		keys, err := shardmigrate.PlanEntity(ctx, o.driver, dsns[o.from], spec, o.chatIDs())
+		if err != nil {
+			return err
+		}
+		for _, key := range keys {
+			fmt.Printf("%s %s\n", o.entity, key)
+		}
+		return nil
 	}
 	plans, err := shardmigrate.PlanChats(ctx, o.driver, dsns[o.from], o.chatIDs())
 	if err != nil {
@@ -264,6 +305,20 @@ func runCopy(ctx context.Context, args []string) error {
 	if err := o.require("source", "target", "chats"); err != nil {
 		return err
 	}
+	spec, err := o.entitySpec()
+	if err != nil {
+		return err
+	}
+	if spec.Domain != "" {
+		report, err := shardmigrate.CopyEntity(ctx, o.driver, o.source, o.target, spec, o.to, o.chatIDs())
+		if err != nil {
+			return err
+		}
+		for table, n := range report.Copied {
+			fmt.Printf("  %s: %d copied, %d already present\n", table, n, report.Skipped[table])
+		}
+		return nil
+	}
 	report, err := shardmigrate.Copy(ctx, o.driver, o.source, o.target, o.to, o.chatIDs())
 	if err != nil {
 		return err
@@ -281,10 +336,18 @@ func runVerify(ctx context.Context, args []string) error {
 	if err := o.require("source", "target", "chats"); err != nil {
 		return err
 	}
-	if err := shardmigrate.Verify(ctx, o.driver, o.source, o.target, o.to, o.chatIDs()); err != nil {
+	spec, err := o.entitySpec()
+	if err != nil {
 		return err
 	}
-	fmt.Println("verified:", strings.Join(o.chatIDs(), ", "))
+	if spec.Domain != "" {
+		if err := shardmigrate.VerifyEntity(ctx, o.driver, o.source, o.target, spec, o.chatIDs()); err != nil {
+			return err
+		}
+	} else if err := shardmigrate.Verify(ctx, o.driver, o.source, o.target, o.to, o.chatIDs()); err != nil {
+		return err
+	}
+	fmt.Printf("verified %s: %s\n", o.entity, strings.Join(o.chatIDs(), ", "))
 	return nil
 }
 
@@ -295,6 +358,29 @@ func runCutover(ctx context.Context, args []string) error {
 	}
 	if err := o.require("control", "target", "source", "chats"); err != nil {
 		return err
+	}
+	spec, err := o.entitySpec()
+	if err != nil {
+		return err
+	}
+	if spec.Domain != "" {
+		keys, err := shardmigrate.PlanEntity(ctx, o.driver, o.source, spec, o.chatIDs())
+		if err != nil {
+			return err
+		}
+		if err := shardmigrate.CutoverEntity(ctx, o.driver, o.control, spec.Domain, keys, o.from, o.to, o.target); err != nil {
+			return err
+		}
+		fmt.Printf("directory flipped %d %s keys from shard %d to %d\n", len(keys), o.entity, o.from, o.to)
+		if o.skipCleanup {
+			return nil
+		}
+		removed, err := shardmigrate.CleanupEntity(ctx, o.driver, o.source, spec, keys)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("cleaned %d source entity rows\n", removed)
+		return nil
 	}
 	plans, err := shardmigrate.PlanChats(ctx, o.driver, o.source, o.chatIDs())
 	if err != nil {
@@ -323,6 +409,18 @@ func runCleanup(ctx context.Context, args []string) error {
 	if err := o.require("source", "chats"); err != nil {
 		return err
 	}
+	spec, err := o.entitySpec()
+	if err != nil {
+		return err
+	}
+	if spec.Domain != "" {
+		removed, err := shardmigrate.CleanupEntity(ctx, o.driver, o.source, spec, o.chatIDs())
+		if err != nil {
+			return err
+		}
+		fmt.Printf("cleaned %d source entity rows (double-written friendships are kept)\n", removed)
+		return nil
+	}
 	removed, err := shardmigrate.Cleanup(ctx, o.driver, o.source, o.chatIDs())
 	if err != nil {
 		return err
@@ -338,6 +436,18 @@ func runRollback(ctx context.Context, args []string) error {
 	}
 	if err := o.require("control", "source", "target", "chats"); err != nil {
 		return err
+	}
+	spec, err := o.entitySpec()
+	if err != nil {
+		return err
+	}
+	if spec.Domain != "" {
+		if err := shardmigrate.RollbackEntity(ctx, o.driver, o.control, o.source, o.target,
+			spec, o.from, o.to, o.chatIDs()); err != nil {
+			return err
+		}
+		fmt.Printf("rolled back %d %s keys from shard %d to %d\n", len(o.chatIDs()), o.entity, o.to, o.from)
+		return nil
 	}
 	if err := shardmigrate.Rollback(ctx, o.driver, o.control, o.source, o.target, o.from, o.to, o.chatIDs()); err != nil {
 		return err
