@@ -46,6 +46,15 @@ func (r *Resolver) Place(ctx context.Context, domain Domain, key string, shard i
 	if err := r.dir.Assign(ctx, domain, key, shard); err != nil {
 		return Placement{}, err
 	}
+	// Assign never overwrites an existing row. Re-read it so a caller that
+	// pre-pinned the key (a backfill, a migration, or a chat's peer) always
+	// gets the authoritative shard instead of writing data to a different
+	// physical database than the directory points at.
+	if existing, ok, err := r.dir.Lookup(ctx, domain, key); err != nil {
+		return Placement{}, err
+	} else if ok {
+		shard = existing
+	}
 	dsn, err := r.topo.DSN(domain, shard)
 	if err != nil {
 		return Placement{}, err
