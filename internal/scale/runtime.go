@@ -442,6 +442,17 @@ func (r *Runtime) CompensationInterval() time.Duration {
 	return r.cfg.Compensation.Interval
 }
 
+// DirectoryCoLocated reports whether the SQL directory shares the primary
+// business database. That is true when Directory.Enabled and no explicit,
+// different DSN was configured (it inherits Store.DSN). Only then can a
+// directory row be written inside a business transaction.
+func (r *Runtime) DirectoryCoLocated() bool {
+	if r == nil || r.directoryDB == nil {
+		return false
+	}
+	return strings.TrimSpace(r.cfg.Directory.DSN) == ""
+}
+
 // Transport exposes the bus so a second process (or a test) can attach.
 func (r *Runtime) Transport() notify.Transport {
 	if r == nil {

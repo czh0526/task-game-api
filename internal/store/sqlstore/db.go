@@ -151,6 +151,18 @@ type txRepos struct {
 	buf     *txBuffer
 }
 
+// SQLTxHandle exposes the live transaction so the domain store can write a
+// directory row in the same transaction (co-located control plane). Outside a
+// transaction (plain DB repos) this method is not present, so callers must
+// assert the interface.
+func (t *txRepos) SQLTxHandle() (any, string) {
+	tx, ok := t.q.(*sql.Tx)
+	if !ok {
+		return nil, ""
+	}
+	return tx, t.d.Name()
+}
+
 func (t *txRepos) Users() store.UserRepo { return &userRepo{q: t.q, initial: t.initial, d: t.d} }
 func (t *txRepos) Tasks() store.TaskRepo { return &taskRepo{q: t.q, d: t.d} }
 func (t *txRepos) Submissions() store.SubmissionRepo {

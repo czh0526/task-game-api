@@ -2,7 +2,9 @@ package domain
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"time"
 
 	"taskgame/internal/model"
 	"taskgame/internal/plane"
@@ -32,6 +34,12 @@ type Config struct {
 	// transaction. Once domains point at different DSNs, non-strict mode uses
 	// separate pools (eventual consistency) and strict mode fails loudly.
 	StrictTx bool
+	// DirectoryCoLocated says the control-plane directory lives in the SAME
+	// physical database as the business rows, so a new key's directory row can
+	// be written inside the business transaction via SQLTxHandle. When false
+	// (a separate control-plane DB), assignment stays an idempotent out-of-tx
+	// write, as before.
+	DirectoryCoLocated bool
 }
 
 // Store is a store.Store whose tables are split by aggregate-root domain.
@@ -47,6 +55,8 @@ type Store struct {
 	pools  map[plane.Domain][]store.Store
 	byDSN  map[string]store.Store
 	opened []store.Store
+
+	directoryCoLocated bool
 }
 
 // Open creates one connection pool per distinct DSN. When several domains
@@ -68,9 +78,10 @@ func Open(cfg Config) (*Store, error) {
 	}
 
 	s := &Store{
-		strictTx: cfg.StrictTx,
-		pools:    make(map[plane.Domain][]store.Store, len(allDomains)),
-		byDSN:    make(map[string]store.Store),
+		strictTx:           cfg.StrictTx,
+		directoryCoLocated: cfg.DirectoryCoLocated,
+		pools:              make(map[plane.Domain][]store.Store, len(allDomains)),
+		byDSN:              make(map[string]store.Store),
 	}
 	if cfg.Control != nil {
 		if cfg.Control.Resolver == nil || cfg.Control.Topology == nil {
@@ -172,6 +183,17 @@ func (s *Store) Close() error {
 // makes the window safe but eventually consistent; plane.AssignInTx stays
 // reserved until the store transaction interface exposes its *sql.Tx.
 func (s *Store) place(ctx context.Context, d plane.Domain, key string, create bool) (plane.Placement, error) {
+	return s.placeWithTxWrite(ctx, d, key, create, false)
+}
+
+// placeWithTxWrite is the InTx entry point. When the control plane is
+// co-located and this is a new key, it computes the placement WITHOUT writing
+// a directory row; InTx writes that row inside the business transaction via
+// SQLTxHandle. Otherwise it keeps the original out-of-tx Assign path.
+func (s *Store) placeWithTxWrite(ctx context.Context, d plane.Domain, key string, create, inTx bool) (plane.Placement, error) {
+	if create && inTx && s.directoryCoLocated {
+		return s.control.Resolver.ResolveNoWrite(ctx, d, key)
+	}
 	if create {
 		return s.control.Resolver.Resolve(ctx, d, key)
 	}
@@ -240,13 +262,15 @@ func (s *Store) pickPlacement(ctx context.Context, p plane.Placement) (store.Rep
 // deployment those calls still share the same physical pool and transaction.
 func (s *Store) InTx(ctx context.Context, fn func(ctx context.Context, r store.Repos) error) error {
 	var p plane.Placement
+	writeDirectoryInTx := false
 	route, ok := RouteFrom(ctx)
 	if ok && route.Key != "" && route.Domain.Valid() {
 		var err error
-		p, err = s.place(ctx, route.Domain, route.Key, route.Create)
+		p, err = s.placeWithTxWrite(ctx, route.Domain, route.Key, route.Create, true)
 		if err != nil {
 			return err
 		}
+		writeDirectoryInTx = route.Create && s.directoryCoLocated
 	} else {
 		dsn, err := s.topo.DSN(plane.DomainUser, 0)
 		if err != nil {
@@ -272,6 +296,20 @@ func (s *Store) InTx(ctx context.Context, fn func(ctx context.Context, r store.R
 	txCtx := withScope(ctx, scope)
 	return pool.InTx(txCtx, func(ctx context.Context, repos store.Repos) error {
 		scope.repos[p.Domain] = repos
+		// Write the directory row in the SAME transaction as the business row.
+		// INSERT IGNORE keeps it idempotent under replay; a rollback now also
+		// rolls back the placement, so no orphan routing row survives.
+		if writeDirectoryInTx {
+			if cap, ok := repos.(store.SQLTx); ok {
+				if handle, dialect := cap.SQLTxHandle(); handle != nil {
+					if tx, ok := handle.(*sql.Tx); ok {
+						if err := plane.AssignInTx(ctx, tx, dialect, p.Domain, p.Key, p.Shard, time.Now().UTC()); err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
 		return fn(ctx, &Repos{s: s, scope: scope})
 	})
 }

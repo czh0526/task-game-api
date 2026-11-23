@@ -40,6 +40,14 @@ func (r *Resolver) ResolveExisting(ctx context.Context, domain Domain, key strin
 	return r.resolve(ctx, domain, key, r.topo.Pinned(domain), false)
 }
 
+// ResolveNoWrite computes the placement of a NEW key using the current shard
+// count, but does NOT write a directory row. Callers use it when they will
+// write the row themselves inside the business transaction (co-located control
+// plane). The shard choice is identical to Resolve.
+func (r *Resolver) ResolveNoWrite(ctx context.Context, domain Domain, key string) (Placement, error) {
+	return r.resolve(ctx, domain, key, r.topo.Len(domain), false)
+}
+
 // Place pins a key to an explicit shard (used when a chat/task is created and
 // the routing decision must be committed in the same transaction as the row).
 func (r *Resolver) Place(ctx context.Context, domain Domain, key string, shard int) (Placement, error) {

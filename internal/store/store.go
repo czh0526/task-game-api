@@ -29,6 +29,17 @@ type Store interface {
 	Close() error
 }
 
+// SQLTx is an OPTIONAL capability implemented by repositories that run inside
+// a real SQL transaction. It lets a caller (the domain store) write a control-
+// plane directory row in the SAME transaction as the business row, closing the
+// eventually-consistent window when the control plane is co-located. Stores
+// that do not expose a raw transaction simply do not implement this interface.
+type SQLTx interface {
+	// SQLTxHandle returns the active transaction and its SQL dialect
+	// ("sqlite" or "mysql"). It is only valid while the transaction is open.
+	SQLTxHandle() (tx any, dialect string)
+}
+
 // Repos is the set of repositories visible inside and outside a transaction.
 type Repos interface {
 	Users() UserRepo

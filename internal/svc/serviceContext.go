@@ -158,10 +158,11 @@ func openStore(c config.Config, rt *scale.Runtime) (store.Store, error) {
 			control = rt.ControlPlane
 		}
 		return domain.Open(domain.Config{
-			Driver:         c.Store.Driver,
-			DSNs:           dsns,
-			InitialBalance: c.Escrow.InitialBalance,
-			Control:        control,
+			Driver:             c.Store.Driver,
+			DSNs:               dsns,
+			InitialBalance:     c.Escrow.InitialBalance,
+			Control:            control,
+			DirectoryCoLocated: rt != nil && rt.DirectoryCoLocated(),
 		})
 	}
 	// Horizontal cell sharding (plan A): N independent databases, each with
