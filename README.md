@@ -357,6 +357,13 @@ CGO_ENABLED=0 go run ./cmd/token -f etc/taskgame.yaml -user usr_executor
 
 邮箱注册是同一套 JWT（仍是 v0.1 的附加接口）。`POST /v1/register` 和 `POST /v1/login` 不需要鉴权，密码以 bcrypt 保存，不会回明文。`GET /v1/me` 需要 Bearer 或 `X-Api-Key`，返回 `id`、`email`、`nickname`、`is_arbiter`。`nickname` 是显示名，不是登录名，也不要求唯一；可以不填，已有用户为空字符串。`PATCH /v1/me` 的 body 是 `{ "nickname": "…" }`，去掉首尾空白后 1–32 个字符，空值和纯空白是 400。它不改邮箱、密码，也不刷新 token。注册 body 可以带可选的 `nickname`。`usr_publisher` / `usr_executor` 的开发密钥保持可用。令牌有效期是 `Auth.TokenTTL`（缺省 24h）。
 
+**注册用户的 ID 形态取决于是否启用了持久化控制面（`Scale.Directory.Enabled`）：**
+
+- **默认（未启用）**：`usr_` + 24 位随机十六进制字符，例如 `usr_3f9a...1c02`。由 `internal/id.New` 调用 `crypto/rand` 生成，不依赖任何数据库，多进程、多实例之间天然不会撞号。
+- **启用持久化控制面后**：`usr_` + Snowflake 十六进制数，例如 `usr_1a2b3c...`。worker id 从控制面 `global_unique` 分配并持久化，重启后复用；同一实例内严格递增、可排序，跨实例靠 worker id 隔离。邮箱 `→ user_id` 同时记入 `global_unique`，登录走全局点查而非逐库扫描。
+
+早期版本在默认配置下也用了控制面的内存占位实现 `LocalIDGenerator`，产出 `usr_api-1`、`usr_api-2` 这类"前缀 + 实例名 + 序号"的 ID；它每次重启都从 1 开始，多进程共用一个 `InstanceID` 时会互相冲突，因此已修正为：只有真正启用了持久化控制面才启用 Snowflake 路径，其余一律回退到加密随机数。两种形态都满足 `usr_` 前缀与 ID 合法性校验，历史数据无需迁移。
+
 ```bash
 curl -s -X POST http://127.0.0.1:8891/v1/register \
   -H 'Content-Type: application/json' \
@@ -553,6 +560,13 @@ CGO_ENABLED=0 go run ./cmd/token -f etc/taskgame.yaml -user usr_executor
 Send `Authorization: Bearer <token>`. The smoke script mints a fresh JWT per extra executor, so the running process must be using that same `Auth.JwtSecret`.
 
 Email registration is the same JWT, added without a version bump. `POST /v1/register` and `POST /v1/login` are public. Passwords are stored as bcrypt and are not returned. `GET /v1/me` requires Bearer or `X-Api-Key` and returns `id`, `email`, `nickname`, and `is_arbiter`. `nickname` is a display name, not a unique login handle. Omit it and the field stays an empty string. `PATCH /v1/me` body is `{ "nickname": "…" }`, 1–32 characters after trim. Empty or whitespace-only is 400. It does not change email, password, or the access token. Register may include an optional `nickname`. The `usr_publisher` / `usr_executor` development keys keep working. Token lifetime is `Auth.TokenTTL` (default 24h).
+
+**The shape of a registered user id depends on whether the persistent control plane (`Scale.Directory.Enabled`) is on:**
+
+- **Default (off)**: `usr_` + 24 random hex characters, e.g. `usr_3f9a...1c02`, produced by `internal/id.New` via `crypto/rand`. No database dependency and no cross-process collisions.
+- **Persistent control plane on**: `usr_` + a Snowflake hex value, e.g. `usr_1a2b3c...`. The worker id is allocated from and persisted in the control plane's `global_unique` table, so it survives restarts; ids are monotonic within an instance and isolated across instances by worker id. `email → user_id` is recorded in `global_unique` at the same time, so login does a global point lookup instead of scanning every shard.
+
+Early builds used the control plane's in-memory placeholder `LocalIDGenerator` even in the default configuration, producing ids like `usr_api-1` / `usr_api-2` (`prefix + instance + sequence`). That generator restarts at 1 on every process and collides whenever two processes share an `InstanceID`, so registration now enables the Snowflake path only when a real persistent control plane is configured and otherwise falls back to crypto/rand ids. Both shapes keep the `usr_` prefix and pass id validation; no data migration is needed.
 
 ```bash
 curl -s -X POST http://127.0.0.1:8891/v1/register \

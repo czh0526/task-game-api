@@ -128,9 +128,12 @@ func NewServiceContext(c config.Config) (*ServiceContext, error) {
 	}
 	// P0: when a persistent control plane is enabled, route registration and
 	// login through global_unique(email -> user_id) + Snowflake ids. When it
-	// is off, account.New keeps the original behavior.
+	// is off, account.New keeps the original behavior (crypto/rand usr_ ids).
+	// Checking only Unique/IDs is not enough: the in-memory ControlPlane also
+	// carries LocalIDGenerator placeholders, which restart at "api-1" in every
+	// process and would generate colliding, enumerable user ids.
 	accountOpts := []account.Option{}
-	if rt != nil && rt.ControlPlane != nil && rt.ControlPlane.Unique != nil && rt.ControlPlane.IDs != nil {
+	if rt.PersistentIdentity() {
 		accountOpts = append(accountOpts, account.WithIdentity(rt.ControlPlane.Unique, rt.ControlPlane.IDs))
 	}
 	sc := &ServiceContext{

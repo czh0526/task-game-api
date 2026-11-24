@@ -528,6 +528,17 @@ func (r *Runtime) InstanceID() string {
 	return r.instanceID
 }
 
+// PersistentIdentity reports whether global email claims and Snowflake worker
+// ids survive restarts and are shared across API processes. This is true only
+// when the SQL-backed directory (Scale.Directory.Enabled) is wired. Without it
+// the control plane still exposes in-memory Unique/IDGenerator placeholders,
+// but registration must NOT use them: LocalIDGenerator restarts at 1 and would
+// collide across processes, so account.New falls back to crypto/rand ids.
+func (r *Runtime) PersistentIdentity() bool {
+	return r != nil && r.directoryDB != nil &&
+		r.ControlPlane != nil && r.ControlPlane.Unique != nil && r.ControlPlane.IDs != nil
+}
+
 func (r *Runtime) ProjectionEnabled() bool {
 	return r != nil && r.cfg.Projection.Enabled
 }
