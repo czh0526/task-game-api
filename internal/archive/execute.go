@@ -48,7 +48,14 @@ func (a *Archiver) ExecuteBatch(ctx context.Context, db *sql.DB, dialect string,
 	}
 	// 1. Select cold rows. Rebuild the SQL from the policy's table/time column
 	// carried in the batch template rather than trusting a caller-built string.
-	rows, err := db.QueryContext(ctx, b.SelectSQL, formatArchiveTime(b.Before), limit)
+	var selectArgs []any
+	if b.KeepPerGroup > 0 {
+		// (cutoff, keepPerGroup, limit)
+		selectArgs = []any{formatArchiveTime(b.Before), b.KeepPerGroup, limit}
+	} else {
+		selectArgs = []any{formatArchiveTime(b.Before), limit}
+	}
+	rows, err := db.QueryContext(ctx, b.SelectSQL, selectArgs...)
 	if err != nil {
 		return res, fmt.Errorf("archive: select %s: %w", b.Table, err)
 	}
@@ -243,6 +250,9 @@ func stringValue(v any) string {
 // timeColumnOf extracts the time column from a SelectSQL of the form
 // "SELECT * FROM t WHERE col < ? LIMIT ?".
 func timeColumnOf(b Batch) string {
+	if b.TimeColumn != "" {
+		return b.TimeColumn
+	}
 	const marker = " WHERE "
 	i := 0
 	if idx := indexOfString(b.SelectSQL, marker); idx >= 0 {

@@ -52,6 +52,11 @@ type StoreConf struct {
 	// Keeping the default empty preserves byte-for-byte behaviour of existing
 	// configs: no new package is constructed unless "domain" is requested.
 	Mode string `json:",optional"`
+	// StrictTx (domain mode only) makes a cross-shard access inside one
+	// transaction fail with ErrCrossShard instead of silently using a separate
+	// pool (eventual consistency). Off by default: co-located domains must keep
+	// working. Turn it on once domains point at physically distinct DSNs.
+	StrictTx bool `json:",optional"`
 	// Driver is sqlite or mysql. When omitted, openStore falls back to sqlite
 	// for backwards compatibility with old local configs.
 	Driver string `json:",optional,options=sqlite|mysql"`

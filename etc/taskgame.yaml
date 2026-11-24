@@ -51,6 +51,10 @@ Auth:
 
 Store:
   Driver: mysql
+  # StrictTx (domain mode) rejects same-domain cross-shard access inside one
+  # transaction with ErrCrossShard instead of silently degrading to eventual
+  # consistency. Turn it on only after domains use physically distinct DSNs.
+  # StrictTx: true
   # P2 per-domain routing is OFF by default. Set Mode: domain to route each
   # aggregate-root family through its own DSN list. Domains without explicit
   # Scale.Domains.<Name>.DSNs inherit Cells below, so a staged rollout starts

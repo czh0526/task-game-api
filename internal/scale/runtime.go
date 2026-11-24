@@ -63,8 +63,9 @@ type Runtime struct {
 	compLog        compensation.Log
 	transport      notify.Transport
 	remote         *notify.RemoteFanout
-	directoryDB    *plane.SQLDirectory // non-nil when Scale.Directory.Enabled
-	Fence          plane.FenceStore    // maintenance write guard, co-located with directory
+	directoryDB    *plane.SQLDirectory    // non-nil when Scale.Directory.Enabled
+	Fence          plane.FenceStore       // maintenance write guard, co-located with directory
+	CursorEpoch    plane.CursorEpochStore // per-chat cursor generation for cutover invalidation
 	instanceID     string
 }
 
@@ -132,6 +133,10 @@ func New(c config.ScaleConf, primary config.StoreConf) (*Runtime, error) {
 	if err != nil {
 		_ = rt.Close()
 		return nil, err
+	}
+	if rt.CursorEpoch == nil {
+		// No persistent directory: keep the epoch registry process-local.
+		rt.CursorEpoch = plane.NewMemoryCursorEpoch()
 	}
 	cp, err := plane.NewControlPlane(dir, topo)
 	if err != nil {
@@ -385,6 +390,13 @@ func (r *Runtime) wireDirectory(c config.ScaleConf, primary config.StoreConf, to
 		return nil, fmt.Errorf("maintenance fence: %w", ferr)
 	}
 	r.Fence = fence
+	// Cursor generations share the control plane so a shardctl bump is seen
+	// by every API process, invalidating stale message cursors cluster-wide.
+	epoch, eerr := plane.NewSQLCursorEpoch(ctx, sqlDir.DB(), driver, false)
+	if eerr != nil {
+		return nil, fmt.Errorf("cursor epoch: %w", eerr)
+	}
+	r.CursorEpoch = epoch
 	// Persist the configured topology so ShardCount is shared, and a process
 	// still rolling with an older, smaller config cannot shrink it.
 	for _, domain := range []plane.Domain{plane.DomainUser, plane.DomainTask, plane.DomainMessage} {

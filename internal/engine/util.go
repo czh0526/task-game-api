@@ -68,6 +68,14 @@ func encodeCursor(offset int) *string {
 	return &s
 }
 
+// encodeCursorWithEpoch emits a v2 cursor carrying the chat's cursor generation.
+// plane.ParseCursor reads both this and the legacy bare-offset form.
+func encodeCursorWithEpoch(offset int, epoch int64) *string {
+	s := base64.RawURLEncoding.EncodeToString(
+		[]byte("v2|" + strconv.FormatInt(epoch, 10) + "|" + strconv.Itoa(offset)))
+	return &s
+}
+
 func decodeCursor(s string) (int, error) {
 	if s == "" {
 		return 0, nil

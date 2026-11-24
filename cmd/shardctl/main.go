@@ -130,6 +130,8 @@ func main() {
 		err = runFenceUnlock(ctx, os.Args[2:])
 	case "fence-list":
 		err = runFenceList(ctx, os.Args[2:])
+	case "cursor-bump":
+		err = runCursorBump(ctx, os.Args[2:])
 	case "archive-run":
 		err = runArchive(ctx, os.Args[2:])
 	case "archive-restore":
@@ -164,6 +166,7 @@ Commands:
   fence-lock    freeze a key (or a whole domain with -key '*') during migration
   fence-unlock  release a frozen key
   fence-list    list active maintenance fences
+  cursor-bump   invalidate message cursors for chats after a rowid-rebuilding cutover
   archive-run   archive cold rows from a table into blobs, then delete online
   archive-restore restore an archived blob back into a table
 
@@ -202,6 +205,32 @@ func (o *options) require(fields ...string) error {
 
 func openFence(ctx context.Context, o *options) (*plane.SQLFence, error) {
 	return plane.OpenSQLFence(ctx, o.driver, o.control)
+}
+
+// runCursorBump invalidates outstanding message cursors for the given chats.
+// Run it after a physical cutover rebuilds rowids so clients cannot skip or
+// repeat messages when they resume with an old cursor.
+func runCursorBump(ctx context.Context, args []string) error {
+	o, err := parse("cursor-bump", args)
+	if err != nil {
+		return err
+	}
+	if err := o.require("control", "chats"); err != nil {
+		return err
+	}
+	store, err := plane.OpenSQLCursorEpoch(ctx, o.driver, o.control)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	for _, id := range o.chatIDs() {
+		epoch, err := store.Bump(ctx, id)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("chat %s cursor epoch -> %d\n", id, epoch)
+	}
+	return nil
 }
 
 func runFenceLock(ctx context.Context, args []string) error {

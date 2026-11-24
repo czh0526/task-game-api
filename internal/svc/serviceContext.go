@@ -116,6 +116,11 @@ func NewServiceContext(c config.Config) (*ServiceContext, error) {
 	if rt != nil && rt.TaskIndex != nil {
 		engineOpts = append(engineOpts, engine.WithTaskIndex(rt.TaskIndex))
 	}
+	// Per-chat cursor generations let a physical cutover invalidate stale
+	// message cursors. Absent (skeleton off) the epoch is always 0.
+	if rt != nil && rt.CursorEpoch != nil {
+		engineOpts = append(engineOpts, engine.WithCursorEpoch(rt.CursorEpoch))
+	}
 	// P0: when a persistent control plane is enabled, route registration and
 	// login through global_unique(email -> user_id) + Snowflake ids. When it
 	// is off, account.New keeps the original behavior.
@@ -209,6 +214,7 @@ func openStore(c config.Config, rt *scale.Runtime) (store.Store, error) {
 			Control:            control,
 			DirectoryCoLocated: rt != nil && rt.DirectoryCoLocated(),
 			Fence:              fence,
+			StrictTx:           c.Store.StrictTx,
 		})
 	}
 	// Horizontal cell sharding (plan A): N independent databases, each with

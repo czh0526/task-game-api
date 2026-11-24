@@ -113,6 +113,11 @@ type RetentionPolicy struct {
 	TimeColumn string
 	HotWindow  time.Duration
 	Note       string
+	// GroupColumn + KeepPerGroup protect the newest N rows of each group from
+	// archival (used for messages: keep the newest page of every chat online so
+	// the common "load latest history" read never hits the cold tier).
+	GroupColumn  string
+	KeepPerGroup int
 }
 
 // DefaultPolicies covers the append-only tables that grow forever today.
@@ -122,7 +127,8 @@ var DefaultPolicies = []RetentionPolicy{
 	{Table: "score_events", TimeColumn: "created_at", HotWindow: 90 * 24 * time.Hour, Note: "append-only ledger history"},
 	{Table: "webhook_deliveries", TimeColumn: "created_at", HotWindow: 30 * 24 * time.Hour, Note: "delivery attempts and bodies"},
 	{Table: "idempotency_keys", TimeColumn: "created_at", HotWindow: 7 * 24 * time.Hour, Note: "needs a created_at index + TTL"},
-	{Table: "messages", TimeColumn: "created_at", HotWindow: 180 * 24 * time.Hour, Note: "per shard; never archive a chat's newest page"},
+	{Table: "messages", TimeColumn: "created_at", HotWindow: 180 * 24 * time.Hour,
+		GroupColumn: "chat_id", KeepPerGroup: 50, Note: "per shard; keep each chat's newest page online"},
 }
 
 // DeliveryBody is the shape of a de-amplified webhook delivery. Today emit()
@@ -137,12 +143,16 @@ type DeliveryBody struct {
 // Batch is one planned archive operation. SQL statements are templates with
 // placeholders; they are intentionally not executed by the skeleton.
 type Batch struct {
-	Table       string
-	Before      time.Time
-	SelectSQL   string
-	ArchiveSQL  string
-	DeleteSQL   string
-	RequiresACK bool
+	Table      string
+	Before     time.Time
+	TimeColumn string // explicit column name; avoids parsing SelectSQL
+	SelectSQL  string
+	ArchiveSQL string
+	DeleteSQL  string
+	// KeepPerGroup > 0 means SelectSQL takes a third argument (the keep count)
+	// between the cutoff and the limit, protecting each group's newest rows.
+	KeepPerGroup int
+	RequiresACK  bool
 }
 
 type Archiver struct {
@@ -170,14 +180,29 @@ func (a *Archiver) Plan(_ context.Context, now time.Time) ([]Batch, error) {
 			return nil, fmt.Errorf("archive: invalid retention policy %+v", p)
 		}
 		before := now.Add(-p.HotWindow)
-		out = append(out, Batch{
+		batch := Batch{
 			Table:       p.Table,
 			Before:      before,
-			SelectSQL:   fmt.Sprintf("SELECT * FROM %s WHERE %s < ? LIMIT ?", p.Table, p.TimeColumn),
+			TimeColumn:  p.TimeColumn,
 			ArchiveSQL:  fmt.Sprintf("INSERT INTO %s_cold SELECT * FROM %s WHERE %s < ?", p.Table, p.Table, p.TimeColumn),
-			DeleteSQL:   fmt.Sprintf("DELETE FROM %s WHERE %s < ?", p.Table, p.TimeColumn),
+			DeleteSQL:   fmt.Sprintf("DELETE FROM %s WHERE %s < ? AND id = ?", p.Table, p.TimeColumn),
 			RequiresACK: true,
-		})
+		}
+		if p.KeepPerGroup > 0 && p.GroupColumn != "" {
+			// Keep each group's newest N rows online. The correlated NOT EXISTS
+			// counts newer rows in the same group; only rows with at least N
+			// newer siblings are cold enough to archive. Args: (before, N, limit).
+			batch.KeepPerGroup = p.KeepPerGroup
+			batch.SelectSQL = fmt.Sprintf(
+				"SELECT * FROM %s t WHERE t.%s < ? AND ("+
+					"SELECT COUNT(*) FROM %s n WHERE n.%s = t.%s AND "+
+					"(n.%s > t.%s OR (n.%s = t.%s AND n.id > t.id))) >= ? LIMIT ?",
+				p.Table, p.TimeColumn, p.Table, p.GroupColumn, p.GroupColumn,
+				p.TimeColumn, p.TimeColumn, p.TimeColumn, p.TimeColumn)
+		} else {
+			batch.SelectSQL = fmt.Sprintf("SELECT * FROM %s WHERE %s < ? LIMIT ?", p.Table, p.TimeColumn)
+		}
+		out = append(out, batch)
 	}
 	return out, nil
 }

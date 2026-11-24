@@ -48,16 +48,23 @@ var errNoDue = errors.New("no due review")
 
 // Engine is safe for concurrent use. Mutations run inside store transactions.
 type Engine struct {
-	store     store.Store
-	now       func() time.Time
-	currency  string
-	deferred  sync.Map
-	timeouts  TimeoutConfig
-	arbiters  map[string]struct{}
-	notifier  SignalNotifier
-	comp      *compensation.Coordinator // optional cross-domain saga driver
-	cdc       TaskChangeRecorder        // optional search-index change recorder
-	taskIndex search.TaskIndex          // optional read-side index for simple listings
+	store       store.Store
+	now         func() time.Time
+	currency    string
+	deferred    sync.Map
+	timeouts    TimeoutConfig
+	arbiters    map[string]struct{}
+	notifier    SignalNotifier
+	comp        *compensation.Coordinator // optional cross-domain saga driver
+	cdc         TaskChangeRecorder        // optional search-index change recorder
+	taskIndex   search.TaskIndex          // optional read-side index for simple listings
+	cursorEpoch CursorEpochSource         // optional per-chat generation for cursor invalidation
+}
+
+// CursorEpochSource reports a chat's cursor generation. A physical cutover
+// bumps it so outstanding rowid/offset cursors are detected as stale.
+type CursorEpochSource interface {
+	Epoch(ctx context.Context, chatID string) (int64, error)
 }
 
 // TaskChangeRecorder records a task upsert after the business transaction has
@@ -108,6 +115,13 @@ func WithTaskChangeRecorder(r TaskChangeRecorder) Option {
 // scattering to every shard; complex filters still use the store.
 func WithTaskIndex(idx search.TaskIndex) Option {
 	return func(e *Engine) { e.taskIndex = idx }
+}
+
+// WithCursorEpoch attaches a per-chat cursor generation source. After a
+// physical message cutover bumps a chat's epoch, ListMessages treats cursors
+// minted under the old epoch as stale and restarts from the first page.
+func WithCursorEpoch(src CursorEpochSource) Option {
+	return func(e *Engine) { e.cursorEpoch = src }
 }
 
 // recordTaskDTO is called after a task write commits (from call). Failures are
