@@ -67,8 +67,10 @@ func TestEnabledWiresEveryComponent(t *testing.T) {
 			t.Fatalf("HotWindow override not applied: %+v", b)
 		}
 	}
-	if len(TODOs) == 0 {
-		t.Fatal("skeleton boundary is not documented in code")
+	// Every historical skeleton item is implemented; keep the assertion so a
+	// future placeholder cannot be reintroduced without updating the docs.
+	if len(TODOs) != 0 {
+		t.Fatalf("expected no open skeleton TODOs, got %v", TODOs)
 	}
 }
 

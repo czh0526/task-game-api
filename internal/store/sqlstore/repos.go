@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ type userRepo struct {
 	q       querier
 	initial int64
 	d       Dialect
+	blobs   LargeValueStore
 }
 
 func (r *userRepo) Ensure(ctx context.Context, id string, now time.Time) (model.User, error) {
@@ -133,8 +135,31 @@ func (r *userRepo) SetNickname(ctx context.Context, id, nickname string) error {
 }
 
 func (r *userRepo) SetAvatar(ctx context.Context, id string, jpeg []byte, updatedAt string) error {
-	res, err := r.q.ExecContext(ctx, `
-		UPDATE users SET avatar = ?, avatar_updated_at = ? WHERE id = ?`, jpeg, updatedAt, id)
+	// With a blob tier, store the JPEG once outside the database and keep only
+	// a small ref inline. A ref is content-addressed by FileBlobStore; other
+	// implementations may dedupe too. The blob write happens before the SQL
+	// update: if the transaction later rolls back, the orphan blob is simply
+	// unreachable (no ref points at it), which is the same best-effort tradeoff
+	// webhook body externalization makes.
+	ref := ""
+	if r.blobs != nil {
+		var err error
+		ref, err = r.blobs.Put(ctx, "avatar:"+id, jpeg)
+		if err != nil {
+			return err
+		}
+	}
+	var res sql.Result
+	var err error
+	if ref != "" {
+		res, err = r.q.ExecContext(ctx, `
+			UPDATE users SET avatar = NULL, avatar_ref = ?, avatar_updated_at = ? WHERE id = ?`,
+			ref, updatedAt, id)
+	} else {
+		res, err = r.q.ExecContext(ctx, `
+			UPDATE users SET avatar = ?, avatar_ref = '', avatar_updated_at = ? WHERE id = ?`,
+			jpeg, updatedAt, id)
+	}
 	if err != nil {
 		return err
 	}
@@ -149,17 +174,31 @@ func (r *userRepo) SetAvatar(ctx context.Context, id string, jpeg []byte, update
 }
 
 func (r *userRepo) GetAvatar(ctx context.Context, id string) (model.UserAvatar, error) {
-	var data []byte
-	var updated string
+	var inline []byte
+	var ref, updated string
 	err := r.q.QueryRowContext(ctx, `
-		SELECT avatar, COALESCE(avatar_updated_at, '')
-		FROM users WHERE id = ? AND avatar IS NOT NULL AND length(avatar) > 0`, id).
-		Scan(&data, &updated)
+		SELECT avatar, COALESCE(avatar_ref, ''), COALESCE(avatar_updated_at, '')
+		FROM users WHERE id = ?`, id).
+		Scan(&inline, &ref, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.UserAvatar{}, store.ErrNotFound
 	}
 	if err != nil {
 		return model.UserAvatar{}, err
+	}
+	// A ref is authoritative: once written, the inline blob is cleared. When a
+	// row still has both (mid-migration or a failed cleanup), prefer the ref.
+	var data []byte
+	if ref != "" {
+		if r.blobs == nil {
+			return model.UserAvatar{}, fmt.Errorf("store: avatar ref %q present but no blob store configured", ref)
+		}
+		data, err = r.blobs.Get(ctx, ref)
+		if err != nil {
+			return model.UserAvatar{}, err
+		}
+	} else {
+		data = inline
 	}
 	if len(data) == 0 {
 		return model.UserAvatar{}, store.ErrNotFound
@@ -700,11 +739,26 @@ func nilMilestones(s []model.Milestone) []model.Milestone {
 	return s
 }
 
-type submissionRepo struct{ q querier }
+type submissionRepo struct {
+	q     querier
+	blobs LargeValueStore
+}
 
 func (r *submissionRepo) Insert(ctx context.Context, s model.Submission) error {
 	payload := string(s.Payload)
 	if payload == "" {
+		payload = "{}"
+	}
+	// Large payloads go to the blob tier. The inline column keeps '{}' so a
+	// legacy reader (or one without the blob tier configured) still gets valid
+	// JSON rather than a dangling ref it cannot resolve.
+	ref := ""
+	if r.blobs != nil && len(payload) > LargePayloadThreshold {
+		var err error
+		ref, err = r.blobs.Put(ctx, "submission:"+s.ID, []byte(payload))
+		if err != nil {
+			return err
+		}
 		payload = "{}"
 	}
 	status := s.Status
@@ -712,9 +766,9 @@ func (r *submissionRepo) Insert(ctx context.Context, s model.Submission) error {
 		status = model.SubmissionCurrent
 	}
 	_, err := r.q.ExecContext(ctx, `
-		INSERT INTO submissions (id, task_id, milestone_id, executor_id, payload, note, role_id, status, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		s.ID, s.TaskID, s.MilestoneID, s.ExecutorID, payload, s.Note, s.RoleID, status, model.FormatTime(s.CreatedAt))
+		INSERT INTO submissions (id, task_id, milestone_id, executor_id, payload, payload_ref, note, role_id, status, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		s.ID, s.TaskID, s.MilestoneID, s.ExecutorID, payload, ref, s.Note, s.RoleID, status, model.FormatTime(s.CreatedAt))
 	return err
 }
 
@@ -735,7 +789,7 @@ func (r *submissionRepo) MarkStatus(ctx context.Context, id, status string) erro
 
 func (r *submissionRepo) ListByTask(ctx context.Context, taskID string) ([]model.Submission, error) {
 	rows, err := r.q.QueryContext(ctx, `
-		SELECT id, task_id, milestone_id, executor_id, payload, note, role_id, status, created_at
+		SELECT id, task_id, milestone_id, executor_id, payload, COALESCE(payload_ref, ''), note, role_id, status, created_at
 		FROM submissions WHERE task_id = ? ORDER BY created_at ASC, id ASC`, taskID)
 	if err != nil {
 		return nil, err
@@ -744,12 +798,24 @@ func (r *submissionRepo) ListByTask(ctx context.Context, taskID string) ([]model
 	var out []model.Submission
 	for rows.Next() {
 		var s model.Submission
-		var payload, created string
-		if err := rows.Scan(&s.ID, &s.TaskID, &s.MilestoneID, &s.ExecutorID, &payload, &s.Note, &s.RoleID, &s.Status, &created); err != nil {
+		var payload, ref, created string
+		if err := rows.Scan(&s.ID, &s.TaskID, &s.MilestoneID, &s.ExecutorID, &payload, &ref, &s.Note, &s.RoleID, &s.Status, &created); err != nil {
 			return nil, err
 		}
 		if s.Status == "" {
 			s.Status = model.SubmissionCurrent
+		}
+		// The ref is authoritative: when present, the inline payload is '{}'.
+		// Fall back to inline for legacy rows written before externalization.
+		if ref != "" {
+			if r.blobs == nil {
+				return nil, fmt.Errorf("store: submission %s has payload ref %q but no blob store configured", s.ID, ref)
+			}
+			big, gerr := r.blobs.Get(ctx, ref)
+			if gerr != nil {
+				return nil, gerr
+			}
+			payload = string(big)
 		}
 		s.Payload = json.RawMessage(payload)
 		s.CreatedAt, err = model.ParseTime(created)

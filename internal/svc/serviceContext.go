@@ -23,6 +23,7 @@ import (
 	"taskgame/internal/store/mysql"
 	"taskgame/internal/store/shard"
 	"taskgame/internal/store/sqlite"
+	"taskgame/internal/store/sqlstore"
 	"taskgame/internal/webhook"
 
 	"github.com/zeromicro/go-zero/core/logx"
@@ -210,6 +211,17 @@ func blobStoreOf(rt *scale.Runtime) webhook.EventBodyStore {
 	return rt.Blobs
 }
 
+// largeValuesOf exposes the same BlobStore to the SQL store layer for avatar
+// and large submission payload externalization. archive.BlobStore satisfies
+// sqlstore.LargeValueStore (Put/Get). Nil disables externalization: rows keep
+// their inline columns and reads never touch a blob tier.
+func largeValuesOf(rt *scale.Runtime) sqlstore.LargeValueStore {
+	if rt == nil || rt.Blobs == nil {
+		return nil
+	}
+	return rt.Blobs
+}
+
 func openStore(c config.Config, rt *scale.Runtime) (store.Store, error) {
 	// Per-domain sharding (P2): every aggregate-root family has its own ordered
 	// DSN list. Domains without explicit DSNs inherit Store.Cells, so the first
@@ -233,6 +245,7 @@ func openStore(c config.Config, rt *scale.Runtime) (store.Store, error) {
 			DirectoryCoLocated: rt != nil && rt.DirectoryCoLocated(),
 			Fence:              fence,
 			StrictTx:           c.Store.StrictTx,
+			Blobs:              largeValuesOf(rt),
 		})
 	}
 	// Horizontal cell sharding (plan A): N independent databases, each with
@@ -242,6 +255,7 @@ func openStore(c config.Config, rt *scale.Runtime) (store.Store, error) {
 			Driver:         c.Store.Driver,
 			DSNs:           c.Store.Cells,
 			InitialBalance: c.Escrow.InitialBalance,
+			Blobs:          largeValuesOf(rt),
 		})
 	}
 	var st store.Store
@@ -256,6 +270,13 @@ func openStore(c config.Config, rt *scale.Runtime) (store.Store, error) {
 	}
 	if err != nil {
 		return nil, err
+	}
+	if blobs := largeValuesOf(rt); blobs != nil {
+		if setter, ok := st.(interface {
+			SetLargeValues(sqlstore.LargeValueStore)
+		}); ok {
+			setter.SetLargeValues(blobs)
+		}
 	}
 	if c.Store.Shards <= 1 {
 		return st, nil

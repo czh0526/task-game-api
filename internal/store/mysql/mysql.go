@@ -121,6 +121,11 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	if err := ensureDeliveryBodyRef(ctx, conn); err != nil {
 		return err
 	}
+	// Large submission payloads may live in the blob tier. An upgraded v1
+	// database may not have submissions at all, so skip when absent.
+	if err := ensureSubmissionPayloadRef(ctx, conn); err != nil {
+		return err
+	}
 	// Version 1 only runs once, so tables appended to schema.sql after a
 	// database was stamped never reach an upgraded database. The shard
 	// directory and outbox are additive, so repair them on every startup.
@@ -154,6 +159,36 @@ func ensureDeliveryBodyRef(ctx context.Context, conn *sql.Conn) error {
 	if _, err := conn.ExecContext(ctx,
 		`ALTER TABLE webhook_deliveries ADD COLUMN body_ref VARCHAR(128) NOT NULL DEFAULT ''`); err != nil {
 		return fmt.Errorf("mysql deliveries.body_ref: %w", err)
+	}
+	return nil
+}
+
+// ensureSubmissionPayloadRef adds the large-payload blob reference column to
+// databases that predate payload externalization. An upgraded v1 database may
+// not have the submissions table, so check for it before altering.
+func ensureSubmissionPayloadRef(ctx context.Context, conn *sql.Conn) error {
+	var hasTable int
+	if err := conn.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM information_schema.TABLES
+		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'submissions'`).Scan(&hasTable); err != nil {
+		return err
+	}
+	if hasTable == 0 {
+		return nil
+	}
+	var n int
+	if err := conn.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM information_schema.COLUMNS
+		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'submissions'
+		  AND COLUMN_NAME = 'payload_ref'`).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	if _, err := conn.ExecContext(ctx,
+		`ALTER TABLE submissions ADD COLUMN payload_ref VARCHAR(128) NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("mysql submissions.payload_ref: %w", err)
 	}
 	return nil
 }
@@ -200,6 +235,7 @@ func ensureUserAvatarColumns(ctx context.Context, conn *sql.Conn) error {
 	}{
 		{name: "avatar", def: "MEDIUMBLOB NULL"},
 		{name: "avatar_updated_at", def: "VARCHAR(40) NOT NULL DEFAULT ''"},
+		{name: "avatar_ref", def: "VARCHAR(128) NOT NULL DEFAULT ''"},
 	}
 	for _, col := range columns {
 		var n int

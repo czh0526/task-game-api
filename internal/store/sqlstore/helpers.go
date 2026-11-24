@@ -13,6 +13,23 @@ type querier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
+// LargeValueStore holds big field values (avatar JPEGs, submission payloads)
+// outside the online database. The archive.BlobStore satisfies it; this small
+// interface keeps the store layer independent of the archive package.
+//
+// A value written here gets an opaque ref that is stored in the *_ref column.
+// Reads prefer the ref and fall back to the inline column for legacy rows, so
+// enabling the blob tier never invalidates existing data.
+type LargeValueStore interface {
+	Put(ctx context.Context, key string, data []byte) (ref string, err error)
+	Get(ctx context.Context, ref string) ([]byte, error)
+}
+
+// LargePayloadThreshold is the minimum inline payload size that is worth
+// moving to the blob tier. Small JSON payloads stay inline: a blob round trip
+// would cost more than the bytes it saves.
+const LargePayloadThreshold = 4 << 10 // 4KB
+
 func jsonText(v any) (string, error) {
 	b, err := json.Marshal(v)
 	if err != nil {
