@@ -2,7 +2,7 @@
 
 这是 `docs/per-domain-sharding-plan.md` 第 7 节和第 4 阶段的可执行 runbook。它覆盖 message、user、task 三个域的物理搬迁，每次只切一个域，不改任何 API 语义。工具在 `cmd/shardctl`，库实现在 `internal/shardmigrate`。
 
-状态：SQLite 自动化演练与生产化护栏（冻结写、资金 saga、控制面缓存/副本、`/metrics`、游标世代）均已落地；真机 MySQL + 双进程回归脚本已编写但未在作者环境实测，详见第 9 节。逐项完成状态见 `docs/remaining-work-backlog.md`。
+状态：SQLite 自动化演练与生产化护栏（冻结写、资金 saga、控制面缓存/副本、`/metrics`、游标世代）均已落地；真机 MySQL + 双进程回归脚本已编写并通过语法检查，但未在隔离环境完整执行，详见第 9 节。逐项完成状态见 `docs/remaining-work-backlog.md`。
 
 ## 1. 演练目标
 
@@ -193,11 +193,11 @@ shardctl rollback -driver mysql -entity user -control "<control-dsn>" \
 
 ## 9. 真机 MySQL + 双进程演练（未实测项）
 
-`scripts/drill-mysql.sh` 是真机演练的可执行脚本：拉起第 4 个 MySQL cell（3310）+ 控制面库，跑 `shardctl init/backfill/plan/copy/verify/cutover`，然后以新拓扑重启 8891/8892 两个 API 进程验证跨进程 SSE 与历史消息，最后 rollback。它覆盖运行手册第 5 节的全部步骤。
+`scripts/drill-mysql.sh` 是真机演练的可执行骨架：自动拉起第 4 个 MySQL cell（3310）+ 控制面库、启动 8891/8892 两个 API 进程、跑 friends smoke、执行 `shardctl init/backfill`，再以新拓扑重启两个 API 进程。真实 chat 的 `plan/copy/verify/cutover/rollback` 以及跨进程 SSE 断言仍以注释/人工核对形式保留在脚本中，需要按提示填入 chat id 后执行；它尚未把运行手册第 5 节全部自动化。
 
-**状态：脚本已编写并通过 `bash -n` 语法校验，但未在真实 MySQL 环境执行。** 撰写环境没有 Docker / MySQL / Redis（端口 3307-3311、6379 均未监听，也没有相应可执行文件），因此真机行为——尤其是 MySQL 生成列、`DATETIME` 解析、`INSERT IGNORE` 并发语义和双进程 Redis pub/sub——**尚未实测**。测试等价物是 SQLite 自动化演练（`go test ./internal/shardmigrate/...`），它验证了除 MySQL 方言差异外的全部逻辑。
+**状态：脚本已编写并通过 `bash -n` 语法校验，但未在隔离的真实 MySQL 环境完整执行。** 当前工作区已有 Docker 容器提供 MySQL 8.4（3307/3308/3309）与 Redis 7（6379），Docker CLI 位于 `/Applications/Docker.app/Contents/Resources/bin/docker`（未加入 PATH）；但这些端口被共享 compose 栈占用，而脚本 preflight 要求 3307-3311/6379 全部空闲，cleanup 会执行 `docker compose down -v`。因此不能在该栈上直接运行，否则会销毁现有容器卷。真机行为——尤其是 MySQL 生成列、`DATETIME` 解析、`INSERT IGNORE` 并发语义和双进程 Redis pub/sub——**尚未实测**。测试等价物是 SQLite 自动化演练（`go test ./internal/shardmigrate/...`），它验证了除 MySQL 方言差异外的全部逻辑。
 
-在有 Docker 的机器上执行：
+在 3307-3311/6379 空闲、且可接受 `docker compose down -v` 的隔离 Docker 环境中执行：
 
 ```bash
 bash scripts/drill-mysql.sh           # 全量演练，结束自动清理

@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
 # Real MySQL + Redis physical-cutover and dual-process smoke drill.
 #
-# This is the executable counterpart of docs/physical-shard-drill.md §5 and
-# the P1-9 verification item. It brings up a 4th MySQL cell + a control-plane
-# DB, moves ONE chat from shard 0 to the new shard with shardctl, restarts two
-# API processes against the new topology, and checks cross-process SSE plus
-# history reads. Every step is idempotent enough to re-run after a failure.
+# This is the executable skeleton for docs/physical-shard-drill.md §5 and the
+# P1-9 verification item. It brings up a 4th MySQL cell + a control-plane DB,
+# starts two API processes on the 3-cell topology, runs the friends smoke,
+# executes shardctl init/backfill, then restarts both APIs on the grown
+# topology. The real chat plan/copy/verify/cutover/rollback commands and the
+# cross-process SSE assertion remain commented/manual and require a chat id.
 #
-# REQUIREMENTS (not available in the sandbox where this was authored):
+# REQUIREMENTS:
 #   docker, python3, curl, go. Ports 3307-3311 and 6379 must be free.
-# STATUS: authored but NOT executed in a real MySQL environment; the SQLite
-#         automated drill (go test ./internal/shardmigrate/...) is the tested
-#         equivalent. Run this on a machine with Docker to validate MySQL
-#         generated-column and DATETIME behaviour end to end.
+#   WARNING: cleanup() runs `docker compose down -v`; never run this against a
+#   shared compose stack whose volumes you want to keep.
+# STATUS: authored and syntax-checked, but NOT executed end to end in an
+#         isolated real-MySQL environment. The SQLite automated drill
+#         (go test ./internal/shardmigrate/...) is the tested equivalent.
 #
 # Usage:
 #   bash scripts/drill-mysql.sh            # full drill

@@ -84,7 +84,7 @@ Mint a dev JWT with `make token` (subject defaults to `usr_publisher`).
 
 设置 `Store.Mode: domain` 后，user / task / message 三个域各自按 `Scale.Domains.<Name>.DSNs` 路由；**未声明 DSNs 的域自动继承 `Store.Cells`**，所以第一步可以把三个域都指向原来的三库，API 行为与单元化模式一致。之后每次只给一个域声明新的 DSN 列表即可逐域切分（例如消息域先迁到 6 个专用库）。详见 `docs/per-domain-sharding-plan.md` 的阶段 2。
 
-切换某个域的物理 DSN 前，用 `shardctl` 回填目录并搬迁历史数据（message/user/task 三域工具和 SQLite 自动化演练已交付，runbook 见 `docs/physical-shard-drill.md`）。物理分置后跨域写入默认为最终一致，可开启 `Store.StrictTx` 让它直接失败；资金类操作有持久化 saga 补偿，迁移窗口有冻结写护栏，在线读路径有目录缓存/副本与 `/metrics`。真机 MySQL 脚本 `scripts/drill-mysql.sh` 已写好，但作者环境缺少 Docker/MySQL/Redis，尚未实测。逐项状态见 `docs/remaining-work-backlog.md`。
+切换某个域的物理 DSN 前，用 `shardctl` 回填目录并搬迁历史数据（message/user/task 三域工具和 SQLite 自动化演练已交付，runbook 见 `docs/physical-shard-drill.md`）。物理分置后跨域写入默认为最终一致，可开启 `Store.StrictTx` 让它直接失败；资金类操作有持久化 saga 补偿，迁移窗口有冻结写护栏，在线读路径有目录缓存/副本与 `/metrics`。真机 MySQL 脚本 `scripts/drill-mysql.sh` 已写好并通过语法检查；当前共享栈占用 3307-3309/6379，且脚本要求端口空闲、`cleanup` 会 `docker compose down -v`，因此需在隔离环境执行，尚未闭环。逐项状态见 `docs/remaining-work-backlog.md`。
 
 ## 消息分片（旧模式，非默认）
 
@@ -170,7 +170,7 @@ CGO_ENABLED=0 go run . -f /tmp/taskgame-3inst.yaml
 | 阶段 | 新增位置 | 已实现 | 仍需注意 |
 |---|---|---|---|
 | P1 | `internal/notify/*`、`internal/projection/*` | `Fanout` + `RedisTransport` 跨进程 SSE 扇出；`Lease`（Redis SET NX / 进程内）+ `Bus`（Redis pub/sub / 进程内）+ `Worker`：`Recover` 每行先认领共享租约，提交后广播唤醒 hint，定时兜底 | NATS / Kafka 传输未做；Redis pub/sub 是 at-most-once，浏览器靠 45s 轮询补漏 |
-| P2 | `internal/plane/*`、`internal/store/domain/*`、`internal/compensation/*`、`internal/metrics/*` | `SQLDirectory`（含缓存与 ReplicaDSN）、`SQLUnique`、`SnowflakeIDGenerator`、三域 `DomainStore`、`AssignInTx`、`SQLFence`、资金 saga、`/metrics`；三域物理搬迁工具与 SQLite 演练已交付 | 真机 MySQL 演练脚本未实测；持续 CDC 双写未做，迁移窗口采用冻结写 |
+| P2 | `internal/plane/*`、`internal/store/domain/*`、`internal/compensation/*`、`internal/metrics/*` | `SQLDirectory`（含缓存与 ReplicaDSN）、`SQLUnique`、`SnowflakeIDGenerator`、三域 `DomainStore`、`AssignInTx`、`SQLFence`、资金 saga、`/metrics`；三域物理搬迁工具与 SQLite 演练已交付 | 真机 MySQL 演练脚本需在隔离环境闭环；持续 CDC 双写未做，迁移窗口采用冻结写 |
 | P3 | `internal/archive/*`、`internal/search/*`、`internal/webhook/*` | 归档批次执行与 checksum 校验、ES/OpenSearch 索引 + 可重放 CDC、cursor epoch、每会话最新页在线、webhook delivery body 外置与 `emit()` 去放大 | avatar_ref / payload_ref 大字段迁移未做；复杂任务过滤仍回退 store |
 | 装配 | `internal/scale/runtime.go`、`config.ScaleConf`、`svc` | `scale.Runtime` 统一生命周期，`Close` 一并释放；后台 worker 驱动投影、CDC、补偿、调度与归档 | 告警规则属于部署侧配置，仓库只暴露 `/metrics` |
 
