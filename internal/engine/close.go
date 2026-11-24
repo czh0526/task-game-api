@@ -396,7 +396,7 @@ func (e *Engine) cancelRefundAll(ctx context.Context, r store.Repos, t model.Tas
 	if t.Collaborative != nil {
 		for i := range t.Collaborative.Roles {
 			role := &t.Collaborative.Roles[i]
-			if role.Status == model.RoleSettled || role.Status == model.RoleRefunded {
+			if role.Status == model.RoleSettled || role.Status == model.RoleRefunded || role.Status == model.RoleRemoved {
 				continue
 			}
 			role.Status = model.RoleRefunded
@@ -436,6 +436,8 @@ func (e *Engine) cancelPerSeatRemainder(ctx context.Context, r store.Repos, t mo
 			seats = append(seats, unfinished{index: i, user: role.AssigneeUserID})
 		case model.RoleSubmitted, model.RoleDisputed:
 			blocked = true
+		case model.RoleRemoved:
+			// Tombstone: its share was already refunded when the seat was removed.
 		}
 	}
 	if len(seats) == 0 {
@@ -478,7 +480,7 @@ func (e *Engine) cancelPerSeatRemainder(ctx context.Context, r store.Repos, t mo
 		switch role.Status {
 		case model.RoleSettled:
 			anySettled = true
-		case model.RoleRefunded:
+		case model.RoleRefunded, model.RoleRemoved:
 		default:
 			terminal = false
 		}

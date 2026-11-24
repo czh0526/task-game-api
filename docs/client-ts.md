@@ -191,6 +191,8 @@ const settled = await publisher.confirmTask(taskId, { submission_id: ids[1] });
 
 统一结算开始时会发 `task.started`。按席拨付沿用 `task.confirmed` 和 `escrow.release`。空席退回沿用 `escrow.refund`。
 
+**删除空席 `removeSeat(taskId, roleId)`。** 发布者在任务 `open` 或 `active` 时可以删除一个空席（`open` 或 `dropped`，无执行者）；已入席、已提交、争议或已结算的席位返回 409，最后一个席位不能删除（改用 `cancelTask`）。删除会把该席位托管的份额退回发布者，删除绑定在该席位上的邀请，并发出 `escrow.refund` 与 `task.seat_removed`。被删除的席位不再出现在任务响应的 `roles` 里，也不再占容量；但它的 `share_bps` 会作为墓碑保留在内部，以保证剩余席位的结算金额仍按原始 10000 基点正确计算。任务详情页在空席行提供「删除席位」按钮。
+
 ```ts
 await publisher.createTask({
   kind: "collaborative",

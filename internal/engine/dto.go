@@ -35,6 +35,11 @@ func (e *Engine) toTask(t model.Task, acc *model.EscrowAccount, subs []model.Sub
 	if t.Collaborative != nil {
 		roles := make([]types.CollaborativeRole, 0, len(t.Collaborative.Roles))
 		for _, role := range t.Collaborative.Roles {
+			// Removed seats are tombstones kept only so share_bps still sums to
+			// 10000 for payout math. Hide them from clients.
+			if role.Status == model.RoleRemoved {
+				continue
+			}
 			item := types.CollaborativeRole{
 				Id:         role.ID,
 				Name:       role.Name,

@@ -373,6 +373,18 @@ export class TaskGameClient {
     );
   }
 
+  /** `POST /v1/tasks/{taskId}/seats/{roleId}/remove` */
+  removeSeat(taskId: string, roleId: string, options?: CallOptions): Promise<Task> {
+    return this.send(
+      "POST",
+      `${this.apiBase}/tasks/${segment(taskId, "taskId")}/seats/${segment(roleId, "roleId")}/remove`,
+      options,
+      {},
+      true,
+      "header",
+    );
+  }
+
   /** `POST /v1/webhooks` → 201 */
   createWebhook(body: WebhookCreate, options?: CallOptions): Promise<Webhook> {
     return this.send("POST", `${this.apiBase}/webhooks`, options, body, true, "header");

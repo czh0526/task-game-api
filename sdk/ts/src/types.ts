@@ -56,6 +56,7 @@ export type WebhookEventType =
   | "task.settled"
   | "task.cancelled"
   | "task.executor_replaced"
+  | "task.seat_removed"
   | "task.revision_requested"
   | "task.resolve_proposed"
   | "task.arbitrated"

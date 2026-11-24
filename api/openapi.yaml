@@ -660,6 +660,31 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/InviteList'
+  /tasks/{taskId}/seats/{roleId}/remove:
+    post:
+      tags: [Tasks]
+      summary: Remove an empty collaborative seat
+      operationId: removeSeat
+      description: |
+        Publisher only, while the task is open or active. Removes one empty (open or dropped) seat and refunds its held share to the publisher.
+        Invitations bound to that seat are deleted. A filled, submitted, disputed or settled seat returns 409; use confirm, dispute or cancel instead.
+        The seat is hidden from the returned roles and from capacity/settlement, but its share_bps is retained internally so the remaining seats' payouts stay correct.
+        Emits escrow.refund and task.seat_removed.
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - name: roleId
+          in: path
+          required: true
+          description: Id of the empty seat to remove
+          schema: { type: string }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Task after the seat was removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
   /tasks/{taskId}/dropout:
     post:
       tags: [Tasks]
@@ -1444,6 +1469,7 @@ components:
         - task.settled
         - task.cancelled
         - task.executor_replaced
+        - task.seat_removed
         - task.revision_requested
         - task.resolve_proposed
         - task.arbitrated

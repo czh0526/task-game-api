@@ -60,6 +60,10 @@ const (
 	RoleSettled   = "settled"
 	RoleRefunded  = "refunded"
 	RoleDisputed  = "disputed"
+	// RoleRemoved is a publisher-removed empty seat. It stays in Collaborative.Roles
+	// so share_bps still sums to 10000 for payout math, but is hidden from the API
+	// and excluded from capacity, settlement and invites.
+	RoleRemoved = "removed"
 
 	SubmissionCurrent    = "current"
 	SubmissionSuperseded = "superseded"
@@ -124,6 +128,7 @@ const (
 	EventTaskSettled           = "task.settled"
 	EventTaskCancelled         = "task.cancelled"
 	EventTaskExecutorReplaced  = "task.executor_replaced"
+	EventTaskSeatRemoved       = "task.seat_removed"
 	EventTaskRevisionRequested = "task.revision_requested"
 	EventTaskResolveProposed   = "task.resolve_proposed"
 	EventTaskArbitrated        = "task.arbitrated"
@@ -155,6 +160,7 @@ var WebhookEventTypes = map[string]struct{}{
 	EventTaskSettled:           {},
 	EventTaskCancelled:         {},
 	EventTaskExecutorReplaced:  {},
+	EventTaskSeatRemoved:       {},
 	EventTaskRevisionRequested: {},
 	EventTaskResolveProposed:   {},
 	EventTaskArbitrated:        {},

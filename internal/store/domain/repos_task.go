@@ -389,3 +389,9 @@ func (r *inviteRepo) ListByUser(ctx context.Context, userID, status string) ([]m
 	}
 	return out, nil
 }
+
+func (r *inviteRepo) DeleteByRole(ctx context.Context, taskID, roleID string) error {
+	return writeAcross(r.s, ctx, plane.DomainTask, func(repos store.Repos) error {
+		return repos.Invites().DeleteByRole(ctx, taskID, roleID)
+	})
+}
