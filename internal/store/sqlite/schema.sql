@@ -18,7 +18,10 @@ CREATE TABLE IF NOT EXISTS users (
     -- 720x720 JPEG set by PUT /v1/me/avatar. NULL means no avatar uploaded yet.
     avatar BLOB,
     -- RFC3339 timestamp of the last upload, used as an ETag / cache version.
-    avatar_updated_at TEXT NOT NULL DEFAULT ''
+    avatar_updated_at TEXT NOT NULL DEFAULT '',
+    -- When set, the JPEG lives in the BlobStore and avatar is empty. Reads
+    -- prefer the ref and fall back to the inline blob for legacy rows.
+    avatar_ref TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -72,6 +75,9 @@ CREATE TABLE IF NOT EXISTS submissions (
     milestone_id TEXT NOT NULL DEFAULT '',
     executor_id TEXT NOT NULL,
     payload TEXT NOT NULL,
+    -- Large payloads (>4KB) live in the BlobStore and payload keeps '{}' so
+    -- legacy readers still see valid JSON. Reads prefer the ref.
+    payload_ref TEXT NOT NULL DEFAULT '',
     note TEXT NOT NULL DEFAULT '',
     role_id TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'current',

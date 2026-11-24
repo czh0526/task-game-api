@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS users (
     -- 720x720 JPEG from PUT /v1/me/avatar. NULL means no avatar yet.
     avatar MEDIUMBLOB NULL,
     avatar_updated_at VARCHAR(40) NOT NULL DEFAULT '',
+    -- When set, the JPEG lives in the BlobStore and avatar is empty.
+    avatar_ref VARCHAR(128) NOT NULL DEFAULT '',
     PRIMARY KEY (id),
     UNIQUE KEY idx_users_email (email)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -68,6 +70,9 @@ CREATE TABLE IF NOT EXISTS submissions (
     milestone_id VARCHAR(64) NOT NULL DEFAULT '',
     executor_id VARCHAR(128) NOT NULL,
     payload MEDIUMTEXT NOT NULL,
+    -- Large payloads (>4KB) live in the BlobStore; payload keeps '{}' for
+    -- legacy readers. Reads prefer the ref.
+    payload_ref VARCHAR(128) NOT NULL DEFAULT '',
     note TEXT NOT NULL,
     role_id VARCHAR(64) NOT NULL DEFAULT '',
     status VARCHAR(32) NOT NULL DEFAULT 'current',

@@ -14,7 +14,7 @@ var UserSpec = EntitySpec{
 		{
 			Name: "users", Columns: []string{
 				"id", "balance", "integrity", "ability", "created_at", "email",
-				"password_hash", "nickname", "avatar", "avatar_updated_at",
+				"password_hash", "nickname", "avatar", "avatar_updated_at", "avatar_ref",
 			},
 			Where: "id = ?", OrderBy: "id", PK: []string{"id"}, Cleanup: true,
 		},
@@ -85,7 +85,7 @@ var TaskSpec = EntitySpec{
 		},
 		{
 			Name: "submissions", Columns: []string{
-				"id", "task_id", "milestone_id", "executor_id", "payload", "note",
+				"id", "task_id", "milestone_id", "executor_id", "payload", "payload_ref", "note",
 				"role_id", "status", "created_at",
 			},
 			Where: "task_id = ?", OrderBy: "id", PK: []string{"id"}, Cleanup: true,

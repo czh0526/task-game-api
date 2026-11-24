@@ -8,10 +8,10 @@
 
 - **已完成**：代码、自动化测试和文档均已落地；
 - **交付完成/待真机**：可执行的脚本或端点已交付但尚未做真机闭环（本清单当前已无此状态项）；
-- **部分完成**：原任务中的一部分已实现，剩余部分保留在 `internal/scale.TODOs`；
+- **部分完成**：历史口径；本清单当前已无此状态项；
 - **未完成**：尚无实现。
 
-结论：本清单已无待编码、待真机验证的条目。剩余事项只有部署侧告警接入，以及不在本清单范围内的 avatar/payload 大字段迁移。
+结论：本清单已无待编码、待真机验证的条目。avatar/payload 大字段外置已完成（存量迁移需维护窗口）；剩余事项只有部署侧告警接入。
 
 ## 优先级定义
 
@@ -36,7 +36,7 @@
 | 8 | `StrictTx` 配置开关暴露 | 一 | P2 | 已完成 | `Store.StrictTx` |
 | 9 | 客户端 rowid/seq 游标同步失效 | 一 | P2 | 已完成 | cursor epoch + legacy 兼容 |
 | 10 | archive 批次执行（复制→校验→删源） | 二 | P2 | 已完成 | 含 checksum 校验 |
-| 11 | `BlobStore` 外置头像/payload/投递正文 | 二 | P3 | 部分完成 | 投递正文已做；avatar/payload 未做 |
+| 11 | `BlobStore` 外置头像/payload/投递正文 | 二 | P3 | 已完成 | 三类大字段均已外置；存量迁移需维护窗口 |
 | 12 | `emit()` 去放大（一份正文 + N 指针） | 二 | P3 | 已完成 | 依赖 11 的投递正文外置 |
 | 13 | Elasticsearch/OpenSearch 索引 + CDC 投影器 | 二 | P2 | 已完成 | 简单查询走索引，复杂查询回退 store |
 | 14 | 每会话保留最新页在线，只归档旧页 | 二 | P2 | 已完成 | 依赖 10 |
@@ -105,9 +105,9 @@
 
 ---
 
-## 二、P3 规模骨架（已生产化，仅大字段迁移待做）
+## 二、P3 规模骨架（已生产化）
 
-原章节按历史语境保留；截至 2026-11-24，除 avatar/payload 大字段迁移外，本节条目均已由生产实现替换，状态如下。
+原章节按历史语境保留；截至 2026-11-24，本节条目均已由生产实现替换，状态如下。
 
 ### 10. archive 批次执行 — P2
 
@@ -119,7 +119,7 @@
 
 - 做什么：外置头像、payload、投递正文。
 - 验收：在线库大字段变为小引用，读取路径仍可用。
-- **状态：部分完成。** `FileBlobStore` 与 `internal/archive/externalize.go` 已把 webhook delivery body 外置为 `body_ref`，dispatcher 按 ref 读取，`shardctl externalize-bodies` 可迁移存量。用户头像与 submission payload 的 `*_ref` schema 迁移仍未做，保留在 `internal/scale.TODOs`，不伪称完成。
+- **状态：已完成。** `FileBlobStore` 与 `internal/archive/externalize.go` 已把 webhook delivery body 外置为 `body_ref`，dispatcher 按 ref 读取，`shardctl externalize-bodies` 可迁移存量。用户头像与 >4KB submission payload 也已落地 `avatar_ref` / `payload_ref`：SQLite/MySQL schema 与升级迁移已加列，`sqlstore` 写入按 ref 外置、读取优先 ref 并回退 inline，`shardctl externalize-avatars` / `externalize-payloads` 可幂等迁移存量。`scale.Runtime` 只在 `Scale.Archive.Enabled=true` 时注入 BlobStore，其余情况保持 inline 兼容。存量迁移必须在所有 API 进程升级到 ref-aware 版本后的维护窗口执行。
 
 ### 12. `emit()` 去放大 — P3
 
@@ -165,7 +165,7 @@
 
 - 做什么：让 `internal/scale.TODOs` 与实现一致，并把本清单逐项归档。
 - 验收：代码内 TODO 不再误导后续开发。
-- **状态：已完成。** `internal/scale.TODOs` 现仅保留 avatar_ref / payload_ref 大字段迁移；本清单、`docs/per-domain-sharding-plan.md`、`docs/physical-shard-drill.md` 与 README 已同步到当前状态。
+- **状态：已完成。** `internal/scale.TODOs` 现已清空；本清单、`docs/per-domain-sharding-plan.md`、`docs/physical-shard-drill.md` 与 README 已同步到当前状态。
 
 ---
 
@@ -173,7 +173,7 @@
 
 1. **真机演练结果留档**：15 与 16 已在 2026-11-24 闭环；如需复跑，先确保 3307-3311/6379 空闲、Docker CLI 在 PATH 中，并接受脚本 `cleanup` 的 `docker compose down -v`。本次执行使用 `--keep`，随后按容器名精确清理，保留了 3306 上的既有 MySQL。
 2. **部署环境**：抓取 `/metrics` 并配置目录命中率下降、跨域事务数非零、冻结写异常的告警；这一步闭环后，17 的验收才算完整。
-3. **后续 P3 候选**：avatar_ref / payload_ref 的 schema 与读取路径改造（见 `internal/scale.TODOs`），不影响当前分片上线。
+3. **大字段存量迁移**：schema、读写路径与 `shardctl` 命令已完成；上线时需在维护窗口跑 `externalize-avatars` / `externalize-payloads`，并确认所有 API 进程已升级到 ref-aware 二进制。
 4. **发布动作**：PR #39 合并到 main；当前分支已同步到 `origin/feat/per-domain-sharding`。
 
 ## 建议执行顺序（更新后）
@@ -181,6 +181,6 @@
 1. 代码侧 P0/P1/P2/P3 均已落地，按上方“状态”列验收，不再有编码前置路径。
 2. 真机闭环：15 → 16 已完成，复跑时仍需使用空闲端口的 Docker/MySQL/Redis 环境。
 3. 上线闭环：17 的告警规则；然后合并 PR #39。
-4. 可选优化：avatar_ref / payload_ref 大字段迁移。
+4. 可选优化：无；avatar_ref / payload_ref 大字段迁移已完成，存量数据按维护窗口命令处理。
 
 关键路径已收尾：功能、自动化验证与真机 cutover/rollback/SSE 均已完成，下一步只差部署侧监控告警与 PR #39 合并。

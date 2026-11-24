@@ -134,6 +134,10 @@ func main() {
 		err = runCursorBump(ctx, os.Args[2:])
 	case "externalize-bodies":
 		err = runExternalizeBodies(ctx, os.Args[2:])
+	case "externalize-avatars":
+		err = runExternalizeAvatars(ctx, os.Args[2:])
+	case "externalize-payloads":
+		err = runExternalizePayloads(ctx, os.Args[2:])
 	case "archive-run":
 		err = runArchive(ctx, os.Args[2:])
 	case "archive-restore":
@@ -169,9 +173,11 @@ Commands:
   fence-unlock  release a frozen key
   fence-list    list active maintenance fences
   cursor-bump        invalidate message cursors for chats after a rowid-rebuilding cutover
-  externalize-bodies move inline webhook bodies to the blob tier (one blob per event)
-  archive-run        archive cold rows from a table into blobs, then delete online
-  archive-restore restore an archived blob back into a table
+  externalize-bodies   move inline webhook bodies to the blob tier (one blob per event)
+  externalize-avatars  move inline avatar JPEGs to the blob tier (MAINTENANCE WINDOW)
+  externalize-payloads move large inline submission payloads to the blob tier (MAINTENANCE WINDOW)
+  archive-run          archive cold rows from a table into blobs, then delete online
+  archive-restore      restore an archived blob back into a table
 
 plan/copy/verify/cutover/cleanup/rollback all accept -entity=message|user|task
 (default message). For user/task use -keys with user ids / task ids; a chat
@@ -352,6 +358,70 @@ func runExternalizeBodies(ctx context.Context, args []string) error {
 		return err
 	}
 	fmt.Printf("scanned %d rows: stored %d distinct bodies (%d bytes), rewrote %d rows\n",
+		res.Scanned, res.Blobs, res.Bytes, res.Moved)
+	return nil
+}
+
+// runExternalizeAvatars moves inline avatars to the blob tier. Run only after
+// every API process uses the ref-aware binary, in a maintenance window.
+func runExternalizeAvatars(ctx context.Context, args []string) error {
+	o, err := parse("externalize-avatars", args)
+	if err != nil {
+		return err
+	}
+	if err := o.require("source", "blob-dir"); err != nil {
+		return err
+	}
+	blobs, err := archive.NewFileBlobStore(o.archiveDir)
+	if err != nil {
+		return err
+	}
+	db, err := openArchiveDB(ctx, o, o.source)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	limit := o.limit
+	if limit <= 0 {
+		limit = 500
+	}
+	res, err := archive.ExternalizeAvatars(ctx, db, blobs, limit)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("scanned %d avatars: stored %d blobs (%d bytes), rewrote %d rows\n",
+		res.Scanned, res.Blobs, res.Bytes, res.Moved)
+	return nil
+}
+
+// runExternalizePayloads moves inline payloads above 4KB to the blob tier,
+// using the same threshold the write path uses so read/write agree.
+func runExternalizePayloads(ctx context.Context, args []string) error {
+	o, err := parse("externalize-payloads", args)
+	if err != nil {
+		return err
+	}
+	if err := o.require("source", "blob-dir"); err != nil {
+		return err
+	}
+	blobs, err := archive.NewFileBlobStore(o.archiveDir)
+	if err != nil {
+		return err
+	}
+	db, err := openArchiveDB(ctx, o, o.source)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	limit := o.limit
+	if limit <= 0 {
+		limit = 500
+	}
+	res, err := archive.ExternalizeSubmissionPayloads(ctx, db, blobs, limit, archive.LargePayloadThreshold)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("scanned %d payloads: stored %d blobs (%d bytes), rewrote %d rows\n",
 		res.Scanned, res.Blobs, res.Bytes, res.Moved)
 	return nil
 }

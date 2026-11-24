@@ -96,3 +96,164 @@ func ExternalizeDeliveryBodies(ctx context.Context, db *sql.DB, blobs BlobStore,
 	}
 	return res, nil
 }
+
+// LargePayloadThreshold mirrors sqlstore.LargePayloadThreshold. Duplicated as
+// a literal so the archive package stays independent of the store layer; the
+// shardctl command passes this value explicitly.
+const LargePayloadThreshold = 4 << 10 // 4KB
+
+// ExternalizeAvatars moves legacy inline avatar JPEGs into the BlobStore and
+// records an avatar_ref, clearing the inline column. It is idempotent: rows
+// with a non-empty ref are skipped. Blobs are stored before the SQL update, so
+// a failure never leaves a ref pointing at missing data.
+//
+// Run this ONLY in a maintenance window after every API process has been
+// upgraded to the ref-aware binary: an older binary only reads the inline
+// column and would see "no avatar" once it is cleared.
+func ExternalizeAvatars(ctx context.Context, db *sql.DB, blobs BlobStore, limit int) (ExternalizeResult, error) {
+	var res ExternalizeResult
+	if db == nil || blobs == nil {
+		return res, fmt.Errorf("archive: externalize needs a database and a blob store")
+	}
+	if limit <= 0 {
+		limit = 500
+	}
+	rows, err := db.QueryContext(ctx, `
+		SELECT id, avatar FROM users
+		WHERE avatar_ref = '' AND avatar IS NOT NULL AND length(avatar) > 0 LIMIT ?`, limit)
+	if err != nil {
+		return res, fmt.Errorf("archive: scan avatars: %w", err)
+	}
+	type item struct {
+		id   string
+		data []byte
+	}
+	var items []item
+	for rows.Next() {
+		var it item
+		if err := rows.Scan(&it.id, &it.data); err != nil {
+			_ = rows.Close()
+			return res, err
+		}
+		items = append(items, it)
+	}
+	_ = rows.Close()
+	if err := rows.Err(); err != nil {
+		return res, err
+	}
+	res.Scanned = len(items)
+	if len(items) == 0 {
+		return res, nil
+	}
+
+	refs := make([]string, len(items))
+	for i, it := range items {
+		ref, err := blobs.Put(ctx, "avatar:"+it.id, it.data)
+		if err != nil {
+			return res, fmt.Errorf("archive: store avatar: %w", err)
+		}
+		refs[i] = ref
+		res.Blobs++
+		res.Bytes += int64(len(it.data))
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return res, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	stmt, err := tx.PrepareContext(ctx,
+		`UPDATE users SET avatar_ref = ?, avatar = NULL WHERE id = ? AND avatar_ref = ''`)
+	if err != nil {
+		return res, err
+	}
+	for i, it := range items {
+		r, err := stmt.ExecContext(ctx, refs[i], it.id)
+		if err != nil {
+			_ = stmt.Close()
+			return res, err
+		}
+		n, _ := r.RowsAffected()
+		res.Moved += int(n)
+	}
+	_ = stmt.Close()
+	if err := tx.Commit(); err != nil {
+		return res, err
+	}
+	return res, nil
+}
+
+// ExternalizeSubmissionPayloads moves legacy inline payloads larger than the
+// threshold into the BlobStore, leaving '{}' inline so older readers still see
+// valid JSON. Idempotent like ExternalizeAvatars; also a maintenance-window
+// operation for the same binary-mix reason.
+func ExternalizeSubmissionPayloads(ctx context.Context, db *sql.DB, blobs BlobStore, limit int, threshold int) (ExternalizeResult, error) {
+	var res ExternalizeResult
+	if db == nil || blobs == nil {
+		return res, fmt.Errorf("archive: externalize needs a database and a blob store")
+	}
+	if limit <= 0 {
+		limit = 500
+	}
+	if threshold <= 0 {
+		threshold = LargePayloadThreshold
+	}
+	rows, err := db.QueryContext(ctx, `
+		SELECT id, payload FROM submissions
+		WHERE payload_ref = '' AND length(payload) > ? LIMIT ?`, threshold, limit)
+	if err != nil {
+		return res, fmt.Errorf("archive: scan submission payloads: %w", err)
+	}
+	type item struct{ id, payload string }
+	var items []item
+	for rows.Next() {
+		var it item
+		if err := rows.Scan(&it.id, &it.payload); err != nil {
+			_ = rows.Close()
+			return res, err
+		}
+		items = append(items, it)
+	}
+	_ = rows.Close()
+	if err := rows.Err(); err != nil {
+		return res, err
+	}
+	res.Scanned = len(items)
+	if len(items) == 0 {
+		return res, nil
+	}
+
+	refs := make([]string, len(items))
+	for i, it := range items {
+		ref, err := blobs.Put(ctx, "submission:"+it.id, []byte(it.payload))
+		if err != nil {
+			return res, fmt.Errorf("archive: store submission payload: %w", err)
+		}
+		refs[i] = ref
+		res.Blobs++
+		res.Bytes += int64(len(it.payload))
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return res, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	stmt, err := tx.PrepareContext(ctx,
+		`UPDATE submissions SET payload_ref = ?, payload = '{}' WHERE id = ? AND payload_ref = ''`)
+	if err != nil {
+		return res, err
+	}
+	for i, it := range items {
+		r, err := stmt.ExecContext(ctx, refs[i], it.id)
+		if err != nil {
+			_ = stmt.Close()
+			return res, err
+		}
+		n, _ := r.RowsAffected()
+		res.Moved += int(n)
+	}
+	_ = stmt.Close()
+	if err := tx.Commit(); err != nil {
+		return res, err
+	}
+	return res, nil
+}

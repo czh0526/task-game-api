@@ -34,6 +34,17 @@ type DB struct {
 
 	// project is a test seam: nil means the real shard insert + mark step.
 	project func(ctx context.Context, it pendingMessage) error
+
+	// blobs, when set, holds avatar JPEGs and large submission payloads
+	// outside the online database. Nil keeps the legacy inline behavior.
+	blobs LargeValueStore
+}
+
+// SetLargeValues enables large-field externalization. Callers pass the shared
+// archive.BlobStore from scale.Runtime; nil is a no-op that preserves the old
+// inline-storage behavior. It must be called before serving requests.
+func (d *DB) SetLargeValues(blobs LargeValueStore) {
+	d.blobs = blobs
 }
 
 // SetOutboxCoordinator enables shared-lease projection. Without it (the
@@ -70,10 +81,12 @@ func (d *DB) Close() error {
 
 func (d *DB) Ping(ctx context.Context) error { return d.db.PingContext(ctx) }
 
-func (d *DB) Users() store.UserRepo { return &userRepo{q: d.db, initial: d.initial, d: d.dialect} }
+func (d *DB) Users() store.UserRepo {
+	return &userRepo{q: d.db, initial: d.initial, d: d.dialect, blobs: d.blobs}
+}
 func (d *DB) Tasks() store.TaskRepo { return &taskRepo{q: d.db, d: d.dialect} }
 func (d *DB) Submissions() store.SubmissionRepo {
-	return &submissionRepo{q: d.db}
+	return &submissionRepo{q: d.db, blobs: d.blobs}
 }
 func (d *DB) Escrow() store.EscrowRepo       { return &escrowRepo{q: d.db, d: d.dialect} }
 func (d *DB) Webhooks() store.WebhookRepo    { return &webhookRepo{q: d.db} }
@@ -107,7 +120,7 @@ func (d *DB) inTx(ctx context.Context, fn func(ctx context.Context, r store.Repo
 	if d.shards != nil {
 		buf = &txBuffer{}
 	}
-	r := &txRepos{q: tx, initial: d.initial, d: d.dialect, shards: d.shards, buf: buf}
+	r := &txRepos{q: tx, initial: d.initial, d: d.dialect, shards: d.shards, buf: buf, blobs: d.blobs}
 	if err := fn(ctx, r); err != nil {
 		_ = tx.Rollback()
 		return err
@@ -149,6 +162,7 @@ type txRepos struct {
 	d       Dialect
 	shards  *shard.Set
 	buf     *txBuffer
+	blobs   LargeValueStore
 }
 
 // SQLTxHandle exposes the live transaction so the domain store can write a
@@ -163,10 +177,12 @@ func (t *txRepos) SQLTxHandle() (any, string) {
 	return tx, t.d.Name()
 }
 
-func (t *txRepos) Users() store.UserRepo { return &userRepo{q: t.q, initial: t.initial, d: t.d} }
+func (t *txRepos) Users() store.UserRepo {
+	return &userRepo{q: t.q, initial: t.initial, d: t.d, blobs: t.blobs}
+}
 func (t *txRepos) Tasks() store.TaskRepo { return &taskRepo{q: t.q, d: t.d} }
 func (t *txRepos) Submissions() store.SubmissionRepo {
-	return &submissionRepo{q: t.q}
+	return &submissionRepo{q: t.q, blobs: t.blobs}
 }
 func (t *txRepos) Escrow() store.EscrowRepo       { return &escrowRepo{q: t.q, d: t.d} }
 func (t *txRepos) Webhooks() store.WebhookRepo    { return &webhookRepo{q: t.q} }
