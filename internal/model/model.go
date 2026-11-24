@@ -383,11 +383,15 @@ type Webhook struct {
 }
 
 type Delivery struct {
-	ID         string
-	WebhookID  string
-	EventID    string
-	EventType  string
-	Body       string
+	ID        string
+	WebhookID string
+	EventID   string
+	EventType string
+	Body      string
+	// BodyRef, when set, is a content-addressed key in the BlobStore holding
+	// the shared event body. Body is then empty and readers must fetch the
+	// blob. It de-amplifies one event into N small delivery pointers.
+	BodyRef    string
 	Status     string
 	Attempts   int
 	LastError  string

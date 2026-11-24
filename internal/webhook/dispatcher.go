@@ -24,11 +24,20 @@ const (
 	HeaderEventID   = "X-Event-Id"
 )
 
+// EventBodyStore reads a de-amplified event body by reference. archive.BlobStore
+// satisfies it; keeping the interface here avoids depending on archive.
+type EventBodyStore interface {
+	Get(ctx context.Context, ref string) ([]byte, error)
+}
+
 // Config controls the delivery worker.
 type Config struct {
 	Mode        string
 	Timeout     time.Duration
 	MaxAttempts int
+	// BodyStore resolves delivery BodyRef pointers. Optional: when absent,
+	// deliveries must carry the inline Body (legacy behaviour).
+	BodyStore EventBodyStore
 }
 
 // Dispatcher drains pending deliveries.
@@ -93,6 +102,20 @@ func (d *Dispatcher) DeliverPending(ctx context.Context) error {
 
 func (d *Dispatcher) deliverOne(ctx context.Context, row model.Delivery) {
 	body := []byte(row.Body)
+	if row.BodyRef != "" {
+		if d.cfg.BodyStore == nil {
+			// A pointer we cannot resolve is a delivery failure, not a reason
+			// to POST an empty body. The lease expiry will retry it elsewhere.
+			d.finish(ctx, row, "delivery references a body blob but no BodyStore is configured")
+			return
+		}
+		stored, err := d.cfg.BodyStore.Get(ctx, row.BodyRef)
+		if err != nil {
+			d.finish(ctx, row, "read event body: "+err.Error())
+			return
+		}
+		body = stored
+	}
 	sig := Sign(row.Secret, body)
 	if d.cfg.Mode == "log" {
 		logx.WithContext(ctx).Infof("webhook %s event %s type %s signature %s (log mode)", row.WebhookID, row.EventID, row.EventType, sig)

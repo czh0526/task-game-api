@@ -121,6 +121,11 @@ func NewServiceContext(c config.Config) (*ServiceContext, error) {
 	if rt != nil && rt.CursorEpoch != nil {
 		engineOpts = append(engineOpts, engine.WithCursorEpoch(rt.CursorEpoch))
 	}
+	// When a BlobStore exists, one webhook event body is stored per event and
+	// deliveries keep only a reference (de-amplification).
+	if rt != nil && rt.Blobs != nil {
+		engineOpts = append(engineOpts, engine.WithEventBodyStore(rt.Blobs))
+	}
 	// P0: when a persistent control plane is enabled, route registration and
 	// login through global_unique(email -> user_id) + Snowflake ids. When it
 	// is off, account.New keeps the original behavior.
@@ -140,6 +145,7 @@ func NewServiceContext(c config.Config) (*ServiceContext, error) {
 			Mode:        c.Webhook.Mode,
 			Timeout:     c.Webhook.Timeout,
 			MaxAttempts: c.Webhook.MaxAttempts,
+			BodyStore:   blobStoreOf(rt),
 		}),
 	}
 	// P0: attach the fund-hold handler so the saga reconciler can replay or
@@ -190,6 +196,15 @@ func (s storeTaskLister) ListSweep(ctx context.Context, afterCreated, afterID st
 		})
 	}
 	return out, nil
+}
+
+// blobStoreOf exposes the shared BlobStore to the dispatcher as an event body
+// reader, or nil when archival (and therefore the blob tier) is disabled.
+func blobStoreOf(rt *scale.Runtime) webhook.EventBodyStore {
+	if rt == nil || rt.Blobs == nil {
+		return nil
+	}
+	return rt.Blobs
 }
 
 func openStore(c config.Config, rt *scale.Runtime) (store.Store, error) {

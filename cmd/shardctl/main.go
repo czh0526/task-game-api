@@ -132,6 +132,8 @@ func main() {
 		err = runFenceList(ctx, os.Args[2:])
 	case "cursor-bump":
 		err = runCursorBump(ctx, os.Args[2:])
+	case "externalize-bodies":
+		err = runExternalizeBodies(ctx, os.Args[2:])
 	case "archive-run":
 		err = runArchive(ctx, os.Args[2:])
 	case "archive-restore":
@@ -166,8 +168,9 @@ Commands:
   fence-lock    freeze a key (or a whole domain with -key '*') during migration
   fence-unlock  release a frozen key
   fence-list    list active maintenance fences
-  cursor-bump   invalidate message cursors for chats after a rowid-rebuilding cutover
-  archive-run   archive cold rows from a table into blobs, then delete online
+  cursor-bump        invalidate message cursors for chats after a rowid-rebuilding cutover
+  externalize-bodies move inline webhook bodies to the blob tier (one blob per event)
+  archive-run        archive cold rows from a table into blobs, then delete online
   archive-restore restore an archived blob back into a table
 
 plan/copy/verify/cutover/cleanup/rollback all accept -entity=message|user|task
@@ -319,6 +322,38 @@ func openArchiveDB(ctx context.Context, o *options, dsn string) (*sql.DB, error)
 		return nil, err
 	}
 	return db, nil
+}
+
+// runExternalizeBodies collapses legacy inline webhook delivery bodies into
+// one content-addressed blob per event, leaving a small body_ref on each row.
+func runExternalizeBodies(ctx context.Context, args []string) error {
+	o, err := parse("externalize-bodies", args)
+	if err != nil {
+		return err
+	}
+	if err := o.require("source", "blob-dir"); err != nil {
+		return err
+	}
+	blobs, err := archive.NewFileBlobStore(o.archiveDir)
+	if err != nil {
+		return err
+	}
+	db, err := openArchiveDB(ctx, o, o.source)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	limit := o.limit
+	if limit <= 0 {
+		limit = 500
+	}
+	res, err := archive.ExternalizeDeliveryBodies(ctx, db, blobs, limit)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("scanned %d rows: stored %d distinct bodies (%d bytes), rewrote %d rows\n",
+		res.Scanned, res.Blobs, res.Bytes, res.Moved)
+	return nil
 }
 
 func runArchive(ctx context.Context, args []string) error {

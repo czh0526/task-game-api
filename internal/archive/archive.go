@@ -92,8 +92,10 @@ func (f *FileBlobStore) path(ref string) (string, error) {
 	return filepath.Join(f.Dir, hexPart[:2], hexPart), nil
 }
 
-// LargeColumn is a column that should become a ref. Adding the RefColumn to
-// the schema is a migration TODO; the online row then keeps only a small ref.
+// LargeColumn is a column that should become a ref. The webhook_deliveries
+// body_ref column is now in both dialects' schemas and migrations; the engine
+// writes it via WithEventBodyStore and ExternalizeDeliveryBodies back-fills
+// legacy inline rows. avatar/payload ref columns remain a future migration.
 type LargeColumn struct {
 	Table     string
 	Column    string
@@ -131,10 +133,11 @@ var DefaultPolicies = []RetentionPolicy{
 		GroupColumn: "chat_id", KeepPerGroup: 50, Note: "per shard; keep each chat's newest page online"},
 }
 
-// DeliveryBody is the shape of a de-amplified webhook delivery. Today emit()
-// writes one full body row per subscriber (N x amplification). The target
-// shape stores the body once and keeps only (delivery_id, body_ref, state).
-// TODO: refactor emit() and the dispatcher to use it.
+// DeliveryBody is the shape of a de-amplified webhook delivery: the body is
+// stored once and each delivery keeps only (delivery_id, body_ref, state).
+// emit() writes the ref (engine.WithEventBodyStore) and the dispatcher resolves
+// it (webhook.Config.BodyStore); ExternalizeDeliveryBodies back-fills legacy
+// inline rows. Both paths fall back to inline bodies when no blob tier is set.
 type DeliveryBody struct {
 	BodyRef string
 	Bytes   int64

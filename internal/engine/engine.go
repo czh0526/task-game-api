@@ -59,6 +59,20 @@ type Engine struct {
 	cdc         TaskChangeRecorder        // optional search-index change recorder
 	taskIndex   search.TaskIndex          // optional read-side index for simple listings
 	cursorEpoch CursorEpochSource         // optional per-chat generation for cursor invalidation
+	bodyStore   EventBodyStore            // optional shared store for webhook event bodies
+}
+
+// EventBodyStore stores one copy of a webhook event body so N deliveries keep
+// only a small reference. archive.BlobStore satisfies it.
+type EventBodyStore interface {
+	Put(ctx context.Context, key string, data []byte) (ref string, err error)
+	Get(ctx context.Context, ref string) ([]byte, error)
+}
+
+// WithEventBodyStore enables de-amplified deliveries: one body blob per event,
+// N delivery rows holding only its reference.
+func WithEventBodyStore(s EventBodyStore) Option {
+	return func(e *Engine) { e.bodyStore = s }
 }
 
 // CursorEpochSource reports a chat's cursor generation. A physical cutover
@@ -240,13 +254,30 @@ func (e *Engine) emit(ctx context.Context, r store.Repos, owners []string, event
 		return err
 	}
 	eventID, _ := env["id"].(string)
+	// De-amplification: store the body once and let each delivery hold only a
+	// small content-addressed reference. The blob write happens before any
+	// delivery row, so a ref is never persisted without its body. Without a
+	// store, fall back to the legacy one-full-body-per-delivery behaviour.
+	bodyRef := ""
+	if e.bodyStore != nil {
+		ref, err := e.bodyStore.Put(ctx, "webhook-event:"+eventID, body)
+		if err != nil {
+			return err
+		}
+		bodyRef = ref
+	}
 	for _, h := range matched {
+		deliveryBody := string(body)
+		if bodyRef != "" {
+			deliveryBody = ""
+		}
 		if err := r.Deliveries().Insert(ctx, model.Delivery{
 			ID:        id.New("dlv_"),
 			WebhookID: h.ID,
 			EventID:   eventID,
 			EventType: eventType,
-			Body:      string(body),
+			Body:      deliveryBody,
+			BodyRef:   bodyRef,
 			Status:    model.DeliveryPending,
 			Attempts:  0,
 			CreatedAt: now,

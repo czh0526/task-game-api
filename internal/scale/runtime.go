@@ -37,10 +37,12 @@ const defaultSearchIndex = "taskgame_tasks"
 // DONE as of the productionization pass: per-domain stores, global_unique +
 // Snowflake, archive execution, and the ES/OpenSearch index with a CDC
 // projector (see internal/search). NATS/Kafka remain optional transports.
+// DONE in the productionization pass: webhook delivery bodies are externalized
+// and emit() de-amplified (one body + N refs); messages keep the newest page
+// online. Remaining large-column ref migrations (avatar / submission payload)
+// are listed below.
 var TODOs = []string{
-	"P3: externalize avatar / payload / delivery body into archive.BlobStore",
-	"P3: de-amplify emit() so one event stores one body plus N small pointers",
-	"P3: keep the newest page of every chat online; archive only older pages",
+	"P3: add avatar_ref / payload_ref migrations for users avatars and submission payloads",
 }
 
 // Runtime is the assembled skeleton. Every field may be nil when its feature

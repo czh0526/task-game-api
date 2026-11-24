@@ -909,15 +909,15 @@ type deliveryRepo struct{ q querier }
 
 func (r *deliveryRepo) Insert(ctx context.Context, d model.Delivery) error {
 	_, err := r.q.ExecContext(ctx, `
-		INSERT INTO webhook_deliveries (id, webhook_id, event_id, event_type, body, status, attempts, last_error, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		d.ID, d.WebhookID, d.EventID, d.EventType, d.Body, d.Status, d.Attempts, d.LastError, model.FormatTime(d.CreatedAt))
+		INSERT INTO webhook_deliveries (id, webhook_id, event_id, event_type, body, body_ref, status, attempts, last_error, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		d.ID, d.WebhookID, d.EventID, d.EventType, d.Body, d.BodyRef, d.Status, d.Attempts, d.LastError, model.FormatTime(d.CreatedAt))
 	return err
 }
 
 func (r *deliveryRepo) ListPending(ctx context.Context, maxAttempts, limit int) ([]model.Delivery, error) {
 	rows, err := r.q.QueryContext(ctx, `
-		SELECT d.id, d.webhook_id, d.event_id, d.event_type, d.body, d.status, d.attempts, d.last_error, d.created_at, w.url, w.secret
+		SELECT d.id, d.webhook_id, d.event_id, d.event_type, d.body, d.body_ref, d.status, d.attempts, d.last_error, d.created_at, w.url, w.secret
 		FROM webhook_deliveries d
 		JOIN webhooks w ON w.id = d.webhook_id
 		WHERE d.status = ? AND d.attempts < ?
@@ -930,7 +930,7 @@ func (r *deliveryRepo) ListPending(ctx context.Context, maxAttempts, limit int) 
 	for rows.Next() {
 		var d model.Delivery
 		var created string
-		if err := rows.Scan(&d.ID, &d.WebhookID, &d.EventID, &d.EventType, &d.Body, &d.Status, &d.Attempts, &d.LastError, &created, &d.URL, &d.Secret); err != nil {
+		if err := rows.Scan(&d.ID, &d.WebhookID, &d.EventID, &d.EventType, &d.Body, &d.BodyRef, &d.Status, &d.Attempts, &d.LastError, &created, &d.URL, &d.Secret); err != nil {
 			return nil, err
 		}
 		d.CreatedAt, err = model.ParseTime(created)
@@ -1000,11 +1000,11 @@ func (r *deliveryRepo) byToken(ctx context.Context, token string) (model.Deliver
 	var d model.Delivery
 	var created string
 	err := r.q.QueryRowContext(ctx, `
-		SELECT d.id, d.webhook_id, d.event_id, d.event_type, d.body, d.status, d.attempts, d.last_error, d.created_at, d.claim_token, w.url, w.secret
+		SELECT d.id, d.webhook_id, d.event_id, d.event_type, d.body, d.body_ref, d.status, d.attempts, d.last_error, d.created_at, d.claim_token, w.url, w.secret
 		FROM webhook_deliveries d
 		JOIN webhooks w ON w.id = d.webhook_id
 		WHERE d.claim_token = ?`, token).
-		Scan(&d.ID, &d.WebhookID, &d.EventID, &d.EventType, &d.Body, &d.Status, &d.Attempts, &d.LastError, &created, &d.ClaimToken, &d.URL, &d.Secret)
+		Scan(&d.ID, &d.WebhookID, &d.EventID, &d.EventType, &d.Body, &d.BodyRef, &d.Status, &d.Attempts, &d.LastError, &created, &d.ClaimToken, &d.URL, &d.Secret)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Delivery{}, store.ErrNotFound
 	}
