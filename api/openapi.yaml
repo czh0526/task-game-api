@@ -633,6 +633,7 @@ paths:
       operationId: createTaskInvites
       description: |
         Publisher only, while the task still has open capacity (exclusive open, competitive free slots, or a collaborative open seat, including a seat reopened by dropout).
+        For collaborative tasks, role_id binds the invitation to one open seat and accepting it fills that seat automatically. When role_id is omitted the acceptor picks any open seat.
         For specific policy the ids are appended to assignee_policy.user_ids. Emits task.invited.
         A declined invite can be re-opened by inviting that user again.
       parameters:
@@ -649,6 +650,9 @@ paths:
                 user_ids:
                   type: array
                   items: { type: string }
+                role_id:
+                  type: string
+                  description: Collaborative seat this invitation is for. Must be an open role id.
       responses:
         '200':
           description: Invites on the task after the call
@@ -1774,6 +1778,7 @@ components:
         id: { type: string }
         task_id: { type: string }
         user_id: { type: string }
+        role_id: { type: string, description: Bound collaborative seat, empty for task-level invites }
         status: { type: string, enum: [pending, accepted, declined] }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }

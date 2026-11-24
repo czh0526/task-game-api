@@ -22,9 +22,11 @@ import { FriendPicker, appendUserId } from "../friends";
 import { SenderName, UserRef } from "../names";
 import { href } from "../route";
 import {
+  canInviteSeat,
   confirmTaskBody,
   currentSubmissionsForMilestone,
   inReviewMilestoneSubmissionId,
+  inviteUserIds,
   milestoneConfirmBlock,
   milestoneNextStep,
   milestoneSubmitBlock,
@@ -50,6 +52,7 @@ export function TaskDetail({ id }: { id: string }) {
   const [reviseReason, setReviseReason] = useState("");
   const [outcome, setOutcome] = useState<ResolutionOutcome>("pay_executor");
   const [inviteUser, setInviteUser] = useState("");
+  const [seatInviteUsers, setSeatInviteUsers] = useState<Record<string, string>>({});
   const [chatText, setChatText] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [chatNote, setChatNote] = useState<string | null>(null);
@@ -176,6 +179,28 @@ export function TaskDetail({ id }: { id: string }) {
 
   const me = settings.userId;
   const mode = settlementMode(task);
+  const taskId = task.id;
+
+  async function inviteSeat(roleId: string) {
+    const ids = inviteUserIds(seatInviteUsers[roleId] ?? "");
+    if (ids.length === 0 || !client) return;
+    setPending(`seat-invite-${roleId}`);
+    setError(null);
+    try {
+      await client.createTaskInvites(
+        taskId,
+        { user_ids: ids, role_id: roleId },
+        { idempotencyKey: createIdempotencyKey(`invite-${roleId}`) },
+      );
+      setSeatInviteUsers((current) => ({ ...current, [roleId]: "" }));
+      setTask(await client.getTask(taskId));
+    } catch (err) {
+      setError(formatError(err));
+    } finally {
+      setPending(null);
+    }
+  }
+
   const pendingMilestones = (task.payment.milestones ?? []).filter((milestone) => (milestone.status ?? "pending") === "pending");
   const submittedMilestones = (task.payment.milestones ?? []).filter((milestone) => milestone.status === "submitted");
   const submitStageId = pendingMilestones.some((milestone) => milestone.id === submitMilestoneId)
@@ -352,7 +377,7 @@ export function TaskDetail({ id }: { id: string }) {
         <section className="card">
           <h2>席位 roles</h2>
           <p className="hint">
-            表里是服务端展开后的席位。share_bps 是这一席结算用的基点。接受时用席位 id。
+            表里是服务端展开后的席位。share_bps 是这一席结算用的基点。空席可以直接邀请指定用户，邀请会绑定该席位；接受后自动落到这一席。
             {mode === "per_seat"
               ? " 分别结算：拨付和退回在这一席上。已提交的席位可以确认拨付；空席或已退出的席位可以把份额退回发布者。全部席位拨付或退回后任务才 settled。"
               : " 统一结算：坐满后由发布者开始。每一席都提交、且没有空席时才能一次确认。开始后退出会重开该席，任务保持 active。"}
@@ -367,6 +392,7 @@ export function TaskDetail({ id }: { id: string }) {
                 <th>状态</th>
                 <th>席位退回截止</th>
                 <th>assignee_user_id</th>
+                <th>邀请</th>
                 {mode === "per_seat" ? <th>操作</th> : null}
               </tr>
             </thead>
@@ -386,6 +412,34 @@ export function TaskDetail({ id }: { id: string }) {
                     <td>{ROLE_STATUS_LABEL[role.status ?? "open"] ?? role.status} <span className="en">{role.status ?? "open"}</span></td>
                     <td title={role.refund_deadline ?? undefined}>{formatTime(role.refund_deadline)}</td>
                     <td>{role.assignee_user_id ? <UserRef userId={role.assignee_user_id} /> : "—"}</td>
+                    <td className="seat-invite">
+                      {canInviteSeat(me, task, role.status) ? (
+                        <>
+                          <input
+                            aria-label={`邀请 ${role.id}`}
+                            value={seatInviteUsers[role.id] ?? ""}
+                            spellCheck={false}
+                            placeholder="usr_..."
+                            disabled={pending !== null}
+                            onChange={(event) =>
+                              setSeatInviteUsers((current) => ({ ...current, [role.id]: event.target.value }))
+                            }
+                          />
+                          <Button
+                            type="button"
+                            kind="primary"
+                            className="compact"
+                            pending={pending === `seat-invite-${role.id}`}
+                            disabled={pending !== null || inviteUserIds(seatInviteUsers[role.id] ?? "").length === 0}
+                            onClick={() => void inviteSeat(role.id)}
+                          >
+                            邀请
+                          </Button>
+                        </>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
                     {mode === "per_seat" ? (
                       <td className="seat-action">
                         {action === "pay" ? (
@@ -837,7 +891,7 @@ export function TaskDetail({ id }: { id: string }) {
             </>
           ) : null}
 
-          {me === task.publisher_id && (task.status === "open" || task.status === "active") ? (
+          {task.kind !== "collaborative" && me === task.publisher_id && (task.status === "open" || task.status === "active") ? (
             <>
               <Field label="再邀请 user_id" hint="还有空位时可以继续邀请。指定人任务会把 id 加进 assignee_policy。可以从好友列表点选。">
                 <input value={inviteUser} spellCheck={false} onChange={(event) => setInviteUser(event.target.value)} />

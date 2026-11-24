@@ -148,8 +148,27 @@ func (e *Engine) AcceptTask(ctx context.Context, userID string, req *types.Accep
 		if err != nil {
 			return nil, err
 		}
-		if err := e.allowAccept(ctx, r, t, userID, ability); err != nil {
+		inv, err := r.Invites().Find(ctx, t.ID, userID)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			return nil, err
+		}
+		var invite *model.Invite
+		if err == nil {
+			invite = &inv
+		}
+		if err := e.allowAccept(ctx, r, t, userID, ability, invite); err != nil {
+			return nil, err
+		}
+		roleID := trim(req.RoleId)
+		if invite != nil && invite.RoleID != "" {
+			if roleID == "" {
+				roleID = invite.RoleID
+			} else if roleID != invite.RoleID {
+				return nil, biz.Invalid("role_id does not match invitation")
+			}
+		}
+		if roleID != "" && t.Kind != model.KindCollaborative {
+			return nil, biz.Invalid("role_id is only valid for collaborative tasks")
 		}
 		switch t.Kind {
 		case model.KindExclusive:
@@ -172,10 +191,10 @@ func (e *Engine) AcceptTask(ctx context.Context, userID string, req *types.Accep
 			if t.Collaborative == nil {
 				return nil, biz.Conflict("task is missing collaborative settings")
 			}
-			if req.RoleId == "" {
+			if roleID == "" {
 				return nil, biz.Invalid("role_id is required for collaborative tasks")
 			}
-			if !id.ValidRefID(req.RoleId) {
+			if !id.ValidRefID(roleID) {
 				return nil, biz.Invalid("invalid role_id")
 			}
 			found := false
@@ -184,7 +203,7 @@ func (e *Engine) AcceptTask(ctx context.Context, userID string, req *types.Accep
 				if role.AssigneeUserID == userID && (role.Status == model.RoleFilled || role.Status == model.RoleSubmitted) {
 					return nil, biz.Conflict("you already hold a seat")
 				}
-				if role.ID != req.RoleId {
+				if role.ID != roleID {
 					continue
 				}
 				found = true

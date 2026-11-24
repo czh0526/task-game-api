@@ -429,6 +429,7 @@ type Invite struct {
 	ID        string
 	TaskID    string
 	UserID    string
+	RoleID    string
 	Status    string
 	CreatedAt time.Time
 	UpdatedAt time.Time

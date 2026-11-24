@@ -152,6 +152,7 @@ CREATE TABLE IF NOT EXISTS invites (
     id VARCHAR(64) NOT NULL,
     task_id VARCHAR(64) NOT NULL,
     user_id VARCHAR(128) NOT NULL,
+    role_id VARCHAR(64) NOT NULL DEFAULT '',
     status VARCHAR(32) NOT NULL,
     created_at VARCHAR(40) NOT NULL,
     updated_at VARCHAR(40) NOT NULL,
