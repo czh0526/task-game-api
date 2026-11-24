@@ -4,9 +4,10 @@
 // scattering the query to every shard and merging. That query belongs to a
 // separate index. Only primary-key lookups should go to the shards.
 //
-// SKELETON BOUNDARY: MemoryTaskIndex is runnable and keeps queries off the
-// primary store in tests. A production index (Elasticsearch / OpenSearch) and
-// a real CDC projector are TODO; the TaskIndex interface is the seam.
+// MemoryTaskIndex keeps queries off the primary store in tests; HTTPTaskIndex
+// (http_index.go) talks to Elasticsearch/OpenSearch in production. CDCProjector
+// (projection.go) consumes task_index_cdc so the index can replay and rebuild;
+// the TaskIndex interface is the seam between them.
 package search
 
 import (
@@ -152,9 +153,8 @@ type Change struct {
 
 // Projector applies changes to the index.
 //
-// TODO: consume an outbox / CDC stream instead of synchronous double writes,
-// so a task write and its index update are eventually consistent and can be
-// replayed after a failure.
+// Projector applies index updates from the CDC log under a lease so concurrent
+// processes do not double-apply the same change.
 type Projector struct{ idx TaskIndex }
 
 func NewProjector(idx TaskIndex) (*Projector, error) {

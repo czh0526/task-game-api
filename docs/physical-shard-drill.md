@@ -230,6 +230,10 @@ shardctl cursor-bump -control "<control-dsn>" -chats "chat_a,chat_b"
 # webhook delivery body 外置：一份正文 + N 个 body_ref
 shardctl externalize-bodies -source "<dsn>" -blob-dir "/var/lib/taskgame/blobs"
 
+# 头像 / 大 submission payload 外置：全部 API 进程升级后再在维护窗口执行
+shardctl externalize-avatars  -source "<dsn>" -blob-dir "/var/lib/taskgame/blobs"
+shardctl externalize-payloads -source "<dsn>" -blob-dir "/var/lib/taskgame/blobs"
+
 # 冷归档与恢复：把旧行搬到 blob 冷库，按 checksum 校验
 shardctl archive-run -source "<dsn>" -blob-dir "/var/lib/taskgame/cold" -table messages
 
@@ -238,4 +242,4 @@ shardctl archive-restore -source "<dsn>" -blob-dir "/var/lib/taskgame/cold" \
   -table messages -ref "<archive-ref>"
 ```
 
-`externalize-bodies` 只处理 webhook delivery body；头像与 submission payload 的 `*_ref` 迁移仍未做，保留在 `internal/scale.TODOs`。
+`externalize-bodies` 处理 webhook delivery body；`externalize-avatars` / `externalize-payloads` 分别处理用户头像与 >4KB submission payload，均幂等。头像与大 payload 的存量迁移必须在所有 API 进程升级到 ref-aware 版本后的维护窗口执行，避免旧二进制只认 inline 列而读不到数据。

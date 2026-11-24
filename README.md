@@ -171,10 +171,10 @@ CGO_ENABLED=0 go run . -f /tmp/taskgame-3inst.yaml
 |---|---|---|---|
 | P1 | `internal/notify/*`、`internal/projection/*` | `Fanout` + `RedisTransport` 跨进程 SSE 扇出；`Lease`（Redis SET NX / 进程内）+ `Bus`（Redis pub/sub / 进程内）+ `Worker`：`Recover` 每行先认领共享租约，提交后广播唤醒 hint，定时兜底 | NATS / Kafka 传输未做；Redis pub/sub 是 at-most-once，浏览器靠 45s 轮询补漏 |
 | P2 | `internal/plane/*`、`internal/store/domain/*`、`internal/compensation/*`、`internal/metrics/*` | `SQLDirectory`（含缓存与 ReplicaDSN）、`SQLUnique`、`SnowflakeIDGenerator`、三域 `DomainStore`、`AssignInTx`、`SQLFence`、资金 saga、`/metrics`；三域物理搬迁工具与 SQLite 演练已交付 | 真机 MySQL cutover/rollback/SSE 已实测；持续 CDC 双写未做，迁移窗口采用冻结写 |
-| P3 | `internal/archive/*`、`internal/search/*`、`internal/webhook/*` | 归档批次执行与 checksum 校验、ES/OpenSearch 索引 + 可重放 CDC、cursor epoch、每会话最新页在线、webhook delivery body 外置与 `emit()` 去放大 | avatar_ref / payload_ref 大字段迁移未做；复杂任务过滤仍回退 store |
+| P3 | `internal/archive/*`、`internal/search/*`、`internal/webhook/*` | 归档批次执行与 checksum 校验、ES/OpenSearch 索引 + 可重放 CDC、cursor epoch、每会话最新页在线、webhook delivery body 与 avatar / 大 payload 外置、`emit()` 去放大 | 存量 avatar/payload 迁移需在维护窗口执行；复杂任务过滤仍回退 store |
 | 装配 | `internal/scale/runtime.go`、`config.ScaleConf`、`svc` | `scale.Runtime` 统一生命周期，`Close` 一并释放；后台 worker 驱动投影、CDC、补偿、调度与归档 | 告警规则属于部署侧配置，仓库只暴露 `/metrics` |
 
-三个容易踩坑的点已经写进代码：`chat_shards` 之类**目录表才是权威路由**；**加片不搬老数据**（`ScaleOutPlan.MigratedKeys` 恒为 0，减片才必须迁移）；**没有目录行的老 key 必须按首次部署的片数（`Topology.Pinned`）做回退哈希**，否则滚动升级时会算出别的片甚至 `index out of range`。另外要记住：**分片只把数据摊薄，不会减少总量**——在线库变小靠已实现的归档冷热分离、webhook body 外置与 `emit()` 去放大；avatar/payload 大字段外置仍是后续 P3 候选。
+三个容易踩坑的点已经写进代码：`chat_shards` 之类**目录表才是权威路由**；**加片不搬老数据**（`ScaleOutPlan.MigratedKeys` 恒为 0，减片才必须迁移）；**没有目录行的老 key 必须按首次部署的片数（`Topology.Pinned`）做回退哈希**，否则滚动升级时会算出别的片甚至 `index out of range`。另外要记住：**分片只把数据摊薄，不会减少总量**——在线库变小靠已实现的归档冷热分离、webhook body 外置、`emit()` 去放大，以及 avatar / >4KB submission payload 外置到 BlobStore。
 
 ### 用真实 Redis 跑多机 SSE（`Scale.PubSub: redis`）
 
@@ -231,7 +231,16 @@ Scale:
 
 两个边界要记住：`shard_topology.dsn` 只是首次登记时的快照，权威 DSN 顺序仍来自配置里的 `Topology`（换实例改配置并滚动升级，见「调整分片数量」）；`Keys()` 只服务于缩容规划，当前是按 `(domain, shard_key)` 主键的扫描，上热路径前需补 `(domain, shard)` 索引。
 
-`internal/scale.TODOs` 是代码里的边界清单，现已收敛到一条：avatar_ref / payload_ref 大字段迁移；README 与它保持一致。逐项完成状态见 `docs/remaining-work-backlog.md`。跑验证：
+`internal/scale.TODOs` 是代码里的边界清单，现已清空；此前唯一一条 avatar_ref / payload_ref 大字段迁移已完成。逐项完成状态见 `docs/remaining-work-backlog.md`。
+
+大字段外置默认随 `Scale.Archive.Enabled` 开关生效（需同时配置 `Scale.Archive.Dir`，所有 API 进程指向同一 blob 目录）；关闭时保持 inline 兼容。存量数据迁移要在**所有 API 进程都升级到 ref-aware 版本后**的维护窗口执行：
+
+```bash
+shardctl externalize-avatars  -source "<dsn>" -blob-dir "/var/lib/taskgame/blobs"
+shardctl externalize-payloads -source "<dsn>" -blob-dir "/var/lib/taskgame/blobs"
+```
+
+跑验证：
 
 ```bash
 go vet ./...

@@ -9,6 +9,7 @@ import (
 	"taskgame/internal/store"
 	"taskgame/internal/store/mysql"
 	"taskgame/internal/store/sqlite"
+	"taskgame/internal/store/sqlstore"
 )
 
 // Config opens N independent, fully-featured stores. Every DSN gets the same
@@ -22,6 +23,10 @@ type Config struct {
 	// one server. Every API process must use the same ordered list.
 	DSNs           []string
 	InitialBalance int64
+	// Blobs, when set, is injected into every cell so avatars and large
+	// submission payloads live outside the online databases. Nil keeps the
+	// legacy inline behavior.
+	Blobs sqlstore.LargeValueStore
 }
 
 // Store is a store.Store spread over N cells. It delegates to one ordinary
@@ -54,6 +59,13 @@ func Open(cfg Config) (*Store, error) {
 		if err != nil {
 			_ = s.Close()
 			return nil, fmt.Errorf("cell %d: %w", i, err)
+		}
+		if cfg.Blobs != nil {
+			if setter, ok := st.(interface {
+				SetLargeValues(sqlstore.LargeValueStore)
+			}); ok {
+				setter.SetLargeValues(cfg.Blobs)
+			}
 		}
 		s.cells = append(s.cells, st)
 	}

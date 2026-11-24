@@ -2,7 +2,7 @@
 
 状态：阶段 0/1/2、全局身份与 ID、事务护栏、控制面高可用、规模骨架与可观测性均已实现并接线；默认运行时仍为 cell 模式，`Store.Mode: domain` 可按需切换。阶段 4 的**物理切分演练**工具、SQLite 自动化演练与真机 MySQL cutover/rollback/SSE 均已完成，详见 `docs/physical-shard-drill.md` 第 9 节。
 
-`internal/scale.TODOs` 当前仅保留 avatar_ref / payload_ref 大字段迁移；逐项完成状态与验收证据见 `docs/remaining-work-backlog.md`。
+`internal/scale.TODOs` 已清空（avatar_ref / payload_ref 大字段迁移已完成）；逐项完成状态与验收证据见 `docs/remaining-work-backlog.md`。
 
 本文只讨论 persistence 层的改造，不改任何 API 语义、事件格式或前端。
 
@@ -230,7 +230,7 @@
 - **目录与业务行的一致性**：`AssignInTx` 在控制面与业务库共置时保证同事务；分离时退化为最终一致，靠幂等重试与 saga 补偿兜底。
 - **热点用户**：按域并没有解决"单个大用户"问题；那需要更细的 key（如按 chat 拆），超出本方案范围。
 - **真机验证**：SQLite 自动化演练与 MySQL 8.4 + Redis 7 真机演练均已完成；MySQL 生成列、`DATETIME` 解析与双进程 Redis pub/sub 已在会话切流/SSE 场景中验证，`INSERT IGNORE` 的并发竞争语义仍由单测与 SQLite 演练覆盖。
-- **剩余优化**：avatar_ref / payload_ref 大字段迁移保留在 `internal/scale.TODOs`，不影响当前分片上线。
+- **大字段外置**：头像与 >4KB submission payload 已走 BlobStore；存量迁移需在维护窗口用 `shardctl externalize-avatars` / `externalize-payloads` 完成，不影响当前分片上线。
 
 ---
 

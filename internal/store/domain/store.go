@@ -13,6 +13,7 @@ import (
 	"taskgame/internal/store/mysql"
 	"taskgame/internal/store/shard"
 	"taskgame/internal/store/sqlite"
+	"taskgame/internal/store/sqlstore"
 )
 
 var allDomains = []plane.Domain{plane.DomainUser, plane.DomainTask, plane.DomainMessage}
@@ -44,6 +45,9 @@ type Config struct {
 	// Fence, when set, is checked before a write transaction begins. A key
 	// frozen for physical migration is rejected with plane.ErrFenced.
 	Fence plane.Fence
+	// Blobs, when set, is injected into every physical pool so avatars and
+	// large submission payloads live outside the online databases.
+	Blobs sqlstore.LargeValueStore
 }
 
 // Store is a store.Store whose tables are split by aggregate-root domain.
@@ -134,6 +138,13 @@ func Open(cfg Config) (*Store, error) {
 				if err != nil {
 					_ = s.Close()
 					return nil, fmt.Errorf("domain %s DSN %q: %w", d, dsn, err)
+				}
+				if cfg.Blobs != nil {
+					if setter, ok := st.(interface {
+						SetLargeValues(sqlstore.LargeValueStore)
+					}); ok {
+						setter.SetLargeValues(cfg.Blobs)
+					}
 				}
 				s.byDSN[dsn] = st
 				s.opened = append(s.opened, st)

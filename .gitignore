@@ -9,5 +9,6 @@ web/dist/
 *.db-shm
 /bin/
 /logs/
+/shardctl
 *.exe
 .DS_Store

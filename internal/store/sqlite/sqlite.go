@@ -92,6 +92,7 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	if err := addColumns(ctx, db, "users", map[string]string{
 		"avatar":            "BLOB",
 		"avatar_updated_at": "TEXT NOT NULL DEFAULT ''",
+		"avatar_ref":        "TEXT NOT NULL DEFAULT ''",
 	}); err != nil {
 		return err
 	}
@@ -118,8 +119,9 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	if err := addColumns(ctx, db, "submissions", map[string]string{
-		"role_id": "TEXT NOT NULL DEFAULT ''",
-		"status":  "TEXT NOT NULL DEFAULT 'current'",
+		"role_id":     "TEXT NOT NULL DEFAULT ''",
+		"status":      "TEXT NOT NULL DEFAULT 'current'",
+		"payload_ref": "TEXT NOT NULL DEFAULT ''",
 	}); err != nil {
 		return err
 	}

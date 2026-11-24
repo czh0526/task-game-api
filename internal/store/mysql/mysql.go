@@ -121,6 +121,11 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	if err := ensureDeliveryBodyRef(ctx, conn); err != nil {
 		return err
 	}
+	// Large submission payloads may live in the blob tier. An upgraded v1
+	// database may not have submissions at all, so skip when absent.
+	if err := ensureSubmissionPayloadRef(ctx, conn); err != nil {
+		return err
+	}
 	// Version 1 only runs once, so tables appended to schema.sql after a
 	// database was stamped never reach an upgraded database. The shard
 	// directory and outbox are additive, so repair them on every startup.
@@ -154,6 +159,36 @@ func ensureDeliveryBodyRef(ctx context.Context, conn *sql.Conn) error {
 	if _, err := conn.ExecContext(ctx,
 		`ALTER TABLE webhook_deliveries ADD COLUMN body_ref VARCHAR(128) NOT NULL DEFAULT ''`); err != nil {
 		return fmt.Errorf("mysql deliveries.body_ref: %w", err)
+	}
+	return nil
+}
+
+// ensureSubmissionPayloadRef adds the large-payload blob reference column to
+// databases that predate payload externalization. An upgraded v1 database may
+// not have the submissions table, so check for it before altering.
+func ensureSubmissionPayloadRef(ctx context.Context, conn *sql.Conn) error {
+	var hasTable int
+	if err := conn.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM information_schema.TABLES
+		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'submissions'`).Scan(&hasTable); err != nil {
+		return err
+	}
+	if hasTable == 0 {
+		return nil
+	}
+	var n int
+	if err := conn.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM information_schema.COLUMNS
+		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'submissions'
+		  AND COLUMN_NAME = 'payload_ref'`).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	if _, err := conn.ExecContext(ctx,
+		`ALTER TABLE submissions ADD COLUMN payload_ref VARCHAR(128) NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("mysql submissions.payload_ref: %w", err)
 	}
 	return nil
 }
@@ -200,6 +235,7 @@ func ensureUserAvatarColumns(ctx context.Context, conn *sql.Conn) error {
 	}{
 		{name: "avatar", def: "MEDIUMBLOB NULL"},
 		{name: "avatar_updated_at", def: "VARCHAR(40) NOT NULL DEFAULT ''"},
+		{name: "avatar_ref", def: "VARCHAR(128) NOT NULL DEFAULT ''"},
 	}
 	for _, col := range columns {
 		var n int
@@ -224,28 +260,53 @@ type execer interface {
 }
 
 func execScript(ctx context.Context, db execer, script string) error {
-	for _, stmt := range strings.Split(script, ";") {
-		stmt = strings.TrimSpace(stmt)
-		if stmt == "" {
-			continue
-		}
-		// Drop leading comment lines so a block that starts with a comment still runs.
-		lines := strings.Split(stmt, "\n")
-		var kept []string
-		for _, line := range lines {
-			trim := strings.TrimSpace(line)
-			if trim == "" || strings.HasPrefix(trim, "--") {
-				continue
-			}
-			kept = append(kept, line)
-		}
-		stmt = strings.TrimSpace(strings.Join(kept, "\n"))
-		if stmt == "" {
-			continue
-		}
+	for _, stmt := range splitSQLStatements(script) {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("mysql schema: %w", err)
 		}
 	}
 	return nil
+}
+
+// splitSQLStatements strips -- line comments before splitting on semicolons.
+// The schema keeps comments inside CREATE TABLE blocks; a semicolon in one of
+// those comments used to split a table definition in half and produce a
+// confusing MySQL syntax error at execution time.
+func splitSQLStatements(script string) []string {
+	var cleaned strings.Builder
+	for _, line := range strings.Split(script, "\n") {
+		if i := sqlLineCommentStart(line); i >= 0 {
+			line = line[:i]
+		}
+		cleaned.WriteString(line)
+		cleaned.WriteByte('\n')
+	}
+	var out []string
+	for _, stmt := range strings.Split(cleaned.String(), ";") {
+		stmt = strings.TrimSpace(stmt)
+		if stmt != "" {
+			out = append(out, stmt)
+		}
+	}
+	return out
+}
+
+// sqlLineCommentStart returns the index of a MySQL -- comment marker on a
+// line, or -1. MySQL only treats -- as a comment when followed by whitespace;
+// requiring whitespace before it keeps things like a--b inside identifiers or
+// literals untouched.
+func sqlLineCommentStart(line string) int {
+	for i := 0; i+1 < len(line); i++ {
+		if line[i] != '-' || line[i+1] != '-' {
+			continue
+		}
+		if i > 0 && line[i-1] != ' ' && line[i-1] != '\t' {
+			continue
+		}
+		if i+2 < len(line) && line[i+2] != ' ' && line[i+2] != '\t' {
+			continue
+		}
+		return i
+	}
+	return -1
 }

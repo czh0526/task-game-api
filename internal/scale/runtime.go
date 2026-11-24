@@ -37,14 +37,12 @@ const defaultSearchIndex = "taskgame_tasks"
 // DONE as of the productionization pass: per-domain stores, global_unique +
 // Snowflake, archive execution, and the ES/OpenSearch index with a CDC
 // projector (see internal/search). NATS/Kafka remain optional transports.
-// DONE in the productionization pass: webhook delivery bodies are externalized
-// and emit() de-amplified (one body + N refs); messages keep the newest page
-// online. Remaining large-column ref migrations (avatar / submission payload)
-// are listed below; docs/remaining-work-backlog.md records the completed items
-// and the remaining dashboard verification boundary.
-var TODOs = []string{
-	"P3: add avatar_ref / payload_ref migrations for users avatars and submission payloads",
-}
+// DONE in the productionization pass: webhook delivery bodies, avatars and
+// large submission payloads are externalized to the BlobStore, emit() stores
+// one body + N refs, and only the newest message page stays online. No
+// skeleton items remain; operational boundaries (dashboards, alerts) live in
+// docs/remaining-work-backlog.md.
+var TODOs = []string{}
 
 // Runtime is the assembled skeleton. Every field may be nil when its feature
 // is off; callers must check.
