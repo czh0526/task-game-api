@@ -1,6 +1,6 @@
 # 剩余工作待办清单（按优先级）
 
-基线：分支 `feat/per-domain-sharding`，PR #39 未合并；整理于 2026-11-23，最近状态更新于 2026-11-24（真机演练闭环后）。
+基线：PR #39 已于 2026-11-24 16:03（UTC+8）合并到 main（merge commit `c74ed69`）；本分支在该合并之后新增的提交尚未进入 main，需另开 PR。整理于 2026-11-23，最近状态更新于 2026-11-24。
 
 已完成、本清单**不重复**的事项：阶段 0/1/2（配置控制面、DomainStore、逐域切流接线）、message/user/task 三域的物理切分演练与 `shardctl`、Redis pub/sub 跨进程通知、SSE 实时消息、SQLDirectory。产品 UI 层（首页、分类、关键词、坐标筛选、好友/聊天、头像、表情）也已按此前需求实现。
 
@@ -174,13 +174,13 @@
 1. **真机演练结果留档**：15 与 16 已在 2026-11-24 闭环；如需复跑，先确保 3307-3311/6379 空闲、Docker CLI 在 PATH 中，并接受脚本 `cleanup` 的 `docker compose down -v`。本次执行使用 `--keep`，随后按容器名精确清理，保留了 3306 上的既有 MySQL。
 2. **部署环境**：抓取 `/metrics` 并配置目录命中率下降、跨域事务数非零、冻结写异常的告警；这一步闭环后，17 的验收才算完整。
 3. **大字段存量迁移**：schema、读写路径与 `shardctl` 命令已完成；上线时需在维护窗口跑 `externalize-avatars` / `externalize-payloads`，并确认所有 API 进程已升级到 ref-aware 二进制。
-4. **发布动作**：PR #39 合并到 main；当前分支已同步到 `origin/feat/per-domain-sharding`。
+4. **发布动作**：PR #39 已合并到 main（merge commit `c74ed69`）；合并后本分支新增 `d6a9a6e`、`b194fce` 等提交，已推送到 `origin/feat/per-domain-sharding`，需另开 PR 合入 main。
 
 ## 建议执行顺序（更新后）
 
 1. 代码侧 P0/P1/P2/P3 均已落地，按上方“状态”列验收，不再有编码前置路径。
 2. 真机闭环：15 → 16 已完成，复跑时仍需使用空闲端口的 Docker/MySQL/Redis 环境。
-3. 上线闭环：17 的告警规则；然后合并 PR #39。
+3. 上线闭环：17 的告警规则；然后把本分支在 PR #39 合并后的后续提交合入 main。
 4. 可选优化：无；avatar_ref / payload_ref 大字段迁移已完成，存量数据按维护窗口命令处理。
 
-关键路径已收尾：功能、自动化验证与真机 cutover/rollback/SSE 均已完成，下一步只差部署侧监控告警与 PR #39 合并。
+关键路径已收尾：功能、自动化验证与真机 cutover/rollback/SSE 均已完成，PR #39 已入 main；下一步只差部署侧监控告警与本分支后续提交入 main。
