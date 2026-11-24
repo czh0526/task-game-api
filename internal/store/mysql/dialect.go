@@ -32,9 +32,9 @@ func (dialect) ChatReadUpsert() string {
 
 func (dialect) InviteUpsert() string {
 	return `
-		INSERT INTO invites (id, task_id, user_id, status, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?) AS new
-		ON DUPLICATE KEY UPDATE status = new.status, updated_at = new.updated_at`
+		INSERT INTO invites (id, task_id, user_id, role_id, status, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?) AS new
+		ON DUPLICATE KEY UPDATE role_id = new.role_id, status = new.status, updated_at = new.updated_at`
 }
 
 func (dialect) MembershipUpsert() string {

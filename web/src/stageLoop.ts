@@ -29,6 +29,28 @@ export interface ConfirmBody {
   milestone_id?: string;
 }
 
+export interface SeatInviteTask {
+  kind: string;
+  status: string;
+  publisher_id: string;
+}
+
+/** A publisher may invite someone only into a still-open seat of a live task. */
+export function canInviteSeat(me: string | undefined, task: SeatInviteTask, roleStatus: string | undefined): boolean {
+  return (
+    !!me &&
+    me === task.publisher_id &&
+    task.kind === "collaborative" &&
+    (task.status === "open" || task.status === "active") &&
+    (roleStatus ?? "open") === "open"
+  );
+}
+
+/** Same comma/whitespace splitting used by the invite forms. */
+export function inviteUserIds(raw: string): string[] {
+  return [...new Set(raw.split(/[\s,]+/).map((item) => item.trim()).filter(Boolean))];
+}
+
 export function milestoneSubmitBlock(task: StageTask): string | null {
   if (task.payment.mode !== "milestone") return null;
   const stages = task.payment.milestones ?? [];

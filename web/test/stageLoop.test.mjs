@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  canInviteSeat,
   confirmTaskBody,
   inReviewMilestoneSubmissionId,
+  inviteUserIds,
   milestoneSubmitBlock,
   submitMilestoneField,
 } from "../src/stageLoop.ts";
@@ -103,6 +105,24 @@ test("one_shot confirm keeps the existing submission choice", () => {
   };
   assert.deepEqual(confirmTaskBody(competitive, "sub_b", "", null), { submission_id: "sub_b" });
   assert.equal(confirmTaskBody(competitive, "", "", null), "请选择一份 submission_id");
+});
+
+test("seat invite is offered only to the publisher for an open collaborative seat", () => {
+  const live = { kind: "collaborative", status: "open", publisher_id: "usr_publisher" };
+  assert.equal(canInviteSeat("usr_publisher", live, "open"), true);
+  assert.equal(canInviteSeat("usr_publisher", { ...live, status: "active" }, undefined), true);
+  assert.equal(canInviteSeat("usr_other", live, "open"), false);
+  assert.equal(canInviteSeat(undefined, live, "open"), false);
+  assert.equal(canInviteSeat("usr_publisher", { ...live, kind: "exclusive" }, "open"), false);
+  assert.equal(canInviteSeat("usr_publisher", { ...live, status: "settled" }, "open"), false);
+  assert.equal(canInviteSeat("usr_publisher", live, "filled"), false);
+  assert.equal(canInviteSeat("usr_publisher", live, "submitted"), false);
+});
+
+test("seat invite input splits ids on commas and whitespace and deduplicates", () => {
+  assert.deepEqual(inviteUserIds(" usr_a, usr_b  usr_a,,usr_c "), ["usr_a", "usr_b", "usr_c"]);
+  assert.deepEqual(inviteUserIds("  ,,\t\n "), []);
+  assert.deepEqual(inviteUserIds("usr_a"), ["usr_a"]);
 });
 
 test("revise targets the in-review milestone when an earlier stage submission is still current", () => {

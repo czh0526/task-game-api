@@ -125,6 +125,13 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	}); err != nil {
 		return err
 	}
+	// Collaborative invitations bind to a materialized seat. Older databases
+	// get the column on startup and keep their task-level invites (empty role).
+	if err := addColumns(ctx, db, "invites", map[string]string{
+		"role_id": "TEXT NOT NULL DEFAULT ''",
+	}); err != nil {
+		return err
+	}
 	// Older chat tables have no type. Group is the historical free-form row.
 	// A non-empty task_id is the task thread funding already created.
 	if err := addColumns(ctx, db, "chats", map[string]string{

@@ -126,6 +126,11 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	if err := ensureSubmissionPayloadRef(ctx, conn); err != nil {
 		return err
 	}
+	// Collaborative invitations bind to a materialized seat. The invites table
+	// may be absent on an upgraded v1 database, so skip when absent.
+	if err := ensureInviteRoleColumn(ctx, conn); err != nil {
+		return err
+	}
 	// Version 1 only runs once, so tables appended to schema.sql after a
 	// database was stamped never reach an upgraded database. The shard
 	// directory and outbox are additive, so repair them on every startup.
@@ -189,6 +194,36 @@ func ensureSubmissionPayloadRef(ctx context.Context, conn *sql.Conn) error {
 	if _, err := conn.ExecContext(ctx,
 		`ALTER TABLE submissions ADD COLUMN payload_ref VARCHAR(128) NOT NULL DEFAULT ''`); err != nil {
 		return fmt.Errorf("mysql submissions.payload_ref: %w", err)
+	}
+	return nil
+}
+
+// ensureInviteRoleColumn adds the seat binding to databases created before
+// collaborative invites were tied to a role. Old task-level invites keep an
+// empty role_id and still require the acceptor to pick a seat.
+func ensureInviteRoleColumn(ctx context.Context, conn *sql.Conn) error {
+	var hasTable int
+	if err := conn.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM information_schema.TABLES
+		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'invites'`).Scan(&hasTable); err != nil {
+		return err
+	}
+	if hasTable == 0 {
+		return nil
+	}
+	var n int
+	if err := conn.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM information_schema.COLUMNS
+		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'invites'
+		  AND COLUMN_NAME = 'role_id'`).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	if _, err := conn.ExecContext(ctx,
+		`ALTER TABLE invites ADD COLUMN role_id VARCHAR(64) NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("mysql invites.role_id: %w", err)
 	}
 	return nil
 }

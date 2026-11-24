@@ -1459,7 +1459,7 @@ type inviteRepo struct {
 
 func (r *inviteRepo) Upsert(ctx context.Context, inv model.Invite) error {
 	_, err := r.q.ExecContext(ctx, r.d.InviteUpsert(),
-		inv.ID, inv.TaskID, inv.UserID, inv.Status, model.FormatTime(inv.CreatedAt), model.FormatTime(inv.UpdatedAt))
+		inv.ID, inv.TaskID, inv.UserID, inv.RoleID, inv.Status, model.FormatTime(inv.CreatedAt), model.FormatTime(inv.UpdatedAt))
 	return err
 }
 
@@ -1480,7 +1480,7 @@ func (r *inviteRepo) Update(ctx context.Context, inv model.Invite) error {
 }
 
 func (r *inviteRepo) Get(ctx context.Context, id string) (model.Invite, error) {
-	row := r.q.QueryRowContext(ctx, `SELECT id, task_id, user_id, status, created_at, updated_at FROM invites WHERE id = ?`, id)
+	row := r.q.QueryRowContext(ctx, `SELECT id, task_id, user_id, COALESCE(role_id, ''), status, created_at, updated_at FROM invites WHERE id = ?`, id)
 	inv, err := scanInvite(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Invite{}, store.ErrNotFound
@@ -1490,7 +1490,8 @@ func (r *inviteRepo) Get(ctx context.Context, id string) (model.Invite, error) {
 
 func (r *inviteRepo) Find(ctx context.Context, taskID, userID string) (model.Invite, error) {
 	row := r.q.QueryRowContext(ctx, `
-		SELECT id, task_id, user_id, status, created_at, updated_at FROM invites WHERE task_id = ? AND user_id = ?`, taskID, userID)
+		SELECT id, task_id, user_id, COALESCE(role_id, ''), status, created_at, updated_at
+		FROM invites WHERE task_id = ? AND user_id = ?`, taskID, userID)
 	inv, err := scanInvite(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Invite{}, store.ErrNotFound
@@ -1499,14 +1500,14 @@ func (r *inviteRepo) Find(ctx context.Context, taskID, userID string) (model.Inv
 }
 
 func (r *inviteRepo) ListByTask(ctx context.Context, taskID string) ([]model.Invite, error) {
-	return r.listInvites(ctx, `SELECT id, task_id, user_id, status, created_at, updated_at FROM invites WHERE task_id = ? ORDER BY created_at ASC, id ASC`, taskID)
+	return r.listInvites(ctx, `SELECT id, task_id, user_id, COALESCE(role_id, ''), status, created_at, updated_at FROM invites WHERE task_id = ? ORDER BY created_at ASC, id ASC`, taskID)
 }
 
 func (r *inviteRepo) ListByUser(ctx context.Context, userID, status string) ([]model.Invite, error) {
 	if status == "" {
-		return r.listInvites(ctx, `SELECT id, task_id, user_id, status, created_at, updated_at FROM invites WHERE user_id = ? ORDER BY created_at DESC, id DESC`, userID)
+		return r.listInvites(ctx, `SELECT id, task_id, user_id, COALESCE(role_id, ''), status, created_at, updated_at FROM invites WHERE user_id = ? ORDER BY created_at DESC, id DESC`, userID)
 	}
-	return r.listInvites(ctx, `SELECT id, task_id, user_id, status, created_at, updated_at FROM invites WHERE user_id = ? AND status = ? ORDER BY created_at DESC, id DESC`, userID, status)
+	return r.listInvites(ctx, `SELECT id, task_id, user_id, COALESCE(role_id, ''), status, created_at, updated_at FROM invites WHERE user_id = ? AND status = ? ORDER BY created_at DESC, id DESC`, userID, status)
 }
 
 func (r *inviteRepo) listInvites(ctx context.Context, query string, args ...any) ([]model.Invite, error) {
@@ -1532,7 +1533,7 @@ func (r *inviteRepo) listInvites(ctx context.Context, query string, args ...any)
 func scanInvite(s scanner) (model.Invite, error) {
 	var inv model.Invite
 	var created, updated string
-	if err := s.Scan(&inv.ID, &inv.TaskID, &inv.UserID, &inv.Status, &created, &updated); err != nil {
+	if err := s.Scan(&inv.ID, &inv.TaskID, &inv.UserID, &inv.RoleID, &inv.Status, &created, &updated); err != nil {
 		return model.Invite{}, err
 	}
 	var err error

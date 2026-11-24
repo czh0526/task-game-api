@@ -12,15 +12,7 @@ import (
 	"taskgame/internal/types"
 )
 
-func (e *Engine) allowAccept(ctx context.Context, r store.Repos, t model.Task, userID string, ability int64) error {
-	inv, err := r.Invites().Find(ctx, t.ID, userID)
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		return err
-	}
-	var invite *model.Invite
-	if err == nil {
-		invite = &inv
-	}
+func (e *Engine) allowAccept(ctx context.Context, r store.Repos, t model.Task, userID string, ability int64, invite *model.Invite) error {
 	if t.AssigneePolicy.Type == model.PolicySpecific {
 		if invite != nil && invite.Status == model.InviteDeclined {
 			return biz.Forbidden("invite was declined; ask the publisher to invite you again")
@@ -59,10 +51,12 @@ func (e *Engine) inviteSpecificOnFund(ctx context.Context, r store.Repos, t mode
 	if t.AssigneePolicy.Type != model.PolicySpecific || len(t.AssigneePolicy.UserIDs) == 0 {
 		return nil
 	}
-	return e.addInvites(ctx, r, t, t.AssigneePolicy.UserIDs)
+	// Policy-level invites are task scoped; the acceptor picks a seat when the
+	// task is collaborative. Per-seat invites from the UI carry a role_id.
+	return e.addInvites(ctx, r, t, t.AssigneePolicy.UserIDs, "")
 }
 
-func (e *Engine) addInvites(ctx context.Context, r store.Repos, t model.Task, userIDs []string) error {
+func (e *Engine) addInvites(ctx context.Context, r store.Repos, t model.Task, userIDs []string, roleID string) error {
 	now := e.now()
 	var created []string
 	for _, uid := range dedupe(userIDs) {
@@ -74,8 +68,8 @@ func (e *Engine) addInvites(ctx context.Context, r store.Repos, t model.Task, us
 			return err
 		}
 		inv := model.Invite{
-			ID: id.New("inv_"), TaskID: t.ID, UserID: uid, Status: model.InvitePending,
-			CreatedAt: now, UpdatedAt: now,
+			ID: id.New("inv_"), TaskID: t.ID, UserID: uid, RoleID: roleID,
+			Status: model.InvitePending, CreatedAt: now, UpdatedAt: now,
 		}
 		if err == nil {
 			inv.ID = existing.ID
@@ -89,9 +83,39 @@ func (e *Engine) addInvites(ctx context.Context, r store.Repos, t model.Task, us
 	if len(created) == 0 {
 		return nil
 	}
-	return e.emit(ctx, r, append(parties(t), created...), model.EventTaskInvited, map[string]any{
-		"task_id": t.ID, "user_ids": created,
-	})
+	body := map[string]any{"task_id": t.ID, "user_ids": created}
+	if roleID != "" {
+		body["role_id"] = roleID
+	}
+	return e.emit(ctx, r, append(parties(t), created...), model.EventTaskInvited, body)
+}
+
+// validateInviteSeat resolves a role_id supplied by a per-seat invitation.
+// Legacy callers may omit it; the acceptor then chooses any open seat.
+func validateInviteSeat(t model.Task, roleID string) (string, error) {
+	roleID = trim(roleID)
+	if roleID == "" {
+		return "", nil
+	}
+	if t.Kind != model.KindCollaborative {
+		return "", biz.Invalid("role_id is only valid for collaborative tasks")
+	}
+	if !id.ValidRefID(roleID) {
+		return "", biz.Invalid("invalid role_id")
+	}
+	if t.Collaborative == nil {
+		return "", biz.Conflict("task is missing collaborative settings")
+	}
+	for _, role := range t.Collaborative.Roles {
+		if role.ID != roleID {
+			continue
+		}
+		if role.Status != model.RoleOpen && role.Status != "" {
+			return "", biz.Conflict("role is not open")
+		}
+		return roleID, nil
+	}
+	return "", biz.Invalid("unknown role_id")
 }
 
 // InviteTask adds pending invites while the task still has open capacity.
@@ -103,6 +127,10 @@ func (e *Engine) InviteTask(ctx context.Context, userID string, req *types.Invit
 		}
 		if t.PublisherID != userID {
 			return nil, biz.Forbidden("only the publisher can invite")
+		}
+		roleID, err := validateInviteSeat(t, req.RoleId)
+		if err != nil {
+			return nil, err
 		}
 		if !hasInviteCapacity(t) {
 			return nil, biz.Conflict("task has no open capacity")
@@ -121,7 +149,7 @@ func (e *Engine) InviteTask(ctx context.Context, userID string, req *types.Invit
 				return nil, err
 			}
 		}
-		if err := e.addInvites(ctx, r, t, ids); err != nil {
+		if err := e.addInvites(ctx, r, t, ids, roleID); err != nil {
 			return nil, err
 		}
 		return e.inviteList(ctx, r, t.ID)
@@ -295,7 +323,7 @@ func hasAcceptCapacity(t model.Task, userID string) bool {
 
 func toInvite(inv model.Invite) types.Invite {
 	return types.Invite{
-		Id: inv.ID, TaskId: inv.TaskID, UserId: inv.UserID, Status: inv.Status,
+		Id: inv.ID, TaskId: inv.TaskID, UserId: inv.UserID, RoleId: inv.RoleID, Status: inv.Status,
 		CreatedAt: model.FormatTime(inv.CreatedAt), UpdatedAt: model.FormatTime(inv.UpdatedAt),
 	}
 }

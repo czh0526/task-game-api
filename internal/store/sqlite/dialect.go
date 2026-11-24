@@ -34,9 +34,10 @@ func (dialect) ChatReadUpsert() string {
 
 func (dialect) InviteUpsert() string {
 	return `
-		INSERT INTO invites (id, task_id, user_id, status, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?)
-		ON CONFLICT(task_id, user_id) DO UPDATE SET status = excluded.status, updated_at = excluded.updated_at`
+		INSERT INTO invites (id, task_id, user_id, role_id, status, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(task_id, user_id) DO UPDATE SET
+			role_id = excluded.role_id, status = excluded.status, updated_at = excluded.updated_at`
 }
 
 func (dialect) MembershipUpsert() string {

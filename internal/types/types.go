@@ -376,6 +376,7 @@ type InviteUsersReq struct {
 	TaskId         string   `path:"taskId" json:"-"`
 	IdempotencyKey string   `header:"Idempotency-Key,optional" json:"-"`
 	UserIds        []string `json:"user_ids"`
+	RoleId         string   `json:"role_id,optional"`
 }
 
 type ListTaskInvitesReq struct {
@@ -395,6 +396,7 @@ type Invite struct {
 	Id        string `json:"id"`
 	TaskId    string `json:"task_id"`
 	UserId    string `json:"user_id"`
+	RoleId    string `json:"role_id,omitempty"`
 	Status    string `json:"status"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`

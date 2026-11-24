@@ -31,10 +31,14 @@ export function Invites() {
     setPending(invite.id);
     setError(null);
     try {
-      await client.acceptTask(invite.task_id, {}, { idempotencyKey: createIdempotencyKey("accept-invite") });
+      await client.acceptTask(
+        invite.task_id,
+        invite.role_id ? { role_id: invite.role_id } : {},
+        { idempotencyKey: createIdempotencyKey("accept-invite") },
+      );
       setItems((prev) => prev.filter((item) => item.id !== invite.id));
     } catch (err) {
-      setError(`${formatError(err)} 协作任务请打开任务，选一个空席再接受。`);
+      setError(`${formatError(err)} 旧的协作邀请若未绑定席位，请打开任务详情选一个空席再接受。`);
     } finally {
       setPending(null);
     }
@@ -63,7 +67,7 @@ export function Invites() {
   }
 
   return (
-    <Screen title="邀请" lede="待处理的任务邀请。接受会调用接任务；协作任务如果需要 role_id，请到任务详情里选席位。拒绝之后，指定人任务不能再接，除非发布者重新邀请。">
+    <Screen title="邀请" lede="待处理的任务邀请。席位邀请接受后会自动落到对应席位；旧的任务级邀请仍需到任务详情选席位。拒绝之后，指定人任务不能再接，除非发布者重新邀请。">
       <ErrorNote message={error} />
       {items.length === 0 ? <p className="empty">没有待处理的邀请。</p> : null}
       <ul className="task-list">
@@ -75,6 +79,7 @@ export function Invites() {
             </div>
             <p className="meta">
               <span>{formatTime(invite.created_at)}</span>
+              {invite.role_id ? <span>席位 {invite.role_id}</span> : null}
               <code className="mono">{invite.id}</code>
             </p>
             <div className="actions">

@@ -106,7 +106,7 @@ var TaskSpec = EntitySpec{
 		},
 		{
 			Name: "invites", Columns: []string{
-				"id", "task_id", "user_id", "status", "created_at", "updated_at",
+				"id", "task_id", "user_id", "role_id", "status", "created_at", "updated_at",
 			},
 			Where: "task_id = ?", OrderBy: "id", PK: []string{"id"}, Cleanup: true,
 		},

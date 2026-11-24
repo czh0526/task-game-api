@@ -162,6 +162,7 @@ CREATE TABLE IF NOT EXISTS invites (
     id TEXT PRIMARY KEY,
     task_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
+    role_id TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL

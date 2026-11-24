@@ -345,12 +345,16 @@ export interface ResolutionBody {
 
 export interface InviteUsersBody {
   user_ids: string[];
+  /** Collaborative seat to invite to. Omit for a task-level invitation. */
+  role_id?: string;
 }
 
 export interface Invite {
   id: string;
   task_id: string;
   user_id: string;
+  /** Bound collaborative seat, empty for task-level invitations. */
+  role_id?: string;
   status: InviteStatus;
   created_at: string;
   updated_at: string;
