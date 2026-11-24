@@ -2,7 +2,7 @@
 
 这是 `docs/per-domain-sharding-plan.md` 第 7 节和第 4 阶段的可执行 runbook。它覆盖 message、user、task 三个域的物理搬迁，每次只切一个域，不改任何 API 语义。工具在 `cmd/shardctl`，库实现在 `internal/shardmigrate`。
 
-状态：SQLite 自动化演练与生产化护栏（冻结写、资金 saga、控制面缓存/副本、`/metrics`、游标世代）均已落地；真机 MySQL + 双进程回归脚本已编写并通过语法检查，但未在隔离环境完整执行，详见第 9 节。逐项完成状态见 `docs/remaining-work-backlog.md`。
+状态：SQLite 自动化演练、生产化护栏与真机 MySQL + 双进程 cutover/rollback/SSE 均已完成，详见第 9 节。逐项完成状态见 `docs/remaining-work-backlog.md`。
 
 ## 1. 演练目标
 
@@ -191,20 +191,28 @@ shardctl rollback -driver mysql -entity user -control "<control-dsn>" \
 - task 域搬迁后任务、投递、托管账本与流水、邀请完整，写入落新片；
 - 三个域的完整回滚都能让目录、数据、路由读回到迁移前状态。
 
-## 9. 真机 MySQL + 双进程演练（未实测项）
+## 9. 真机 MySQL + 双进程演练（已实测）
 
-`scripts/drill-mysql.sh` 是真机演练的可执行骨架：自动拉起第 4 个 MySQL cell（3310）+ 控制面库、启动 8891/8892 两个 API 进程、跑 friends smoke、执行 `shardctl init/backfill`，再以新拓扑重启两个 API 进程。真实 chat 的 `plan/copy/verify/cutover/rollback` 以及跨进程 SSE 断言仍以注释/人工核对形式保留在脚本中，需要按提示填入 chat id 后执行；它尚未把运行手册第 5 节全部自动化。
+`scripts/drill-mysql.sh` 是真机演练的可执行骨架：自动拉起第 4 个 MySQL cell（3310）+ 控制面库、启动 8891/8892 两个 API 进程、跑完整 smoke、执行 `shardctl init/backfill`，再以新拓扑重启两个 API 进程。真实 chat 的 `plan/copy/verify/cutover/rollback` 与跨进程 SSE 断言仍以注释/人工核对形式保留在脚本中，避免脚本自动选取错误的会话。
 
-**状态：脚本已编写并通过 `bash -n` 语法校验，但未在隔离的真实 MySQL 环境完整执行。** 当前工作区已有 Docker 容器提供 MySQL 8.4（3307/3308/3309）与 Redis 7（6379），Docker CLI 位于 `/Applications/Docker.app/Contents/Resources/bin/docker`（未加入 PATH）；但这些端口被共享 compose 栈占用，而脚本 preflight 要求 3307-3311/6379 全部空闲，cleanup 会执行 `docker compose down -v`。因此不能在该栈上直接运行，否则会销毁现有容器卷。真机行为——尤其是 MySQL 生成列、`DATETIME` 解析、`INSERT IGNORE` 并发语义和双进程 Redis pub/sub——**尚未实测**。测试等价物是 SQLite 自动化演练（`go test ./internal/shardmigrate/...`），它验证了除 MySQL 方言差异外的全部逻辑。
+**状态：2026-11-24 已在 MySQL 8.4.11（3307/3308/3309/3310）+ Redis 7 + 8891/8892 双 API 进程上实测闭环。** 执行前先确认 3307-3311/6379 空闲；本次使用 `--keep` 运行脚本骨架，再按容器名精确清理，保留了 3306 上的既有 MySQL。运行前修复了脚本三个阻塞点：compose 容器名硬编码、`mysqladmin ping` 过早判活、演练配置缺 `Name`/arbiter key。
 
-在 3307-3311/6379 空闲、且可接受 `docker compose down -v` 的隔离 Docker 环境中执行：
+实测证据：
+
+- 脚本骨架：`bash scripts/drill-mysql.sh --keep` 完整通过；smoke 覆盖 exclusive / competitive / collaborative / quantity / per_seat / workflow / milestone / friends / profile；`shardctl backfill` 写入三域目录（message 16/10/8，user 7/9/7，task 13 条等）。
+- 选定 shard 0 的真实会话 `cht_01a8baeaceab13a9e5c7d5f1`（3 条消息、1 个阅读游标），执行 `plan → copy → verify → cutover`：目录从 shard 0 翻到 3，消息与游标复制并被 verify 校验，源行清理。
+- 切流后：`last_read_rowid` 从 4 重建为 2，`cursor-bump` 升 epoch 到 1；grown 拓扑下从 8891 读到 3 条历史消息，向 8891 发的新消息 `msg_b2598ac1e0063c5710b65631` 只存在于 shard 3 的 `messages` 表。
+- 跨进程 SSE：在 8892 订阅 `/v1/events/stream`，8891 发消息后收到 `event: signal`，data 为 `type=chat.message` 且 chat_id/message_id 正确。
+- 回滚：`shardctl rollback` 把目录从 3 翻回 0，shard 0 有 4 条消息、shard 3 为 0，`cursor-bump` 升 epoch 到 2；base 拓扑 API 读到全部 4 条消息。
+
+复跑方式（需要空闲端口，并接受 `docker compose down -v`）：
 
 ```bash
 bash scripts/drill-mysql.sh           # 全量演练，结束自动清理
 bash scripts/drill-mysql.sh --keep    # 保留容器与进程，便于人工核对
 ```
 
-脚本phase 2 会打印提示；真机上需把创建出的 chat id 传给 phase 3/5 的 `shardctl -chats <id>`（这部分保留为显式手工步骤，避免自动选取错误的会话）。跨进程 SSE 订阅 `/v1/events/stream` 的断言同样保留为人工核对项。
+脚本仍保留人工步骤：phase 2 输出后按提示选择 chat id，再执行 phase 3/5 的 `shardctl` 命令与跨进程 SSE 断言；本次即按该方式完成。
 
 ## 10. 配套运维命令
 

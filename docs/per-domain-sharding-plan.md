@@ -1,6 +1,6 @@
 # 按域分片改造方案（P2）
 
-状态：阶段 0/1/2、全局身份与 ID、事务护栏、控制面高可用、规模骨架与可观测性均已实现并接线；默认运行时仍为 cell 模式，`Store.Mode: domain` 可按需切换。阶段 4 的**物理切分演练**工具与 SQLite 自动化演练已交付；真机 MySQL 可执行脚本见 `docs/physical-shard-drill.md` 和 `scripts/drill-mysql.sh`，但当前共享开发栈占用演练所需端口且会被脚本 `docker compose down -v` 清理，真机执行仍待在隔离环境完成。
+状态：阶段 0/1/2、全局身份与 ID、事务护栏、控制面高可用、规模骨架与可观测性均已实现并接线；默认运行时仍为 cell 模式，`Store.Mode: domain` 可按需切换。阶段 4 的**物理切分演练**工具、SQLite 自动化演练与真机 MySQL cutover/rollback/SSE 均已完成，详见 `docs/physical-shard-drill.md` 第 9 节。
 
 `internal/scale.TODOs` 当前仅保留 avatar_ref / payload_ref 大字段迁移；逐项完成状态与验收证据见 `docs/remaining-work-backlog.md`。
 
@@ -147,7 +147,7 @@
 
 共置的关键实现：`domain.Store` 按 DSN 去重连接池，事务内无论操作哪个域，只要 placement 落在同一个物理 store，就复用该事务的连接（因此仍是单库事务）。只有当某个域被切到不同 DSN 时，跨域调用才走独立连接池并退化为最终一致。`Store.StrictTx` 配置开关已暴露，开启后会在这种场景下直接返回 `ErrCrossShard`，作为阶段 4 事务治理的护栏。
 
-物理数据搬迁工具已交付：改变某个域的 DSNs 前按第 7 节用 `shardctl` 回填目录并迁移数据。SQLite 自动化演练覆盖 message/user/task 三域的完整切流与回滚；真机 MySQL 脚本 `scripts/drill-mysql.sh` 已编写并通过语法检查，但需在隔离环境执行，不能直接在当前共享栈上运行。
+物理数据搬迁工具已交付：改变某个域的 DSNs 前按第 7 节用 `shardctl` 回填目录并迁移数据。SQLite 自动化演练覆盖 message/user/task 三域的完整切流与回滚；真机 MySQL 上也已完成一个会话从 shard 0 迁到 shard 3 再回滚的闭环，目录、消息、游标、新消息落片与跨进程 SSE 均已核对。
 
 ### 阶段 3：全局唯一约束与 ID 生成器
 
@@ -163,7 +163,7 @@
 
 最后在实际数据上做一次消息域扩容演练：加一片 → 迁一部分 chat → 改目录行 → 校验 → 删除旧行。这是 `Topology.AddShard` 和 `PlanShrink` 的第一次真实使用。
 
-**阶段 4 实现状态**：规则与护栏已落地：共置时保持本地事务，`TxScope` 拒绝同域跨片写，`internal/compensation` 处理跨 user/task 资金 saga，`plane.SQLFence` 冻结迁移窗口写入，`SQLDirectory` 缓存 + ReplicaDSN 提供控制面可用性，`/metrics` 暴露目录命中率、控制面 QPS、跨域事务数、冻结写与补偿次数。message/user/task 三域的物理切分演练工具与 SQLite 自动化均已交付；真机 MySQL 演练脚本已写好并通过语法检查，尚未在隔离环境闭环。
+**阶段 4 实现状态**：规则与护栏已落地：共置时保持本地事务，`TxScope` 拒绝同域跨片写，`internal/compensation` 处理跨 user/task 资金 saga，`plane.SQLFence` 冻结迁移窗口写入，`SQLDirectory` 缓存 + ReplicaDSN 提供控制面可用性，`/metrics` 暴露目录命中率、控制面 QPS、跨域事务数、冻结写与补偿次数。message/user/task 三域的物理切分演练工具与 SQLite 自动化均已交付；真机 MySQL 上也已完成会话级 cutover/rollback、新消息落片校验与跨进程 SSE 验证。
 
 ---
 
@@ -229,7 +229,7 @@
 - **ID 唯一性**：已由 `SnowflakeIDGenerator` 解决，worker id 从控制面分配并持久化；切 user 域的这项前置已满足。
 - **目录与业务行的一致性**：`AssignInTx` 在控制面与业务库共置时保证同事务；分离时退化为最终一致，靠幂等重试与 saga 补偿兜底。
 - **热点用户**：按域并没有解决"单个大用户"问题；那需要更细的 key（如按 chat 拆），超出本方案范围。
-- **真机验证**：SQLite 自动化演练与真机脚本均已交付，但 MySQL 生成列、`INSERT IGNORE` 并发语义、DATETIME 解析与双进程 Redis pub/sub 尚未在隔离真机环境闭环实测。
+- **真机验证**：SQLite 自动化演练与 MySQL 8.4 + Redis 7 真机演练均已完成；MySQL 生成列、`DATETIME` 解析与双进程 Redis pub/sub 已在会话切流/SSE 场景中验证，`INSERT IGNORE` 的并发竞争语义仍由单测与 SQLite 演练覆盖。
 - **剩余优化**：avatar_ref / payload_ref 大字段迁移保留在 `internal/scale.TODOs`，不影响当前分片上线。
 
 ---

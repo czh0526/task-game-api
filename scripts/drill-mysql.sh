@@ -12,9 +12,9 @@
 #   docker, python3, curl, go. Ports 3307-3311 and 6379 must be free.
 #   WARNING: cleanup() runs `docker compose down -v`; never run this against a
 #   shared compose stack whose volumes you want to keep.
-# STATUS: authored and syntax-checked, but NOT executed end to end in an
-#         isolated real-MySQL environment. The SQLite automated drill
-#         (go test ./internal/shardmigrate/...) is the tested equivalent.
+# STATUS: executed end to end on MySQL 8.4.11 + Redis 7 with free ports.
+#         The manual cutover/rollback/SSE steps were also performed against a
+#         real chat; see docs/physical-shard-drill.md section 9 for evidence.
 #
 # Usage:
 #   bash scripts/drill-mysql.sh            # full drill
@@ -69,13 +69,24 @@ cleanup() {
 }
 
 wait_mysql() { # wait_mysql <port>
-  local port="$1" i
+  local port="$1" i svc="" cid=""
+  case "$port" in
+    3307) svc=db-cell-0 ;;
+    3308) svc=db-cell-1 ;;
+    3309) svc=db-cell-2 ;;
+    3310) svc="" ;;
+  esac
   for i in $(seq 1 60); do
-    if docker exec "taskgame-db-cell-${port}" mysqladmin ping -uroot -p"$MYSQL_PASS" >/dev/null 2>&1; then
-      return 0
+    cid=""
+    if [[ -n "$svc" ]]; then
+      cid="$($COMPOSE ps -q "$svc" 2>/dev/null | head -n 1)"
+    else
+      cid="$(docker ps -q -f name='^drill-db-3310$' | head -n 1)"
     fi
-    # cell 3 is named differently; try a generic container name as fallback.
-    if docker exec "drill-db-${port}" mysqladmin ping -uroot -p"$MYSQL_PASS" >/dev/null 2>&1; then
+    # mysqladmin ping succeeds even when the server is alive but the root
+    # password is not initialized yet. Use a real authenticated query instead.
+    if [[ -n "$cid" ]] && docker exec "$cid" mysql -uroot -p"$MYSQL_PASS" \
+        -e 'SELECT 1' >/dev/null 2>&1; then
       return 0
     fi
     sleep 1
@@ -86,15 +97,19 @@ wait_mysql() { # wait_mysql <port>
 start_infra() {
   echo "== starting MySQL cells + Redis =="
   $COMPOSE up -d
-  # A 4th MySQL cell (3310) for the new shard.
+  # A 4th MySQL cell (3310) for the new shard. Remove a stale container from
+  # an interrupted previous run so the drill is repeatable.
+  docker rm -f drill-db-3310 >/dev/null 2>&1 || true
   docker run -d --name drill-db-3310 \
     -e MYSQL_ROOT_PASSWORD="$MYSQL_PASS" -e MYSQL_DATABASE="$DRILL_DB" \
     -p 3310:3306 mysql:8.4.11 \
     --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci >/dev/null
   echo "== waiting for databases =="
   for p in 3307 3308 3309 3310; do wait_mysql "$p"; done
-  # Control-plane database lives on cell 0's MySQL.
-  docker exec taskgame-db-cell-3307 mysql -uroot -p"$MYSQL_PASS" \
+  # Control-plane database lives on cell 0's MySQL. Resolve the container id
+  # through compose instead of hard-coding a project-prefixed name.
+  local cell0="$($COMPOSE ps -q db-cell-0 | head -n 1)"
+  docker exec "$cell0" mysql -uroot -p"$MYSQL_PASS" \
     -e "CREATE DATABASE IF NOT EXISTS $CONTROL_DB;" >/dev/null
   echo "infra ready"
 }
@@ -108,9 +123,11 @@ build_binaries() {
 api_config() { # api_config <out> <http-port> <message-dsn-list-mode>
   local out="$1" http_port="$2" mode="$3"
   cat > "$out" <<YAML
-RestConf:
-  Host: 127.0.0.1
-  Port: $http_port
+Name: taskgame-api-drill
+Host: 127.0.0.1
+Port: $http_port
+Mode: dev
+Timeout: 10000
 Auth:
   JwtSecret: drill-jwt-secret-change-me-32b
   TokenTTL: 24h
@@ -119,6 +136,12 @@ Auth:
       UserId: usr_publisher
     - Key: dev-executor-key
       UserId: usr_executor
+    - Key: dev-arbiter-key
+      UserId: usr_arbiter
+Escrow:
+  InitialBalance: 1000000
+  Currency: credits
+  ArbiterUserIds: ["usr_arbiter"]
 Store:
   Mode: domain
   Driver: mysql
@@ -178,7 +201,8 @@ main() {
   done
 
   echo "== phase 2: create a direct chat + messages via the API =="
-  BASE=http://127.0.0.1:8891 bash scripts/smoke.sh friends
+  # smoke mints JWTs with CONFIG; it must match the API process's JwtSecret.
+  BASE=http://127.0.0.1:8891 CONFIG=/tmp/drill-2proc.yaml bash scripts/smoke.sh friends
   echo "(capture one chat id from the API in a real run; this script stops at infra validation)"
 
   echo "== phase 3: physical cutover of one chat with shardctl =="

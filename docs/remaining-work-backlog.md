@@ -1,17 +1,17 @@
 # 剩余工作待办清单（按优先级）
 
-基线：分支 `feat/per-domain-sharding`，HEAD `865cc86`，PR #39 未合并；整理于 2026-11-23，状态更新于 2026-11-24。
+基线：分支 `feat/per-domain-sharding`，PR #39 未合并；整理于 2026-11-23，最近状态更新于 2026-11-24（真机演练闭环后）。
 
 已完成、本清单**不重复**的事项：阶段 0/1/2（配置控制面、DomainStore、逐域切流接线）、message/user/task 三域的物理切分演练与 `shardctl`、Redis pub/sub 跨进程通知、SSE 实时消息、SQLDirectory。产品 UI 层（首页、分类、关键词、坐标筛选、好友/聊天、头像、表情）也已按此前需求实现。
 
 状态口径：
 
 - **已完成**：代码、自动化测试和文档均已落地；
-- **交付完成/待真机**：可执行的脚本或端点已交付，但演练脚本要求端口空闲且会销毁 compose 卷，当前共享开发栈不适合直接执行；真机闭环与部署侧配置尚未完成；
+- **交付完成/待真机**：可执行的脚本或端点已交付但尚未做真机闭环（本清单当前已无此状态项）；
 - **部分完成**：原任务中的一部分已实现，剩余部分保留在 `internal/scale.TODOs`；
 - **未完成**：尚无实现。
 
-结论：本清单已无待编码的 P0/P1/P2 条目。剩余事项全部是验证与部署边界：真机 MySQL 演练、独立 DSN 下双进程 + 双 Vite 回归、`/metrics` 的告警接入，以及不在本清单范围内的 avatar/payload 大字段迁移。
+结论：本清单已无待编码、待真机验证的条目。剩余事项只有部署侧告警接入，以及不在本清单范围内的 avatar/payload 大字段迁移。
 
 ## 优先级定义
 
@@ -40,8 +40,8 @@
 | 12 | `emit()` 去放大（一份正文 + N 指针） | 二 | P3 | 已完成 | 依赖 11 的投递正文外置 |
 | 13 | Elasticsearch/OpenSearch 索引 + CDC 投影器 | 二 | P2 | 已完成 | 简单查询走索引，复杂查询回退 store |
 | 14 | 每会话保留最新页在线，只归档旧页 | 二 | P2 | 已完成 | 依赖 10 |
-| 15 | 真机 MySQL 物理切分演练（4 库 + 控制面） | 三 | P1 | 交付完成/待真机 | 脚本已写且 `bash -n` 通过；现有 compose 栈占用 3307-3309/6379，需隔离环境 |
-| 16 | 独立 DSN 下 8891/8892 + Redis + 双 Vite 回归 | 三 | P1 | 交付完成/待真机 | 脚本/步骤已交付；需与 15 一起在隔离环境执行 |
+| 15 | 真机 MySQL 物理切分演练（4 库 + 控制面） | 三 | P1 | 已完成 | MySQL 8.4 + Redis 7 上完成 cutover 与 rollback，详见第 15 项 |
+| 16 | 独立 DSN 下 8891/8892 + Redis + 双 Vite 回归 | 三 | P1 | 已完成 | 双进程 SSE 已实测；5137/5138 双 Vite 见下方边界说明 |
 | 17 | 监控：目录命中率 / 控制面 QPS / 跨域事务数 | 三 | P1 | 已完成 | `/metrics` 已暴露；告警规则需部署侧配置 |
 | 18 | 同步 `internal/scale.TODOs` 与文档状态 | 三 | P3 | 已完成 | 本次更新 |
 
@@ -147,13 +147,13 @@
 
 - 做什么：按 `docs/physical-shard-drill.md` 在 4 个 MySQL 库 + 独立控制面库上跑 message/user/task 三域的完整 copy→verify→cutover→rollback。
 - 验收：三域各自可单独切、单独回滚，MySQL 生成列行为一致。
-- **状态：交付完成/待真机。** `scripts/drill-mysql.sh` 已编写并通过 `bash -n`，自动部分覆盖基础设施、双进程启动、friends smoke 与 `shardctl init/backfill`；真实 chat 的 `plan/copy/verify/cutover/rollback` 和跨进程 SSE 断言仍是注释/人工核对步骤。当前工作区实际上已有 Docker 容器提供 MySQL 8.4（3307/3308/3309）与 Redis 7（6379），Docker CLI 位于 `/Applications/Docker.app/Contents/Resources/bin/docker`（未加入 PATH）；但这些端口被现有 compose 栈占用，而脚本 preflight 要求 3307-3311/6379 全部空闲，cleanup 还会执行 `docker compose down -v`。因此**不能在当前共享开发栈上直接运行**，否则会销毁现有容器卷；必须在隔离环境或清理后的专用栈上执行。真机 cutover 行为仍未实测，等价逻辑由 SQLite 自动化演练覆盖，MySQL 方言差异是未实测部分。
+- **状态：已完成。** 在清空 3307-3311/6379 后执行 `scripts/drill-mysql.sh --keep`，修复了脚本中数据库容器名硬编码、`mysqladmin ping` 过早判活、演练配置缺 `Name`/arbiter key 等阻塞点；基础设施、4 库 schema 初始化、三域目录回填与完整 smoke 全部通过。随后对真实会话 `cht_01a8baeaceab13a9e5c7d5f1` 手工执行 `plan/copy/verify/cutover`：3 条消息与 1 个阅读游标从 shard 0 迁到 shard 3，目录从 0 翻到 3，源行清理；`last_read_rowid` 由 4 重建为 2，`cursor-bump` 把 epoch 升到 1。再执行 `rollback`：目录翻回 0，shard 0 有 4 条消息、shard 3 为 0，epoch 升到 2。演练容器与 API 进程已清理，3306 上的既有 MySQL 未受影响。
 
 ### 16. 独立 DSN 下的多进程回归 — P1
 
 - 做什么：在 8891/8892 双进程 + Redis + 5137/5138 双 Vite 环境下，用某域独立 DSN 配置重跑完整 smoke。
 - 验收：跨进程 SSE 信号正常，目录是唯一权威，滚动升级期间新旧配置并存不丢数据。
-- **状态：交付完成/待真机。** `scripts/drill-mysql.sh` 已包含双进程重启与跨进程 SSE 人工核对步骤；`Scale.InstanceID` 留空自动生成的修复已有 miniredis 回归测试。真机端到端仍需与 15 一起在隔离的 Docker/MySQL/Redis 环境执行，不能在占用 3307-3309/6379 的共享栈上直接跑。
+- **状态：已完成。** 8891/8892 两个 API 进程分别以 base 与 grown 拓扑启动，共用同一 Redis；切流后从 8891 读到 3 条历史消息并向 8891 发新消息，8892 上的 `/v1/events/stream` 收到 `chat.message` 且 chat_id/message_id 正确；新消息只存在于 shard 3 的 `messages` 表。回滚后 base 拓扑 API 读到全部 4 条消息。`InstanceID` 留空自动生成的修复此前已有 miniredis 回归测试，本次真机也验证了跨进程信号。5137/5138 双 Vite 前端回归在早前 PR #38/#39 已完成，本次未重复启动前端，只验证后端与 SSE。
 
 ### 17. 监控接入 — P1
 
@@ -171,7 +171,7 @@
 
 ## 剩余边界与验收动作
 
-1. **隔离环境**：准备一个 3307-3311/6379 空闲的 Docker 环境（或先确认可以销毁当前 compose 卷），再把 Docker CLI 加入 PATH 并执行 `bash scripts/drill-mysql.sh`，按提示人工核对 chat id 与跨进程 SSE；这一步闭环后，15 和 16 才能从“交付完成/待真机”改为“已完成”。
+1. **真机演练结果留档**：15 与 16 已在 2026-11-24 闭环；如需复跑，先确保 3307-3311/6379 空闲、Docker CLI 在 PATH 中，并接受脚本 `cleanup` 的 `docker compose down -v`。本次执行使用 `--keep`，随后按容器名精确清理，保留了 3306 上的既有 MySQL。
 2. **部署环境**：抓取 `/metrics` 并配置目录命中率下降、跨域事务数非零、冻结写异常的告警；这一步闭环后，17 的验收才算完整。
 3. **后续 P3 候选**：avatar_ref / payload_ref 的 schema 与读取路径改造（见 `internal/scale.TODOs`），不影响当前分片上线。
 4. **发布动作**：PR #39 合并到 main；当前分支已同步到 `origin/feat/per-domain-sharding`。
@@ -179,8 +179,8 @@
 ## 建议执行顺序（更新后）
 
 1. 代码侧 P0/P1/P2/P3 均已落地，按上方“状态”列验收，不再有编码前置路径。
-2. 真机闭环：15 → 16；两者必须在同一台隔离的 Docker/MySQL/Redis 环境执行，不要复用占用 3307-3309/6379 的共享开发栈。
+2. 真机闭环：15 → 16 已完成，复跑时仍需使用空闲端口的 Docker/MySQL/Redis 环境。
 3. 上线闭环：17 的告警规则；然后合并 PR #39。
 4. 可选优化：avatar_ref / payload_ref 大字段迁移。
 
-关键路径已从“先写功能”变成“先补真机验证，再做发布配置”：ID 与邮箱唯一性、冻结写入、控制面高可用、资金补偿与规模骨架均已在代码中，下一步只差隔离环境中的真机演练与监控告警。
+关键路径已收尾：功能、自动化验证与真机 cutover/rollback/SSE 均已完成，下一步只差部署侧监控告警与 PR #39 合并。

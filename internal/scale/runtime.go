@@ -41,7 +41,7 @@ const defaultSearchIndex = "taskgame_tasks"
 // and emit() de-amplified (one body + N refs); messages keep the newest page
 // online. Remaining large-column ref migrations (avatar / submission payload)
 // are listed below; docs/remaining-work-backlog.md records the completed items
-// and the remaining real-MySQL / dashboard verification boundaries.
+// and the remaining dashboard verification boundary.
 var TODOs = []string{
 	"P3: add avatar_ref / payload_ref migrations for users avatars and submission payloads",
 }
