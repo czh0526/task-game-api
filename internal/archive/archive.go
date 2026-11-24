@@ -173,9 +173,9 @@ func NewArchiver(b BlobStore, policies []RetentionPolicy) *Archiver {
 // Plan returns the batches that would have to run at time now. It is pure:
 // no row is read, copied, or deleted.
 //
-// TODO before enabling: iterate every shard, write the cold copy, verify the
-// checksum, then delete online rows inside a per-shard transaction, and keep
-// the newest page of each chat for the message policy.
+// ExecuteBatch (execute.go) carries out each batch: it writes the cold copy,
+// verifies the checksum, then deletes online rows. The message policy keeps
+// the newest page of each chat online.
 func (a *Archiver) Plan(_ context.Context, now time.Time) ([]Batch, error) {
 	out := make([]Batch, 0, len(a.Policies))
 	for _, p := range a.Policies {

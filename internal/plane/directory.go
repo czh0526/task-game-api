@@ -3,8 +3,9 @@
 // A SQL-backed implementation (SQLDirectory in sql_directory.go) persists the
 // routing rows across processes and restarts; it is selected by
 // Scale.Directory.Enabled. InMemoryDirectory stays the default for a single
-// process. Neither moves an existing table out of the primary store: the User
-// / Task repositories are still unsplit (see internal/scale.TODOs).
+// process. The directory only changes routing; it never copies rows. Actual
+// physical moves are performed by the shardctl tooling described in
+// docs/physical-shard-drill.md.
 package plane
 
 import (

@@ -13,9 +13,9 @@ import (
 // Keeping this database tiny and cacheable is what stops it becoming the next
 // single point of contention.
 //
-// SQLDirectory (sql_directory.go) now persists these tables; a SQL-backed
-// UniqueIndex is still TODO (see internal/scale.TODOs), so InMemoryUnique
-// remains the runnable default for global uniqueness.
+// SQLDirectory (sql_directory.go) persists these tables and SQLUnique
+// (sql_unique.go) provides global uniqueness on the global_unique table;
+// InMemoryUnique stays the zero-dependency default for single-process use.
 const Schema = `
 CREATE TABLE IF NOT EXISTS shard_directory (
     domain      VARCHAR(16)  NOT NULL,
