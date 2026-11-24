@@ -15,10 +15,16 @@ import (
 	"taskgame/internal/auth"
 	"taskgame/internal/biz"
 	"taskgame/internal/id"
+	"taskgame/internal/model"
+	"taskgame/internal/plane"
 	"taskgame/internal/store"
 
 	"golang.org/x/crypto/bcrypt"
 )
+
+// emailNamespace is the global_unique namespace used for the email -> user_id
+// constraint when a control plane is wired in.
+const emailNamespace = "email"
 
 const (
 	minPasswordChars = 8
@@ -55,6 +61,17 @@ type Service struct {
 	cost      int
 	dummyOnce sync.Once
 	dummyHash []byte
+
+	// identity is the optional control-plane-backed global constraint. When
+	// set, registration reserves email -> user_id before writing the user and
+	// login resolves through it, instead of scanning every shard.
+	identity *identityBackend
+}
+
+// identityBackend bundles the two control-plane pieces registration needs.
+type identityBackend struct {
+	unique plane.UniqueIndex
+	ids    plane.IDGenerator
 }
 
 // Option adjusts a Service. Production uses bcrypt.DefaultCost and time.Now.
@@ -74,6 +91,18 @@ func WithClock(now func() time.Time) Option {
 	return func(s *Service) {
 		if now != nil {
 			s.now = now
+		}
+	}
+}
+
+// WithIdentity wires the control plane's global unique index and Snowflake ID
+// generator into registration/login. Without it, registration falls back to
+// the legacy id.New + store-local email uniqueness path (byte-for-byte the
+// original behavior), which keeps every existing deployment and test intact.
+func WithIdentity(unique plane.UniqueIndex, ids plane.IDGenerator) Option {
+	return func(s *Service) {
+		if unique != nil && ids != nil {
+			s.identity = &identityBackend{unique: unique, ids: ids}
 		}
 	}
 }
@@ -118,6 +147,43 @@ func (s *Service) Register(ctx context.Context, email, password string, nickname
 		return Session{}, err
 	}
 	now := s.now().UTC()
+
+	// Control-plane path: reserve the global email claim and use a Snowflake
+	// id before writing the user row. A failed insert releases the claim so a
+	// retry can succeed; ErrConflict maps to the same 409 as the legacy path.
+	if s.identity != nil {
+		userID := s.identity.ids.New("usr_")
+		if err := s.identity.unique.Reserve(ctx, emailNamespace, norm, userID); err != nil {
+			if errors.Is(err, plane.ErrConflict) {
+				return Session{}, biz.Conflict("email already registered")
+			}
+			return Session{}, err
+		}
+		user, err := s.store.Users().InsertRegistered(ctx, userID, norm, string(hash), now)
+		if err != nil {
+			// Best-effort rollback: Release is guarded by owner id, so this
+			// never frees another process's claim. Domain routing errors are
+			// unreachable here because the row was never committed.
+			if rel, ok := s.identity.unique.(interface {
+				Release(context.Context, string, string, string) error
+			}); ok {
+				_ = rel.Release(ctx, emailNamespace, norm, userID)
+			}
+			if errors.Is(err, store.ErrConflict) {
+				return Session{}, biz.Conflict("email already registered")
+			}
+			return Session{}, err
+		}
+		if nick != "" {
+			if err := s.store.Users().SetNickname(ctx, user.ID, nick); err != nil {
+				return Session{}, err
+			}
+			user.Nickname = nick
+		}
+		return s.sign(user.ID, user.Email, user.Nickname, now)
+	}
+
+	// Legacy path (unchanged).
 	userID := id.New("usr_")
 	user, err := s.store.Users().InsertRegistered(ctx, userID, norm, string(hash), now)
 	if errors.Is(err, store.ErrConflict) {
@@ -148,7 +214,28 @@ func (s *Service) Login(ctx context.Context, email, password string) (Session, e
 	if len(password) > maxPasswordBytes {
 		return Session{}, biz.Invalid("password must be at most 72 bytes")
 	}
-	user, err := s.store.Users().GetByEmail(ctx, norm)
+	var user model.User
+	if s.identity != nil {
+		if owner, ok, oerr := s.identity.unique.Owner(ctx, emailNamespace, norm); oerr != nil {
+			return Session{}, oerr
+		} else if ok {
+			// ResolveExisting through the store routes by user_id and, in
+			// domain mode, reads the directory for the authoritative shard.
+			users := s.store.Users()
+			if cred, supported := users.(interface {
+				GetCredentials(context.Context, string) (model.User, error)
+			}); supported {
+				user, err = cred.GetCredentials(ctx, owner)
+			} else {
+				user, err = users.Get(ctx, owner)
+			}
+		} else {
+			// Legacy user registered before the global index existed.
+			user, err = s.store.Users().GetByEmail(ctx, norm)
+		}
+	} else {
+		user, err = s.store.Users().GetByEmail(ctx, norm)
+	}
 	if errors.Is(err, store.ErrNotFound) {
 		s.dummyCompare(password)
 		return Session{}, biz.Unauthorized("invalid email or password")

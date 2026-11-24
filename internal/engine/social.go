@@ -8,6 +8,7 @@ import (
 	"taskgame/internal/biz"
 	"taskgame/internal/id"
 	"taskgame/internal/model"
+	"taskgame/internal/plane"
 	"taskgame/internal/store"
 	"taskgame/internal/types"
 )
@@ -361,10 +362,11 @@ func (e *Engine) ListMessages(ctx context.Context, userID string, req *types.Lis
 	if limit == 0 {
 		limit = 50
 	}
-	offset, err := decodeCursor(req.Cursor)
-	if err != nil {
-		return nil, err
+	cursorEpoch, offset64, err := plane.ParseCursor(req.Cursor)
+	if err != nil || offset64 < 0 || offset64 > int64(^uint(0)>>1) {
+		return nil, biz.Invalid("invalid cursor")
 	}
+	offset := int(offset64)
 	chat, err := e.store.Chats().GetChat(ctx, req.ChatId)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, biz.NotFound("chat not found")
@@ -375,6 +377,20 @@ func (e *Engine) ListMessages(ctx context.Context, userID string, req *types.Lis
 	if !contains(chat.MemberIDs, userID) {
 		return nil, biz.Forbidden("only members can read this chat")
 	}
+	// If a physical cutover rebuilt this chat's rowids, any outstanding cursor
+	// is stale. Restart from the first page instead of skipping or repeating
+	// messages. Without a source (default / single DB) the epoch is always 0
+	// and behaviour is byte-for-byte unchanged.
+	currentEpoch := int64(0)
+	if e.cursorEpoch != nil {
+		currentEpoch, err = e.cursorEpoch.Epoch(ctx, chat.ID)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if cursorEpoch != currentEpoch {
+		offset = 0
+	}
 	rows, err := e.store.Chats().ListMessages(ctx, chat.ID, limit+1, offset)
 	if err != nil {
 		return nil, err
@@ -382,7 +398,7 @@ func (e *Engine) ListMessages(ctx context.Context, userID string, req *types.Lis
 	var next *string
 	if len(rows) > limit {
 		rows = rows[:limit]
-		next = encodeCursor(offset + limit)
+		next = encodeCursorWithEpoch(offset+limit, currentEpoch)
 	}
 	items := make([]types.Message, 0, len(rows))
 	for _, row := range rows {

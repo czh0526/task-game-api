@@ -209,6 +209,67 @@ func TestScaleRedisConfigLoads(t *testing.T) {
 	}
 }
 
+const domainDSNsYAML = inlineHeader + `  Enabled: true
+  PubSub: shared
+  InstanceID: api-a
+  Domains:
+    User:
+      Shards: 2
+      DSNs:
+        - "root@tcp(127.0.0.1:3307)/taskgame"
+        - "root@tcp(127.0.0.1:3308)/taskgame"
+    Task:
+      Shards: 3
+      DSNs:
+        - "root@tcp(127.0.0.1:3307)/taskgame"
+        - "root@tcp(127.0.0.1:3308)/taskgame"
+        - "root@tcp(127.0.0.1:3309)/taskgame"
+    Message:
+      Shards: 2
+      DSNs:
+        - "m0"
+        - "m1"
+`
+
+func TestDomainDSNsLoad(t *testing.T) {
+	c := loadInline(t, domainDSNsYAML)
+	if err := c.Scale.Validate(); err != nil {
+		t.Fatalf("valid domain DSNs rejected: %v", err)
+	}
+	if c.Scale.Domains.User.Shards != 2 || len(c.Scale.Domains.User.DSNs) != 2 {
+		t.Fatalf("User domain not parsed: %+v", c.Scale.Domains.User)
+	}
+	if c.Scale.Domains.Task.Shards != 3 || len(c.Scale.Domains.Task.DSNs) != 3 {
+		t.Fatalf("Task domain not parsed: %+v", c.Scale.Domains.Task)
+	}
+	if len(c.Scale.Domains.Message.DSNs) != 2 {
+		t.Fatalf("Message domain not parsed: %+v", c.Scale.Domains.Message)
+	}
+}
+
+func TestDomainDSNsValidation(t *testing.T) {
+	cases := []DomainDSNsConf{
+		{Shards: -1},
+		{Shards: 3, DSNs: []string{"a", "b"}}, // count mismatch
+		{Shards: 2, DSNs: []string{"a", ""}},  // empty DSN
+	}
+	for i, d := range cases {
+		if err := d.Validate("User"); err == nil {
+			t.Fatalf("case %d: invalid domain DSN config accepted: %+v", i, d)
+		}
+	}
+	valid := []DomainDSNsConf{
+		{}, // not wired
+		{Shards: 2, DSNs: []string{"a", "b"}},
+		{DSNs: []string{"a", "b"}}, // DSNs without explicit count
+	}
+	for i, d := range valid {
+		if err := d.Validate("User"); err != nil {
+			t.Fatalf("case %d: valid domain DSN config rejected: %v", i, err)
+		}
+	}
+}
+
 func TestDirectoryDriverValidation(t *testing.T) {
 	for _, driver := range []string{"", "sqlite", "mysql"} {
 		c := ScaleConf{Enabled: true, Directory: DirectoryScaleConf{Enabled: true, Driver: driver, DSN: "file:p.db"}}

@@ -48,6 +48,37 @@ func (r *userRepo) Get(ctx context.Context, id string) (model.User, error) {
 	return u, nil
 }
 
+// GetCredentials is the password-bearing by-id read used by control-plane
+// login (email -> user_id -> credentials). Get deliberately hides the hash,
+// so this is a separate, explicitly named method rather than a widened Get.
+func (r *userRepo) GetCredentials(ctx context.Context, id string) (model.User, error) {
+	return r.GetByEmailWHEREID(ctx, id)
+}
+
+// GetByEmailWHEREID reads a user plus password hash by primary key. The name
+// is internal; GetCredentials is the stable entry point.
+func (r *userRepo) GetByEmailWHEREID(ctx context.Context, id string) (model.User, error) {
+	var u model.User
+	var created string
+	var hash sql.NullString
+	err := r.q.QueryRowContext(ctx, `
+		SELECT id, balance, integrity, ability, created_at, COALESCE(email, ''), COALESCE(nickname, ''), password_hash
+		FROM users WHERE id = ?`, id).
+		Scan(&u.ID, &u.Balance, &u.Integrity, &u.Ability, &created, &u.Email, &u.Nickname, &hash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.User{}, store.ErrNotFound
+	}
+	if err != nil {
+		return model.User{}, err
+	}
+	u.CreatedAt, err = model.ParseTime(created)
+	if err != nil {
+		return model.User{}, err
+	}
+	u.PasswordHash = hash.String
+	return u, nil
+}
+
 func (r *userRepo) InsertRegistered(ctx context.Context, id, email, passwordHash string, now time.Time) (model.User, error) {
 	_, err := r.q.ExecContext(ctx, `
 		INSERT INTO users (id, balance, integrity, ability, created_at, email, password_hash)
@@ -878,15 +909,15 @@ type deliveryRepo struct{ q querier }
 
 func (r *deliveryRepo) Insert(ctx context.Context, d model.Delivery) error {
 	_, err := r.q.ExecContext(ctx, `
-		INSERT INTO webhook_deliveries (id, webhook_id, event_id, event_type, body, status, attempts, last_error, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		d.ID, d.WebhookID, d.EventID, d.EventType, d.Body, d.Status, d.Attempts, d.LastError, model.FormatTime(d.CreatedAt))
+		INSERT INTO webhook_deliveries (id, webhook_id, event_id, event_type, body, body_ref, status, attempts, last_error, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		d.ID, d.WebhookID, d.EventID, d.EventType, d.Body, d.BodyRef, d.Status, d.Attempts, d.LastError, model.FormatTime(d.CreatedAt))
 	return err
 }
 
 func (r *deliveryRepo) ListPending(ctx context.Context, maxAttempts, limit int) ([]model.Delivery, error) {
 	rows, err := r.q.QueryContext(ctx, `
-		SELECT d.id, d.webhook_id, d.event_id, d.event_type, d.body, d.status, d.attempts, d.last_error, d.created_at, w.url, w.secret
+		SELECT d.id, d.webhook_id, d.event_id, d.event_type, d.body, d.body_ref, d.status, d.attempts, d.last_error, d.created_at, w.url, w.secret
 		FROM webhook_deliveries d
 		JOIN webhooks w ON w.id = d.webhook_id
 		WHERE d.status = ? AND d.attempts < ?
@@ -899,7 +930,7 @@ func (r *deliveryRepo) ListPending(ctx context.Context, maxAttempts, limit int) 
 	for rows.Next() {
 		var d model.Delivery
 		var created string
-		if err := rows.Scan(&d.ID, &d.WebhookID, &d.EventID, &d.EventType, &d.Body, &d.Status, &d.Attempts, &d.LastError, &created, &d.URL, &d.Secret); err != nil {
+		if err := rows.Scan(&d.ID, &d.WebhookID, &d.EventID, &d.EventType, &d.Body, &d.BodyRef, &d.Status, &d.Attempts, &d.LastError, &created, &d.URL, &d.Secret); err != nil {
 			return nil, err
 		}
 		d.CreatedAt, err = model.ParseTime(created)
@@ -969,11 +1000,11 @@ func (r *deliveryRepo) byToken(ctx context.Context, token string) (model.Deliver
 	var d model.Delivery
 	var created string
 	err := r.q.QueryRowContext(ctx, `
-		SELECT d.id, d.webhook_id, d.event_id, d.event_type, d.body, d.status, d.attempts, d.last_error, d.created_at, d.claim_token, w.url, w.secret
+		SELECT d.id, d.webhook_id, d.event_id, d.event_type, d.body, d.body_ref, d.status, d.attempts, d.last_error, d.created_at, d.claim_token, w.url, w.secret
 		FROM webhook_deliveries d
 		JOIN webhooks w ON w.id = d.webhook_id
 		WHERE d.claim_token = ?`, token).
-		Scan(&d.ID, &d.WebhookID, &d.EventID, &d.EventType, &d.Body, &d.Status, &d.Attempts, &d.LastError, &created, &d.ClaimToken, &d.URL, &d.Secret)
+		Scan(&d.ID, &d.WebhookID, &d.EventID, &d.EventType, &d.Body, &d.BodyRef, &d.Status, &d.Attempts, &d.LastError, &created, &d.ClaimToken, &d.URL, &d.Secret)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Delivery{}, store.ErrNotFound
 	}

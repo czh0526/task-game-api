@@ -76,6 +76,14 @@ func (e *Engine) ListTasks(ctx context.Context, userID string, req *types.ListTa
 	if trim(req.Assignable) == "me" {
 		return e.listAssignableWith(ctx, userID, filter, limit, offset)
 	}
+	// When a read-side index is available and the request only uses filters the
+	// index understands, answer from the index in one query instead of
+	// scattering to every shard. Complex filters fall through to the store.
+	if e.taskIndex != nil {
+		if list, ok, err := e.listViaIndex(ctx, filter, limit, offset); ok || err != nil {
+			return list, err
+		}
+	}
 	filter.Limit = limit + 1
 	filter.Offset = offset
 	total, err := e.store.Tasks().Count(ctx, filter)

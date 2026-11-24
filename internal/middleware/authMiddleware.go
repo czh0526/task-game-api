@@ -9,6 +9,7 @@ import (
 	"taskgame/internal/biz"
 	"taskgame/internal/config"
 	"taskgame/internal/store/cell"
+	"taskgame/internal/store/domain"
 
 	"github.com/zeromicro/go-zero/rest/httpx"
 )
@@ -21,16 +22,26 @@ type AuthMiddleware struct {
 	// request to the database that owns the aggregate root in the URL (or the
 	// authenticated user when there is no id).
 	loc *cell.Locator
+	// domainRouting is true when Store.Mode=domain. The route tells the
+	// domain store which aggregate root owns the transaction.
+	domainRouting bool
 }
 
 // NewAuthMiddleware indexes the configured API keys. An optional cell Locator
 // enables horizontal routing; single-database callers omit it.
 func NewAuthMiddleware(cfg config.AuthConf, loc ...*cell.Locator) *AuthMiddleware {
+	return NewAuthMiddlewareWithDomain(cfg, false, loc...)
+}
+
+// NewAuthMiddlewareWithDomain enables domain-store routing on top of the
+// regular authentication. Cell pinning is kept when a Locator is supplied so
+// the same middleware works during a rolling switch between store modes.
+func NewAuthMiddlewareWithDomain(cfg config.AuthConf, domainRouting bool, loc ...*cell.Locator) *AuthMiddleware {
 	keys := make(map[string]string, len(cfg.ApiKeys))
 	for _, item := range cfg.ApiKeys {
 		keys[item.Key] = item.UserId
 	}
-	m := &AuthMiddleware{secret: cfg.JwtSecret, keys: keys}
+	m := &AuthMiddleware{secret: cfg.JwtSecret, keys: keys, domainRouting: domainRouting}
 	if len(loc) > 0 {
 		m.loc = loc[0]
 	}
@@ -41,11 +52,21 @@ func NewAuthMiddleware(cfg config.AuthConf, loc ...*cell.Locator) *AuthMiddlewar
 // placed on the context, so both authenticated and anonymous public reads can
 // be routed. A request with no key at all stays unpinned; list reads fan out.
 func (m *AuthMiddleware) cellRoute(next http.HandlerFunc) http.HandlerFunc {
-	if m.loc == nil {
+	if m.loc == nil && !m.domainRouting {
 		return next
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
+		if m.domainRouting {
+			uid, _ := auth.UserID(ctx)
+			if dr, ok := domain.RouteForRequest(r.Method, r.URL.Path, uid); ok {
+				ctx = domain.WithRoute(ctx, dr.Domain, dr.Key, dr.Create)
+			}
+		}
+		if m.loc == nil {
+			next(w, r.WithContext(ctx))
+			return
+		}
 		key, kind := cell.KeyFromPath(r.URL.Path)
 		if key == "" {
 			if uid, ok := auth.UserID(ctx); ok {

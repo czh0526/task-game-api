@@ -117,7 +117,11 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
     webhook_id TEXT NOT NULL,
     event_id TEXT NOT NULL,
     event_type TEXT NOT NULL,
-    body TEXT NOT NULL,
+    body TEXT NOT NULL DEFAULT '',
+    -- body_ref points to the shared event body in the BlobStore when set,
+    -- body is empty and the dispatcher reads the body from the blob. This
+    -- de-amplifies one event into N small delivery rows.
+    body_ref TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL,
     attempts INTEGER NOT NULL,
     last_error TEXT NOT NULL DEFAULT '',

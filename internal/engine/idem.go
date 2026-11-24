@@ -11,6 +11,7 @@ import (
 	"taskgame/internal/biz"
 	"taskgame/internal/model"
 	"taskgame/internal/store"
+	"taskgame/internal/types"
 )
 
 type replayError struct {
@@ -60,6 +61,9 @@ func call[T any](e *Engine, ctx context.Context, userID, method, path, key strin
 			out = v
 			return nil
 		})
+		if err == nil {
+			e.recordCDC(ctx, out)
+		}
 		return out, err
 	}
 	sum, err := hashReq(fp)
@@ -125,9 +129,20 @@ func call[T any](e *Engine, ctx context.Context, userID, method, path, key strin
 		if uerr := json.Unmarshal(rp.body, &decoded); uerr != nil {
 			return zero, uerr
 		}
-		return decoded, nil
+		return decoded, nil // idempotent replay already recorded the first write
+	}
+	if err == nil {
+		e.recordCDC(ctx, out)
 	}
 	return out, err
+}
+
+// recordCDC records only when T is a task DTO; other write results (invites,
+// friend groups, etc.) do not affect the task search index.
+func (e *Engine) recordCDC(ctx context.Context, out any) {
+	if task, ok := any(out).(*types.Task); ok {
+		e.recordTaskDTO(ctx, task)
+	}
 }
 
 func replay[T any](rec *model.IdemRecord, sum string) (T, error) {

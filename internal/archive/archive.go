@@ -4,9 +4,11 @@
 // only things that actually shrink an online database are (1) moving cold rows
 // out, (2) moving large columns out, and (3) removing write amplification.
 //
-// SKELETON BOUNDARY: FileBlobStore is runnable and Archiver.Plan produces real
-// plans, but nothing is executed. Executing an archive (copy to cold storage,
-// verify, then delete online rows, per shard) is TODO.
+// FileBlobStore is runnable, Archiver.Plan produces real plans, and
+// Archiver.ExecuteBatch / ExecuteAll perform the copy → checksum-verify →
+// delete sequence per shard. Restore reverses it for drills and recovery.
+// Large-column offloading (LargeColumn.RefColumn) and emit() de-amplification
+// are still staged separately.
 package archive
 
 import (
@@ -90,8 +92,10 @@ func (f *FileBlobStore) path(ref string) (string, error) {
 	return filepath.Join(f.Dir, hexPart[:2], hexPart), nil
 }
 
-// LargeColumn is a column that should become a ref. Adding the RefColumn to
-// the schema is a migration TODO; the online row then keeps only a small ref.
+// LargeColumn is a column that should become a ref. The webhook_deliveries
+// body_ref column is now in both dialects' schemas and migrations; the engine
+// writes it via WithEventBodyStore and ExternalizeDeliveryBodies back-fills
+// legacy inline rows. avatar/payload ref columns remain a future migration.
 type LargeColumn struct {
 	Table     string
 	Column    string
@@ -111,6 +115,11 @@ type RetentionPolicy struct {
 	TimeColumn string
 	HotWindow  time.Duration
 	Note       string
+	// GroupColumn + KeepPerGroup protect the newest N rows of each group from
+	// archival (used for messages: keep the newest page of every chat online so
+	// the common "load latest history" read never hits the cold tier).
+	GroupColumn  string
+	KeepPerGroup int
 }
 
 // DefaultPolicies covers the append-only tables that grow forever today.
@@ -120,13 +129,15 @@ var DefaultPolicies = []RetentionPolicy{
 	{Table: "score_events", TimeColumn: "created_at", HotWindow: 90 * 24 * time.Hour, Note: "append-only ledger history"},
 	{Table: "webhook_deliveries", TimeColumn: "created_at", HotWindow: 30 * 24 * time.Hour, Note: "delivery attempts and bodies"},
 	{Table: "idempotency_keys", TimeColumn: "created_at", HotWindow: 7 * 24 * time.Hour, Note: "needs a created_at index + TTL"},
-	{Table: "messages", TimeColumn: "created_at", HotWindow: 180 * 24 * time.Hour, Note: "per shard; never archive a chat's newest page"},
+	{Table: "messages", TimeColumn: "created_at", HotWindow: 180 * 24 * time.Hour,
+		GroupColumn: "chat_id", KeepPerGroup: 50, Note: "per shard; keep each chat's newest page online"},
 }
 
-// DeliveryBody is the shape of a de-amplified webhook delivery. Today emit()
-// writes one full body row per subscriber (N x amplification). The target
-// shape stores the body once and keeps only (delivery_id, body_ref, state).
-// TODO: refactor emit() and the dispatcher to use it.
+// DeliveryBody is the shape of a de-amplified webhook delivery: the body is
+// stored once and each delivery keeps only (delivery_id, body_ref, state).
+// emit() writes the ref (engine.WithEventBodyStore) and the dispatcher resolves
+// it (webhook.Config.BodyStore); ExternalizeDeliveryBodies back-fills legacy
+// inline rows. Both paths fall back to inline bodies when no blob tier is set.
 type DeliveryBody struct {
 	BodyRef string
 	Bytes   int64
@@ -135,12 +146,16 @@ type DeliveryBody struct {
 // Batch is one planned archive operation. SQL statements are templates with
 // placeholders; they are intentionally not executed by the skeleton.
 type Batch struct {
-	Table       string
-	Before      time.Time
-	SelectSQL   string
-	ArchiveSQL  string
-	DeleteSQL   string
-	RequiresACK bool
+	Table      string
+	Before     time.Time
+	TimeColumn string // explicit column name; avoids parsing SelectSQL
+	SelectSQL  string
+	ArchiveSQL string
+	DeleteSQL  string
+	// KeepPerGroup > 0 means SelectSQL takes a third argument (the keep count)
+	// between the cutoff and the limit, protecting each group's newest rows.
+	KeepPerGroup int
+	RequiresACK  bool
 }
 
 type Archiver struct {
@@ -168,14 +183,29 @@ func (a *Archiver) Plan(_ context.Context, now time.Time) ([]Batch, error) {
 			return nil, fmt.Errorf("archive: invalid retention policy %+v", p)
 		}
 		before := now.Add(-p.HotWindow)
-		out = append(out, Batch{
+		batch := Batch{
 			Table:       p.Table,
 			Before:      before,
-			SelectSQL:   fmt.Sprintf("SELECT * FROM %s WHERE %s < ? LIMIT ?", p.Table, p.TimeColumn),
+			TimeColumn:  p.TimeColumn,
 			ArchiveSQL:  fmt.Sprintf("INSERT INTO %s_cold SELECT * FROM %s WHERE %s < ?", p.Table, p.Table, p.TimeColumn),
-			DeleteSQL:   fmt.Sprintf("DELETE FROM %s WHERE %s < ?", p.Table, p.TimeColumn),
+			DeleteSQL:   fmt.Sprintf("DELETE FROM %s WHERE %s < ? AND id = ?", p.Table, p.TimeColumn),
 			RequiresACK: true,
-		})
+		}
+		if p.KeepPerGroup > 0 && p.GroupColumn != "" {
+			// Keep each group's newest N rows online. The correlated NOT EXISTS
+			// counts newer rows in the same group; only rows with at least N
+			// newer siblings are cold enough to archive. Args: (before, N, limit).
+			batch.KeepPerGroup = p.KeepPerGroup
+			batch.SelectSQL = fmt.Sprintf(
+				"SELECT * FROM %s t WHERE t.%s < ? AND ("+
+					"SELECT COUNT(*) FROM %s n WHERE n.%s = t.%s AND "+
+					"(n.%s > t.%s OR (n.%s = t.%s AND n.id > t.id))) >= ? LIMIT ?",
+				p.Table, p.TimeColumn, p.Table, p.GroupColumn, p.GroupColumn,
+				p.TimeColumn, p.TimeColumn, p.TimeColumn, p.TimeColumn)
+		} else {
+			batch.SelectSQL = fmt.Sprintf("SELECT * FROM %s WHERE %s < ? LIMIT ?", p.Table, p.TimeColumn)
+		}
+		out = append(out, batch)
 	}
 	return out, nil
 }

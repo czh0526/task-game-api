@@ -56,6 +56,14 @@ func (r *routingUserRepo) Get(ctx context.Context, id string) (model.User, error
 	return r.s.cells[r.s.byKey(ctx, id, KindUser)].Users().Get(ctx, id)
 }
 
+// GetCredentials reads the password-bearing record from the cell that owns
+// id. Used by control-plane login after resolving email -> user_id.
+func (r *routingUserRepo) GetCredentials(ctx context.Context, id string) (model.User, error) {
+	return r.s.cells[r.s.byKey(ctx, id, KindUser)].Users().(interface {
+		GetCredentials(context.Context, string) (model.User, error)
+	}).GetCredentials(ctx, id)
+}
+
 // InsertRegistered has no authenticated user yet, so the fresh user id itself
 // is the routing key. That is what spreads registrations evenly over cells.
 func (r *routingUserRepo) InsertRegistered(ctx context.Context, id, email, passwordHash string, now time.Time) (model.User, error) {

@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 
 	"taskgame/internal/biz"
+	"taskgame/internal/compensation"
 	"taskgame/internal/id"
 	"taskgame/internal/model"
 	"taskgame/internal/store"
@@ -15,7 +17,30 @@ import (
 
 // FundTask holds payment.amount from the publisher and moves draft → open.
 func (e *Engine) FundTask(ctx context.Context, userID string, req *types.FundTaskReq) (*types.Task, error) {
-	return call(e, ctx, userID, http.MethodPost, taskPath(req.TaskId, "fund"), req.IdempotencyKey, req, func(ctx context.Context, r store.Repos) (*types.Task, error) {
+	// Cross-domain saga journaling (opt-in). When the user/task domains are
+	// physically split, call() can no longer keep the balance deduction and
+	// escrow insert in one physical transaction. The saga records the intent
+	// before the operation; the background reconciler finishes or compensates
+	// it after a crash. In co-located mode this is a cheap, inert marker.
+	var sagaID, escrowID, entryID string
+	created := e.now().UTC()
+	if e.comp != nil {
+		escrowID, entryID = id.New("esc_"), id.New("ent_")
+		sagaID = "fund_" + req.TaskId
+		// Record the intent before money moves. Begin is idempotent (INSERT
+		// IGNORE), so an idem replay of FundTask does not duplicate the saga.
+		if berr := e.comp.Begin(ctx, compensation.Record{
+			ID: sagaID, Kind: compensation.KindFundHold, UserID: userID, TaskID: req.TaskId,
+			State: compensation.StatePending,
+			Payload: compensation.MarshalPayload(compensation.FundPayload{
+				UserID: userID, TaskID: req.TaskId, EscrowID: escrowID, EntryID: entryID,
+				Currency: e.currency, CreatedAtUTC: created.Format(time.RFC3339Nano),
+			}),
+		}); berr != nil {
+			return nil, berr
+		}
+	}
+	dto, callErr := call(e, ctx, userID, http.MethodPost, taskPath(req.TaskId, "fund"), req.IdempotencyKey, req, func(ctx context.Context, r store.Repos) (*types.Task, error) {
 		t, err := loadTask(ctx, r, req.TaskId)
 		if err != nil {
 			return nil, err
@@ -36,14 +61,17 @@ func (e *Engine) FundTask(ctx context.Context, userID string, req *types.FundTas
 			return nil, err
 		}
 		now := e.now()
+		if escrowID == "" {
+			escrowID, entryID = id.New("esc_"), id.New("ent_")
+		}
 		acc := model.EscrowAccount{
-			ID: id.New("esc_"), TaskID: t.ID, Held: t.Payment.Amount, Currency: e.currency,
+			ID: escrowID, TaskID: t.ID, Held: t.Payment.Amount, Currency: e.currency,
 		}
 		if err := r.Escrow().Insert(ctx, acc); err != nil {
 			return nil, err
 		}
 		entry := model.EscrowEntry{
-			ID: id.New("ent_"), EscrowID: acc.ID, Type: model.EscrowHold, Amount: t.Payment.Amount, CreatedAt: now,
+			ID: entryID, EscrowID: acc.ID, Type: model.EscrowHold, Amount: t.Payment.Amount, CreatedAt: now,
 		}
 		if err := r.Escrow().InsertEntry(ctx, entry); err != nil {
 			return nil, err
@@ -83,6 +111,16 @@ func (e *Engine) FundTask(ctx context.Context, userID string, req *types.FundTas
 		}
 		return dto, nil
 	})
+
+	// Close the journal. call() is atomic in co-located mode: on success the
+	// money is held, on failure it rolled back, so in both cases the recorded
+	// intent is resolved and the reconciler has nothing left to do. If the
+	// process crashed inside call(), the saga stays pending and the reconciler
+	// replays the idempotent FundHoldHandler (or compensates it).
+	if e.comp != nil {
+		_ = e.comp.Complete(ctx, sagaID)
+	}
+	return dto, callErr
 }
 
 // AcceptTask moves open → active. Competitive tasks stay active until slots fill.

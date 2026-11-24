@@ -151,6 +151,7 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	if err := addColumns(ctx, db, "webhook_deliveries", map[string]string{
 		"claim_token":   "TEXT NOT NULL DEFAULT ''",
 		"claimed_until": "TEXT",
+		"body_ref":      "TEXT NOT NULL DEFAULT ''",
 	}); err != nil {
 		return err
 	}

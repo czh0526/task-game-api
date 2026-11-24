@@ -80,6 +80,12 @@ Mint a dev JWT with `make token` (subject defaults to `usr_publisher`).
 - **扩展**：`Store.Cells` 是**有序列表**，下标就是单元编号。加/减单元属于数据迁移（按 `user_id` 重算归属并搬迁该单元的数据），不能只改配置完成；当前原型没有在线迁移工具。
 - **边界**：这是可运行的单元化原型。跨单元的余额/积分更新、好友关系双写是最终一致（`Ensure` 幂等、`UPDATE` 可重放），没有分布式事务；单条消息只有一份，落在会话所在单元。
 
+### 按域分片（P2，可选，默认关闭）
+
+设置 `Store.Mode: domain` 后，user / task / message 三个域各自按 `Scale.Domains.<Name>.DSNs` 路由；**未声明 DSNs 的域自动继承 `Store.Cells`**，所以第一步可以把三个域都指向原来的三库，API 行为与单元化模式一致。之后每次只给一个域声明新的 DSN 列表即可逐域切分（例如消息域先迁到 6 个专用库）。详见 `docs/per-domain-sharding-plan.md` 的阶段 2。
+
+切换某个域的物理 DSN 前，用 `shardctl` 回填目录并搬迁历史数据（message/user/task 三域工具和 SQLite 自动化演练已交付，runbook 见 `docs/physical-shard-drill.md`）。物理分置后跨域写入默认为最终一致，可开启 `Store.StrictTx` 让它直接失败；资金类操作有持久化 saga 补偿，迁移窗口有冻结写护栏，在线读路径有目录缓存/副本与 `/metrics`。真机 MySQL cutover/rollback 与跨进程 SSE 已在 MySQL 8.4 + Redis 7 + 双 API 进程上实测通过（会话从 shard 0 迁到 3 再回滚，目录、消息、游标与新消息落片均核对），详见 `docs/physical-shard-drill.md` 第 9 节；逐项状态见 `docs/remaining-work-backlog.md`。
+
 ## 消息分片（旧模式，非默认）
 
 下面是 PR #38 的**消息级**分片原型，只在 `Store.Shards > 1` 时启用；默认配置已改为上面的三库单元化。原说明保留如下，便于对照。**注意：下文提到的 `docker-compose.3instances.yml` 与 `etc/mysql-init.d` 已随默认配置切换而删除；要重跑旧模式，按下面的 YAML 片段自行准备 1 个主库 + N 个片库。**
@@ -131,7 +137,7 @@ CGO_ENABLED=0 go run . -f /tmp/taskgame-3inst.yaml
 - **序号**：每个片库有自己的 `chat_seq` 自增列，只保证**会话内有序**；`chat_reads.last_read_rowid` 存的就是它。全局全序从来不需要，跨片序号重复不影响未读判定。
 - **读取**：`ListMessages` / `MessageRowID` / `LatestMessageRow` / `CountUnread` 先查目录定位片再查；`ListDirectUnreads` 在主库取会话与游标、再逐片查未读数（不再跨片 join）。
 - **未改动**：`store.Store` / `Repos` 接口、引擎、handler、OpenAPI、SDK、前端、SSE 与展示层全部不变，API 语义与响应字段保持一致。
-- **边界**：这是**原型**，只分片了消息本体。`chats`、`chat_reads`、幂等键、`webhooks`、任务账本仍在主库；默认路径下投影仍由写入方进程在事务提交后本地执行（崩溃靠启动时 `Recover` 补投），没有 2PC。SSE 信号总线现已在默认配置里开启（`Scale.PubSub: redis`，只广播信号、不迁数据）；共享租约投影与 SQL 目录仍属旧原型的可选子项，默认关闭（见「P1+ 多数据库骨架」）。`emit()` 仍在事务内查主库订阅、`idempotency_keys` 仍按 `user_id` 建主键；给幂等键加上片维度仍属后续工作。
+- **边界**：这是**原型**，只分片了消息本体。`chats`、`chat_reads`、幂等键、`webhooks`、任务账本仍在主库；默认路径下投影仍由写入方进程在事务提交后本地执行（崩溃靠启动时 `Recover` 补投），没有 2PC。SSE 信号总线现已在默认配置里开启（`Scale.PubSub: redis`，只广播信号、不迁数据）；共享租约投影与 SQL 目录仍为该旧模式的可选子项，默认关闭（见「P1+ 多数据库生产化能力」）。`emit()` 仍在事务内查主库订阅、`idempotency_keys` 仍按 `user_id` 建主键；给幂等键加上片维度仍属后续工作。
 
 ### 调整分片数量（扩容 / 缩容 / 换实例）
 
@@ -157,18 +163,18 @@ CGO_ENABLED=0 go run . -f /tmp/taskgame-3inst.yaml
 
 **只换机器/端口**（风险最低）：`Shards` 不变，用 `mysqldump` 或物理备份把该片 `messages` 搬到新实例，只改 `ShardDSNs` 对应下标的 DSN，目录表、`chat_seq`、已读游标全部不动。
 
-## P1+ 多数据库骨架（默认只开 Redis 总线，其余关闭）
+## P1+ 多数据库生产化能力（默认只开 Redis 总线，其余按需开启）
 
-默认 `etc/taskgame.yaml` 已包含 `Scale.Enabled: true` + `PubSub: redis`，**只装配跨进程 SSE 信号总线**，Redis 由 `docker compose up -d` 一起启动，是默认部署的必需依赖（启动时 `PING` 校验，不通则直接失败）。其它子项（`Projection` / `Directory` / `Domains` / `Archive` / `Search`）默认仍关闭——它们属于旧消息分片原型或未完成的 P2/P3 骨架，三库单元化模式用不上。若显式设 `Scale.Enabled=false`，`scale.New` 返回 `nil`，`ServiceContext.Notifier` 退回进程内 `*notify.Broker`，这是旧的单进程行为。**没有搬走任何一张表，没有改动 `store.Store` / `Repos` 接口、引擎、handler、OpenAPI、SDK 与前端，API 响应不变**（`Scale.Directory.Enabled` 会额外创建 3 张控制面小表，但不迁移任何业务表）。
+默认 `etc/taskgame.yaml` 已包含 `Scale.Enabled: true` + `PubSub: redis`，**默认装配跨进程 SSE 信号总线**，Redis 由 `docker compose up -d` 一起启动，是默认部署的必需依赖（启动时 `PING` 校验，不通则直接失败）。其它子项（`Projection` / `Directory` / `Domains` / `Archive` / `Search` / `Compensation`）默认仍关闭，因为它们需要额外数据库或外部服务，且三库单元化共置模式下并非必需；它们都已实现，不再是“未完成的骨架”。若显式设 `Scale.Enabled=false`，`scale.New` 返回 `nil`，`ServiceContext.Notifier` 退回进程内 `*notify.Broker`，这是旧的单进程行为。**没有搬走任何一张表，没有改动 `store.Store` / `Repos` 接口、引擎、handler、OpenAPI、SDK 与前端，API 响应不变**（`Scale.Directory.Enabled` 会额外创建控制面小表，但不迁移任何业务表）。
 
-| 阶段 | 新增位置 | 做了什么 | 明确没做 |
+| 阶段 | 新增位置 | 已实现 | 仍需注意 |
 |---|---|---|---|
-| P1 | `internal/notify/*`、`internal/projection/*` | `Fanout` + `RedisTransport` 跨进程 SSE 扇出；**`Lease`（Redis SET NX / 进程内）+ `Bus`（Redis pub/sub / 进程内）+ `Worker`**：`Recover` 每行先认领共享租约，提交后广播唤醒 hint，定时兜底；实测两进程并发只投影一次 | NATS / Kafka 传输、SQL 版租约（当前用 Redis / 内存） |
-| P2 | `internal/plane/*`、`internal/store/shard/domains.go` | 目录表 `Directory`（**`SQLDirectory` 把映射持久化到 `shard_directory` / `shard_topology`，多进程共享**）、拓扑 `Topology`（加片只追加）、`Resolver`、全局唯一索引 / ID 生成器接口、三域 `DomainRouter`、`TxScope` 拒绝跨片事务 | User/Task 仓储真正拆分、`global_unique` 落库、目录行与聚合根写在同一事务 |
-| P3 | `internal/archive/*`、`internal/search/*` | 可运行的 `FileBlobStore`、归档策略与 `Archiver.Plan`、大字段清单、`MemoryTaskIndex` 与 `Projector` | 真正执行归档、Elasticsearch、CDC 投影、`emit()` 去放大 |
-| 装配 | `internal/scale/runtime.go`、`config.ScaleConf`、`svc` | `scale.Runtime` 统一生命周期，`Close` 一并释放 | — |
+| P1 | `internal/notify/*`、`internal/projection/*` | `Fanout` + `RedisTransport` 跨进程 SSE 扇出；`Lease`（Redis SET NX / 进程内）+ `Bus`（Redis pub/sub / 进程内）+ `Worker`：`Recover` 每行先认领共享租约，提交后广播唤醒 hint，定时兜底 | NATS / Kafka 传输未做；Redis pub/sub 是 at-most-once，浏览器靠 45s 轮询补漏 |
+| P2 | `internal/plane/*`、`internal/store/domain/*`、`internal/compensation/*`、`internal/metrics/*` | `SQLDirectory`（含缓存与 ReplicaDSN）、`SQLUnique`、`SnowflakeIDGenerator`、三域 `DomainStore`、`AssignInTx`、`SQLFence`、资金 saga、`/metrics`；三域物理搬迁工具与 SQLite 演练已交付 | 真机 MySQL cutover/rollback/SSE 已实测；持续 CDC 双写未做，迁移窗口采用冻结写 |
+| P3 | `internal/archive/*`、`internal/search/*`、`internal/webhook/*` | 归档批次执行与 checksum 校验、ES/OpenSearch 索引 + 可重放 CDC、cursor epoch、每会话最新页在线、webhook delivery body 外置与 `emit()` 去放大 | avatar_ref / payload_ref 大字段迁移未做；复杂任务过滤仍回退 store |
+| 装配 | `internal/scale/runtime.go`、`config.ScaleConf`、`svc` | `scale.Runtime` 统一生命周期，`Close` 一并释放；后台 worker 驱动投影、CDC、补偿、调度与归档 | 告警规则属于部署侧配置，仓库只暴露 `/metrics` |
 
-三个容易踩坑的点已经写进代码：`chat_shards` 之类**目录表才是权威路由**；**加片不搬老数据**（`ScaleOutPlan.MigratedKeys` 恒为 0，减片才必须迁移）；**没有目录行的老 key 必须按首次部署的片数（`Topology.Pinned`）做回退哈希**，否则滚动升级时会算出别的片甚至 `index out of range`。另外要记住：**分片只把数据摊薄，不会减少总量**——在线库真正变小靠 `archive` 的冷热分离、大字段外置与去掉 `emit()` 的 N 倍投递放大。
+三个容易踩坑的点已经写进代码：`chat_shards` 之类**目录表才是权威路由**；**加片不搬老数据**（`ScaleOutPlan.MigratedKeys` 恒为 0，减片才必须迁移）；**没有目录行的老 key 必须按首次部署的片数（`Topology.Pinned`）做回退哈希**，否则滚动升级时会算出别的片甚至 `index out of range`。另外要记住：**分片只把数据摊薄，不会减少总量**——在线库变小靠已实现的归档冷热分离、webhook body 外置与 `emit()` 去放大；avatar/payload 大字段外置仍是后续 P3 候选。
 
 ### 用真实 Redis 跑多机 SSE（`Scale.PubSub: redis`）
 
@@ -225,11 +231,12 @@ Scale:
 
 两个边界要记住：`shard_topology.dsn` 只是首次登记时的快照，权威 DSN 顺序仍来自配置里的 `Topology`（换实例改配置并滚动升级，见「调整分片数量」）；`Keys()` 只服务于缩容规划，当前是按 `(domain, shard_key)` 主键的扫描，上热路径前需补 `(domain, shard)` 索引。
 
-`internal/scale.TODOs` 是代码里的边界清单（原 10 条，#1 Redis 传输、#2 outbox 共享租约、#3 SQL 目录均已实现，现为 7 条），README 与它保持一致。跑验证：
+`internal/scale.TODOs` 是代码里的边界清单，现已收敛到一条：avatar_ref / payload_ref 大字段迁移；README 与它保持一致。逐项完成状态见 `docs/remaining-work-backlog.md`。跑验证：
 
 ```bash
-go test ./internal/notify ./internal/projection ./internal/store/sqlstore ./internal/plane ./internal/store/shard ./internal/archive ./internal/search ./internal/scale ./internal/svc
-# 默认配置只开 Scale.PubSub=redis；要试其它骨架，在配置副本中追加字段（见 internal/config/config.go）
+go vet ./...
+go test ./...
+# 默认配置只开 Scale.PubSub=redis；要试其它生产化能力，在配置副本中追加字段（见 internal/config/config.go 与 etc/taskgame.yaml）
 CGO_ENABLED=0 go run .
 ```
 
@@ -349,6 +356,13 @@ CGO_ENABLED=0 go run ./cmd/token -f etc/taskgame.yaml -user usr_executor
 请求头写成 `Authorization: Bearer <token>`。冒烟脚本会自己为每轮新的执行者签发 JWT，所以正在跑的进程必须使用同一份 `Auth.JwtSecret`。
 
 邮箱注册是同一套 JWT（仍是 v0.1 的附加接口）。`POST /v1/register` 和 `POST /v1/login` 不需要鉴权，密码以 bcrypt 保存，不会回明文。`GET /v1/me` 需要 Bearer 或 `X-Api-Key`，返回 `id`、`email`、`nickname`、`is_arbiter`。`nickname` 是显示名，不是登录名，也不要求唯一；可以不填，已有用户为空字符串。`PATCH /v1/me` 的 body 是 `{ "nickname": "…" }`，去掉首尾空白后 1–32 个字符，空值和纯空白是 400。它不改邮箱、密码，也不刷新 token。注册 body 可以带可选的 `nickname`。`usr_publisher` / `usr_executor` 的开发密钥保持可用。令牌有效期是 `Auth.TokenTTL`（缺省 24h）。
+
+**注册用户的 ID 形态取决于是否启用了持久化控制面（`Scale.Directory.Enabled`）：**
+
+- **默认（未启用）**：`usr_` + 24 位随机十六进制字符，例如 `usr_3f9a...1c02`。由 `internal/id.New` 调用 `crypto/rand` 生成，不依赖任何数据库，多进程、多实例之间天然不会撞号。
+- **启用持久化控制面后**：`usr_` + Snowflake 十六进制数，例如 `usr_1a2b3c...`。worker id 从控制面 `global_unique` 分配并持久化，重启后复用；同一实例内严格递增、可排序，跨实例靠 worker id 隔离。邮箱 `→ user_id` 同时记入 `global_unique`，登录走全局点查而非逐库扫描。
+
+早期版本在默认配置下也用了控制面的内存占位实现 `LocalIDGenerator`，产出 `usr_api-1`、`usr_api-2` 这类"前缀 + 实例名 + 序号"的 ID；它每次重启都从 1 开始，多进程共用一个 `InstanceID` 时会互相冲突，因此已修正为：只有真正启用了持久化控制面才启用 Snowflake 路径，其余一律回退到加密随机数。两种形态都满足 `usr_` 前缀与 ID 合法性校验，历史数据无需迁移。
 
 ```bash
 curl -s -X POST http://127.0.0.1:8891/v1/register \
@@ -546,6 +560,13 @@ CGO_ENABLED=0 go run ./cmd/token -f etc/taskgame.yaml -user usr_executor
 Send `Authorization: Bearer <token>`. The smoke script mints a fresh JWT per extra executor, so the running process must be using that same `Auth.JwtSecret`.
 
 Email registration is the same JWT, added without a version bump. `POST /v1/register` and `POST /v1/login` are public. Passwords are stored as bcrypt and are not returned. `GET /v1/me` requires Bearer or `X-Api-Key` and returns `id`, `email`, `nickname`, and `is_arbiter`. `nickname` is a display name, not a unique login handle. Omit it and the field stays an empty string. `PATCH /v1/me` body is `{ "nickname": "…" }`, 1–32 characters after trim. Empty or whitespace-only is 400. It does not change email, password, or the access token. Register may include an optional `nickname`. The `usr_publisher` / `usr_executor` development keys keep working. Token lifetime is `Auth.TokenTTL` (default 24h).
+
+**The shape of a registered user id depends on whether the persistent control plane (`Scale.Directory.Enabled`) is on:**
+
+- **Default (off)**: `usr_` + 24 random hex characters, e.g. `usr_3f9a...1c02`, produced by `internal/id.New` via `crypto/rand`. No database dependency and no cross-process collisions.
+- **Persistent control plane on**: `usr_` + a Snowflake hex value, e.g. `usr_1a2b3c...`. The worker id is allocated from and persisted in the control plane's `global_unique` table, so it survives restarts; ids are monotonic within an instance and isolated across instances by worker id. `email → user_id` is recorded in `global_unique` at the same time, so login does a global point lookup instead of scanning every shard.
+
+Early builds used the control plane's in-memory placeholder `LocalIDGenerator` even in the default configuration, producing ids like `usr_api-1` / `usr_api-2` (`prefix + instance + sequence`). That generator restarts at 1 on every process and collides whenever two processes share an `InstanceID`, so registration now enables the Snowflake path only when a real persistent control plane is configured and otherwise falls back to crypto/rand ids. Both shapes keep the `usr_` prefix and pass id validation; no data migration is needed.
 
 ```bash
 curl -s -X POST http://127.0.0.1:8891/v1/register \

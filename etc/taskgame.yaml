@@ -51,6 +51,15 @@ Auth:
 
 Store:
   Driver: mysql
+  # StrictTx (domain mode) rejects same-domain cross-shard access inside one
+  # transaction with ErrCrossShard instead of silently degrading to eventual
+  # consistency. Turn it on only after domains use physically distinct DSNs.
+  # StrictTx: true
+  # P2 per-domain routing is OFF by default. Set Mode: domain to route each
+  # aggregate-root family through its own DSN list. Domains without explicit
+  # Scale.Domains.<Name>.DSNs inherit Cells below, so a staged rollout starts
+  # with all data still co-located; only change one domain's DSNs at a time.
+  # Mode: domain
   # One DSN per cell, in cell order. Every API process must use the same
   # ordered list. No DSN / Shards setting is used when Cells is present.
   Cells:
@@ -96,7 +105,10 @@ AutoSettle:
 # but MUST be unique (never reuse the same value in two processes), otherwise
 # the echo filter drops the other process's signals.
 # The other Scale sub-systems (Projection / Directory / Domains / Archive /
-# Search) stay disabled: they belong to the legacy message-sharding prototype.
+# Search / Compensation) stay disabled by default: they are implemented
+# production features but need extra databases or external services. See
+# docs/remaining-work-backlog.md for per-feature status and etc/taskgame.yaml
+# comments below for opt-in examples.
 Scale:
   Enabled: true
   PubSub: redis
@@ -105,3 +117,49 @@ Scale:
     Addr: "127.0.0.1:6379"
     Channel: "taskgame.signals"
     Timeout: 2s
+  # Per-domain physical placement, consumed only when Store.Mode=domain.
+  # Every domain may be cut over independently: omit a domain to keep it on
+  # Store.Cells. Keep DSN order identical on every API process.
+  # Domains:
+  #   User:
+  #     Shards: 3
+  #     DSNs:
+  #       - "root:123456@tcp(127.0.0.1:3307)/taskgame?..."
+  #       - "root:123456@tcp(127.0.0.1:3308)/taskgame?..."
+  #       - "root:123456@tcp(127.0.0.1:3309)/taskgame?..."
+  #   Task:
+  #     Shards: 3
+  #     DSNs: [...]   # same three DSNs while co-located
+  #   Message:
+  #     Shards: 3
+  #     DSNs: [...]   # change to dedicated message DSNs to cut this domain over
+  # Directory HA: optional read replica. Writes always go to Directory.DSN;
+  # Lookup reads use the replica with automatic fallback to the primary.
+  # Directory:
+  #   Enabled: true
+  #   Driver: mysql
+  #   DSN: "root:123456@tcp(127.0.0.1:3307)/taskgame_control?..."
+  #   ReplicaDSN: "root:123456@tcp(127.0.0.1:3311)/taskgame_control?..."
+  # Cross-domain saga reconciler (opt-in; requires Directory.Enabled for the log DB).
+  # Enable it before physically splitting user and task domains so a crash
+  # between the balance deduction and escrow insert can be replayed/compensated.
+  # Compensation:
+  #   Enabled: true
+  #   Interval: 5s
+  #   LeaseTTL: 30s
+  #   MaxRetry: 5
+  # Read-side task index (opt-in). With CDC on, task writes append to a durable
+  # change stream drained by a background projector; simple latest-task listings
+  # are then answered in one index query instead of fanning out to every shard.
+  # Directory.Enabled is recommended so the change stream is shared across API
+  # processes; otherwise a process-local log is used.
+  # Search:
+  #   Enabled: true
+  #   Driver: elasticsearch        # memory (default) | elasticsearch | opensearch
+  #   URL: "http://127.0.0.1:9200"
+  #   Index: taskgame_tasks
+  #   APIKey: "..."                # or Username/Password; leave empty for no auth
+  #   Refresh: false
+  #   CDC: true
+  #   Interval: 5s                 # projector poll interval
+  #   RebuildInterval: 0           # 0 = startup backfill only; e.g. 1h for periodic repair

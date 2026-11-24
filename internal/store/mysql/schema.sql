@@ -115,6 +115,7 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
     event_id VARCHAR(64) NOT NULL,
     event_type VARCHAR(64) NOT NULL,
     body MEDIUMTEXT NOT NULL,
+    body_ref VARCHAR(128) NOT NULL DEFAULT '',
     status VARCHAR(32) NOT NULL,
     attempts BIGINT NOT NULL,
     last_error VARCHAR(512) NOT NULL DEFAULT '',

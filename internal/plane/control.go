@@ -80,6 +80,20 @@ func (u *InMemoryUnique) Owner(_ context.Context, namespace, value string) (stri
 	return owner, ok, nil
 }
 
+// Release removes a reservation owned by ownerID. It is used to roll back an
+// email claim when the following user insert fails. A different owner's row
+// is never touched, so a failed registration cannot free another process's
+// successful claim.
+func (u *InMemoryUnique) Release(_ context.Context, namespace, value, ownerID string) error {
+	key := namespace + "\x00" + value
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if owner, ok := u.owners[key]; ok && owner == ownerID {
+		delete(u.owners, key)
+	}
+	return nil
+}
+
 // IDGenerator produces ids locally, without a round trip to the control plane.
 // A production deployment should swap in Snowflake with a worker id allocated
 // once at startup; the interface never changes.

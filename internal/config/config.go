@@ -45,6 +45,18 @@ type ApiKeyConf struct {
 // ShardDSNs, which keeps a primary database). SQLite is available for local
 // single-process debugging by setting Driver: sqlite explicitly.
 type StoreConf struct {
+	// Mode selects the store implementation:
+	//   - "" or "cell" (default): unit-based sharding over Cells (plan A).
+	//   - "domain": per-aggregate-root stores (P2). Requires Scale.Directory and
+	//     Scale.Domains DSN lists; see docs/per-domain-sharding-plan.md.
+	// Keeping the default empty preserves byte-for-byte behaviour of existing
+	// configs: no new package is constructed unless "domain" is requested.
+	Mode string `json:",optional"`
+	// StrictTx (domain mode only) makes a cross-shard access inside one
+	// transaction fail with ErrCrossShard instead of silently using a separate
+	// pool (eventual consistency). Off by default: co-located domains must keep
+	// working. Turn it on once domains point at physically distinct DSNs.
+	StrictTx bool `json:",optional"`
 	// Driver is sqlite or mysql. When omitted, openStore falls back to sqlite
 	// for backwards compatibility with old local configs.
 	Driver string `json:",optional,options=sqlite|mysql"`
@@ -72,15 +84,26 @@ type StoreConf struct {
 // With Enabled=false the process behaves exactly like PR #38: no new package
 // is constructed, no config file needs a Scale section.
 type ScaleConf struct {
-	Enabled    bool                `json:",optional"`
-	PubSub     string              `json:",optional"` // local (default) | shared | redis
-	InstanceID string              `json:",optional"` // identifies this API process on the bus
-	Redis      RedisScaleConf      `json:",optional"` // used only when PubSub=redis
-	Projection ProjectionScaleConf `json:",optional"` // shared-lease outbox projection
-	Directory  DirectoryScaleConf  `json:",optional"` // SQL-backed routing directory
-	Domains    DomainScaleConf     `json:",optional"`
-	Archive    ArchiveScaleConf    `json:",optional"`
-	Search     SearchScaleConf     `json:",optional"`
+	Enabled      bool                  `json:",optional"`
+	PubSub       string                `json:",optional"` // local (default) | shared | redis
+	InstanceID   string                `json:",optional"` // identifies this API process on the bus
+	Redis        RedisScaleConf        `json:",optional"` // used only when PubSub=redis
+	Projection   ProjectionScaleConf   `json:",optional"` // shared-lease outbox projection
+	Directory    DirectoryScaleConf    `json:",optional"` // SQL-backed routing directory
+	Domains      DomainScaleConf       `json:",optional"`
+	Archive      ArchiveScaleConf      `json:",optional"`
+	Search       SearchScaleConf       `json:",optional"`
+	Compensation CompensationScaleConf `json:",optional"` // cross-domain saga reconciler
+}
+
+// CompensationScaleConf enables the durable saga reconciler for cross-domain
+// operations (currently fund_hold). The log lives in the control-plane DB, so
+// a single process or several can reconcile without double-compensating.
+type CompensationScaleConf struct {
+	Enabled  bool          `json:",optional"`
+	Interval time.Duration `json:",optional,default=5s"`
+	LeaseTTL time.Duration `json:",optional,default=30s"`
+	MaxRetry int           `json:",optional,default=5"`
 }
 
 // ProjectionScaleConf turns message_outbox crash recovery into a coordinated
@@ -104,9 +127,10 @@ type ProjectionScaleConf struct {
 // multi-machine deployment should point DSN at a shared MySQL database that
 // every process can reach; an explicit Driver must match the DSN's dialect.
 type DirectoryScaleConf struct {
-	Enabled bool   `json:",optional"`
-	Driver  string `json:",optional"` // sqlite | mysql; default: inherit Store.Driver
-	DSN     string `json:",optional"` // default: inherit Store.DSN
+	Enabled    bool   `json:",optional"`
+	Driver     string `json:",optional"` // sqlite | mysql; default: inherit Store.Driver
+	DSN        string `json:",optional"` // default: inherit Store.DSN
+	ReplicaDSN string `json:",optional"` // optional read replica for Lookup; writes always use DSN
 }
 
 // RedisScaleConf is the real cross-process signal bus. Every API process of
@@ -120,12 +144,50 @@ type RedisScaleConf struct {
 	Timeout  time.Duration `json:",optional,default=2s"`
 }
 
-// DomainScaleConf declares how many databases each aggregate-root domain would
-// have. User / Task counts are scaffolding only: their repositories still live
-// in the primary store. Message is taken from Store.Shards, NOT from here.
+// DomainScaleConf declares, per aggregate-root domain, the ordered DSN list
+// and shard count used by Store.Mode=domain. Each domain may point at a
+// different set of databases; a deployment that wants logical domains without
+// physical separation simply repeats the same cell DSNs for all three.
+//
+// UserShards / TaskShards are the legacy skeleton counts (their repositories
+// used to live in the primary store). They are still parsed for backwards
+// compatibility but DSNs, when present, take precedence over them.
 type DomainScaleConf struct {
-	UserShards int `json:",optional"`
-	TaskShards int `json:",optional"`
+	UserShards int            `json:",optional"`
+	TaskShards int            `json:",optional"`
+	User       DomainDSNsConf `json:",optional"`
+	Task       DomainDSNsConf `json:",optional"`
+	Message    DomainDSNsConf `json:",optional"`
+}
+
+// DomainDSNsConf is one domain's physical placement. Shards is the declared
+// count (used as the fallback hash modulus for legacy keys); DSNs[i] is the
+// DSN of shard i. A missing DSNs list falls back to the legacy skeleton path
+// so existing configs keep loading unchanged.
+type DomainDSNsConf struct {
+	Shards int      `json:",optional"`
+	DSNs   []string `json:",optional"`
+}
+
+// Validate checks that a domain's DSN list and shard count agree. An empty
+// config is valid: it means "not wired", and registerDomains keeps the legacy
+// placeholder behaviour.
+func (d DomainDSNsConf) Validate(domain string) error {
+	if d.Shards < 0 {
+		return fmt.Errorf("Scale.Domains.%s.Shards cannot be negative", domain)
+	}
+	if len(d.DSNs) == 0 {
+		return nil
+	}
+	if d.Shards > 0 && len(d.DSNs) != d.Shards {
+		return fmt.Errorf("Scale.Domains.%s: %d DSNs but Shards=%d", domain, len(d.DSNs), d.Shards)
+	}
+	for i, dsn := range d.DSNs {
+		if dsn == "" {
+			return fmt.Errorf("Scale.Domains.%s.DSNs[%d] is empty", domain, i)
+		}
+	}
+	return nil
 }
 
 type ArchiveScaleConf struct {
@@ -134,9 +196,23 @@ type ArchiveScaleConf struct {
 	HotWindow time.Duration `json:",optional"`
 }
 
+// SearchScaleConf configures the read-side task index. Driver "memory" keeps
+// the in-process index (default, tests); "elasticsearch" / "opensearch" use
+// the HTTP index. CDC makes task writes append to a durable change stream
+// which a background projector drains; RebuildInterval periodically re-enqueues
+// every live task as a safety net (full re-index / repair).
 type SearchScaleConf struct {
-	Enabled bool   `json:",optional"`
-	Driver  string `json:",optional"` // memory (default)
+	Enabled         bool          `json:",optional"`
+	Driver          string        `json:",optional"` // memory | elasticsearch | opensearch
+	URL             string        `json:",optional"` // ES/OS base URL, e.g. http://localhost:9200
+	Index           string        `json:",optional"` // index name; default taskgame_tasks
+	Username        string        `json:",optional"`
+	Password        string        `json:",optional"`
+	APIKey          string        `json:",optional"`
+	Refresh         bool          `json:",optional"` // wait_for refresh on writes
+	CDC             bool          `json:",optional"` // record task writes into the change stream
+	Interval        time.Duration `json:",optional,default=5s"`
+	RebuildInterval time.Duration `json:",optional,default=0"` // 0 disables periodic rebuild
 }
 
 func (c ScaleConf) Validate() error {
@@ -165,6 +241,13 @@ func (c ScaleConf) Validate() error {
 	if c.Domains.UserShards < 0 || c.Domains.TaskShards < 0 {
 		return fmt.Errorf("Scale.Domains shard counts cannot be negative")
 	}
+	for name, d := range map[string]DomainDSNsConf{
+		"User": c.Domains.User, "Task": c.Domains.Task, "Message": c.Domains.Message,
+	} {
+		if err := d.Validate(name); err != nil {
+			return err
+		}
+	}
 	if c.Archive.Enabled && c.Archive.Dir == "" {
 		return fmt.Errorf("Scale.Archive.Dir is required when archive is enabled")
 	}
@@ -172,9 +255,26 @@ func (c ScaleConf) Validate() error {
 		return fmt.Errorf("Scale.Archive.HotWindow cannot be negative")
 	}
 	switch c.Search.Driver {
-	case "", "memory":
+	case "", "memory", "elasticsearch", "opensearch":
 	default:
-		return fmt.Errorf("Scale.Search.Driver %q is not implemented in the skeleton", c.Search.Driver)
+		return fmt.Errorf("Scale.Search.Driver must be memory, elasticsearch or opensearch, got %q", c.Search.Driver)
+	}
+	if c.Search.Driver == "elasticsearch" || c.Search.Driver == "opensearch" {
+		if c.Search.URL == "" {
+			return fmt.Errorf("Scale.Search.URL is required for %s", c.Search.Driver)
+		}
+		if c.Search.Interval < 0 || c.Search.RebuildInterval < 0 {
+			return fmt.Errorf("Scale.Search durations cannot be negative")
+		}
+	}
+	if c.Search.Username != "" && c.Search.APIKey != "" {
+		return fmt.Errorf("Scale.Search.Username and APIKey are mutually exclusive")
+	}
+	if c.Compensation.Interval < 0 || c.Compensation.LeaseTTL < 0 {
+		return fmt.Errorf("Scale.Compensation durations cannot be negative")
+	}
+	if c.Compensation.MaxRetry < 0 {
+		return fmt.Errorf("Scale.Compensation.MaxRetry cannot be negative")
 	}
 	return nil
 }

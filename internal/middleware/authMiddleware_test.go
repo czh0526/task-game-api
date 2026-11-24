@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"taskgame/internal/config"
+	domainpkg "taskgame/internal/store/domain"
 )
 
 func TestTaskListIsPublicWithoutCredentials(t *testing.T) {
@@ -166,6 +167,36 @@ func TestFriendRoutesStillRequireAuth(t *testing.T) {
 		})(rec, req)
 		if called || rec.Code == http.StatusOK {
 			t.Fatalf("anonymous friend route %s: called=%v status=%d", path, called, rec.Code)
+		}
+	}
+}
+
+func TestDomainRouteIsAttachedForAuthenticatedRequests(t *testing.T) {
+	m := NewAuthMiddlewareWithDomain(config.AuthConf{
+		ApiKeys: []config.ApiKeyConf{{Key: "domain-key", UserId: "usr_domain"}},
+	}, true)
+	cases := []struct {
+		path   string
+		domain string
+		key    string
+	}{
+		{"/v1/tasks/tsk_1", "task", "tsk_1"},
+		{"/v1/chats/cht_1/messages", "message", "cht_1"},
+		{"/v1/tasks", "task", "usr_domain"},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(http.MethodPost, tc.path, nil)
+		req.Header.Set("X-Api-Key", "domain-key")
+		rec := httptest.NewRecorder()
+		var gotDomain, gotKey string
+		m.Handle(func(w http.ResponseWriter, r *http.Request) {
+			route, ok := domainpkg.RouteFrom(r.Context())
+			if ok {
+				gotDomain, gotKey = string(route.Domain), route.Key
+			}
+		})(rec, req)
+		if gotDomain != tc.domain || gotKey != tc.key {
+			t.Fatalf("%s: route = %s/%s, want %s/%s", tc.path, gotDomain, gotKey, tc.domain, tc.key)
 		}
 	}
 }
