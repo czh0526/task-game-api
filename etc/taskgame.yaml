@@ -141,3 +141,18 @@ Scale:
   #   Interval: 5s
   #   LeaseTTL: 30s
   #   MaxRetry: 5
+  # Read-side task index (opt-in). With CDC on, task writes append to a durable
+  # change stream drained by a background projector; simple latest-task listings
+  # are then answered in one index query instead of fanning out to every shard.
+  # Directory.Enabled is recommended so the change stream is shared across API
+  # processes; otherwise a process-local log is used.
+  # Search:
+  #   Enabled: true
+  #   Driver: elasticsearch        # memory (default) | elasticsearch | opensearch
+  #   URL: "http://127.0.0.1:9200"
+  #   Index: taskgame_tasks
+  #   APIKey: "..."                # or Username/Password; leave empty for no auth
+  #   Refresh: false
+  #   CDC: true
+  #   Interval: 5s                 # projector poll interval
+  #   RebuildInterval: 0           # 0 = startup backfill only; e.g. 1h for periodic repair

@@ -12,6 +12,7 @@ import (
 	"taskgame/internal/compensation"
 	"taskgame/internal/id"
 	"taskgame/internal/model"
+	"taskgame/internal/search"
 	"taskgame/internal/store"
 	"taskgame/internal/types"
 
@@ -47,14 +48,23 @@ var errNoDue = errors.New("no due review")
 
 // Engine is safe for concurrent use. Mutations run inside store transactions.
 type Engine struct {
-	store    store.Store
-	now      func() time.Time
-	currency string
-	deferred sync.Map
-	timeouts TimeoutConfig
-	arbiters map[string]struct{}
-	notifier SignalNotifier
-	comp     *compensation.Coordinator // optional cross-domain saga driver
+	store     store.Store
+	now       func() time.Time
+	currency  string
+	deferred  sync.Map
+	timeouts  TimeoutConfig
+	arbiters  map[string]struct{}
+	notifier  SignalNotifier
+	comp      *compensation.Coordinator // optional cross-domain saga driver
+	cdc       TaskChangeRecorder        // optional search-index change recorder
+	taskIndex search.TaskIndex          // optional read-side index for simple listings
+}
+
+// TaskChangeRecorder records a task upsert after the business transaction has
+// committed. It is intentionally best effort: the search index is a read
+// model, and a full Rebuild can always repair missed changes.
+type TaskChangeRecorder interface {
+	RecordTask(ctx context.Context, doc search.TaskDoc) error
 }
 
 // Option configures an Engine.
@@ -85,6 +95,35 @@ func WithArbiters(ids []string) Option {
 // be replayed or compensated by the background reconciler.
 func WithCompensation(c *compensation.Coordinator) Option {
 	return func(e *Engine) { e.comp = c }
+}
+
+// WithTaskChangeRecorder attaches the search-index CDC recorder. When absent,
+// task writes do not touch the index (the legacy path).
+func WithTaskChangeRecorder(r TaskChangeRecorder) Option {
+	return func(e *Engine) { e.cdc = r }
+}
+
+// WithTaskIndex attaches a read-side index. When present, simple "latest
+// tasks" listings are answered from the index (one query) instead of
+// scattering to every shard; complex filters still use the store.
+func WithTaskIndex(idx search.TaskIndex) Option {
+	return func(e *Engine) { e.taskIndex = idx }
+}
+
+// recordTaskDTO is called after a task write commits (from call). Failures are
+// best effort: a periodic Rebuild repairs any missed upsert. Recording after
+// commit—rather than inside the transaction—avoids ghost index rows when the
+// business transaction rolls back.
+func (e *Engine) recordTaskDTO(ctx context.Context, t *types.Task) {
+	if e.cdc == nil || t == nil || t.Id == "" {
+		return
+	}
+	doc := search.TaskDoc{
+		ID: t.Id, Title: t.Title, Description: t.Description,
+		Keywords: append([]string{}, t.Keywords...),
+		Kind:     t.Kind, Status: t.Status, CreatedAt: t.CreatedAt,
+	}
+	_ = e.cdc.RecordTask(ctx, doc)
 }
 
 // IsArbiter reports whether userID is configured as an escrow arbiter.

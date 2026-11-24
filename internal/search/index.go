@@ -21,13 +21,14 @@ import (
 // fixed-width RFC3339 string (see model.FormatTime), so lexical order is
 // chronological order.
 type TaskDoc struct {
-	ID        string
-	Title     string
-	Keywords  []string
-	Category  string
-	Kind      string
-	Status    string
-	CreatedAt string
+	ID          string
+	Title       string
+	Description string
+	Keywords    []string
+	Category    string
+	Kind        string
+	Status      string
+	CreatedAt   string
 }
 
 type Query struct {
@@ -42,6 +43,10 @@ type TaskIndex interface {
 	Upsert(ctx context.Context, doc TaskDoc) error
 	Delete(ctx context.Context, id string) error
 	Query(ctx context.Context, q Query) ([]TaskDoc, error)
+	// Count returns the number of documents matching q's filters (ignoring
+	// Limit/BeforeCursor). It lets listings return an exact total without a
+	// second scatter over every shard.
+	Count(ctx context.Context, q Query) (int64, error)
 }
 
 type MemoryTaskIndex struct {
@@ -102,7 +107,7 @@ func matches(doc TaskDoc, q Query) bool {
 		return false
 	}
 	if q.Keyword != "" {
-		hay := strings.ToLower(doc.Title + " " + doc.Category + " " + strings.Join(doc.Keywords, " "))
+		hay := strings.ToLower(doc.Title + " " + doc.Description + " " + doc.Category + " " + strings.Join(doc.Keywords, " "))
 		if !strings.Contains(hay, strings.ToLower(q.Keyword)) {
 			return false
 		}
@@ -114,6 +119,20 @@ func matches(doc TaskDoc, q Query) bool {
 		return false
 	}
 	return true
+}
+
+func (m *MemoryTaskIndex) Count(_ context.Context, q Query) (int64, error) {
+	q.BeforeCursor = "" // count ignores pagination
+	q.Limit = 0
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var n int64
+	for _, doc := range m.docs {
+		if matches(doc, q) {
+			n++
+		}
+	}
+	return n, nil
 }
 
 func contains(list []string, v string) bool {

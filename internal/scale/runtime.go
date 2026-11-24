@@ -24,6 +24,8 @@ import (
 	"taskgame/internal/store/shard"
 )
 
+const defaultSearchIndex = "taskgame_tasks"
+
 // TODOs is the explicit list of work this skeleton does NOT do. Keeping it in
 // code (rather than only in docs) makes the boundary hard to forget.
 //
@@ -32,37 +34,38 @@ import (
 // bus for message_outbox projection" is DONE too: see internal/projection.
 // The original #3 "SQL-backed plane.Directory over plane.Schema" is DONE:
 // see plane.SQLDirectory, selected by Scale.Directory.Enabled.
-// NATS/Kafka remain optional transports.
+// DONE as of the productionization pass: per-domain stores, global_unique +
+// Snowflake, archive execution, and the ES/OpenSearch index with a CDC
+// projector (see internal/search). NATS/Kafka remain optional transports.
 var TODOs = []string{
-	"P2: split User and Task repositories into per-domain stores guarded by shard.TxScope",
-	"P2: add global_unique(email -> user_id) and a Snowflake IDGenerator",
-	"P3: execute archive batches per shard (copy, verify checksum, then delete)",
 	"P3: externalize avatar / payload / delivery body into archive.BlobStore",
 	"P3: de-amplify emit() so one event stores one body plus N small pointers",
-	"P3: replace MemoryTaskIndex with Elasticsearch/OpenSearch and a CDC projector",
 	"P3: keep the newest page of every chat online; archive only older pages",
 }
 
 // Runtime is the assembled skeleton. Every field may be nil when its feature
 // is off; callers must check.
 type Runtime struct {
-	cfg          config.ScaleConf
-	Fanout       notify.Fanout
-	ControlPlane *plane.ControlPlane
-	DomainRouter *shard.DomainRouter
-	Blobs        archive.BlobStore
-	Archiver     *archive.Archiver
-	TaskIndex    search.TaskIndex
-	Projector    *search.Projector
-	Lease        projection.Lease
-	Bus          projection.Bus
-	Compensation *compensation.Coordinator
-	compLog      compensation.Log
-	transport    notify.Transport
-	remote       *notify.RemoteFanout
-	directoryDB  *plane.SQLDirectory // non-nil when Scale.Directory.Enabled
-	Fence        plane.FenceStore    // maintenance write guard, co-located with directory
-	instanceID   string
+	cfg            config.ScaleConf
+	Fanout         notify.Fanout
+	ControlPlane   *plane.ControlPlane
+	DomainRouter   *shard.DomainRouter
+	Blobs          archive.BlobStore
+	Archiver       *archive.Archiver
+	TaskIndex      search.TaskIndex
+	Projector      *search.Projector // legacy synchronous projector (kept for compatibility)
+	CDC            *search.CDCProjector
+	SearchLog      search.ChangeLog
+	searchRecorder *search.LogRecorder
+	Lease          projection.Lease
+	Bus            projection.Bus
+	Compensation   *compensation.Coordinator
+	compLog        compensation.Log
+	transport      notify.Transport
+	remote         *notify.RemoteFanout
+	directoryDB    *plane.SQLDirectory // non-nil when Scale.Directory.Enabled
+	Fence          plane.FenceStore    // maintenance write guard, co-located with directory
+	instanceID     string
 }
 
 // New returns (nil, nil) when the skeleton is disabled, so the caller can
@@ -198,15 +201,13 @@ func New(c config.ScaleConf, primary config.StoreConf) (*Runtime, error) {
 		rt.Archiver = archive.NewArchiver(blobs, policies)
 	}
 
-	// P3: read-side index for cross-shard listings.
+	// P3: read-side index for cross-shard listings. Memory is the default;
+	// elasticsearch/opensearch use the same REST dialect through HTTPTaskIndex.
 	if c.Search.Enabled {
-		idx := search.NewMemoryTaskIndex()
-		projector, err := search.NewProjector(idx)
-		if err != nil {
+		if err := rt.wireSearch(c); err != nil {
 			_ = rt.Close()
 			return nil, err
 		}
-		rt.TaskIndex, rt.Projector = idx, projector
 	}
 	return rt, nil
 }
@@ -417,6 +418,92 @@ func (r *Runtime) wireProjection(c config.ScaleConf) error {
 	r.Lease = projection.NewMemoryLease()
 	r.Bus = projection.NewMemoryBus()
 	return nil
+}
+
+// wireSearch builds the read-side index and (when CDC is enabled) a durable
+// change log + projector. With a persistent directory the log lives in that
+// shared database so several API processes drain one stream; otherwise a
+// process-local log is used (single-node / tests).
+func (r *Runtime) wireSearch(c config.ScaleConf) error {
+	var idx search.TaskIndex
+	switch c.Search.Driver {
+	case "", "memory":
+		idx = search.NewMemoryTaskIndex()
+	default:
+		indexName := c.Search.Index
+		if indexName == "" {
+			indexName = defaultSearchIndex
+		}
+		httpIdx, err := search.NewHTTPTaskIndex(search.HTTPIndexConfig{
+			URL: c.Search.URL, Index: indexName,
+			Username: c.Search.Username, Password: c.Search.Password, APIKey: c.Search.APIKey,
+			Refresh: c.Search.Refresh, Timeout: c.Redis.Timeout,
+		})
+		if err != nil {
+			return fmt.Errorf("search index: %w", err)
+		}
+		// Create the mapping at startup. A pre-existing index is fine; an
+		// unreachable cluster must fail fast instead of serving stale results.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := httpIdx.EnsureIndex(ctx); err != nil {
+			return fmt.Errorf("search index: %w", err)
+		}
+		idx = httpIdx
+	}
+	r.TaskIndex = idx
+
+	if !c.Search.CDC {
+		// No CDC: keep the legacy synchronous projector available for callers
+		// that still push changes directly, but nothing is wired automatically.
+		p, err := search.NewProjector(idx)
+		if err != nil {
+			return err
+		}
+		r.Projector = p
+		return nil
+	}
+
+	var log search.ChangeLog
+	if r.directoryDB != nil {
+		sqlLog, err := search.NewSQLChangeLog(context.Background(), r.directoryDB.DB(), c.Directory.Driver, false)
+		if err != nil {
+			return fmt.Errorf("search change log: %w", err)
+		}
+		log = sqlLog
+	} else {
+		log = search.NewMemoryChangeLog()
+	}
+	r.SearchLog = log
+	r.searchRecorder = search.NewLogRecorder(log)
+	cdc, err := search.NewCDCProjector(log, idx, r.Lease, r.instanceID)
+	if err != nil {
+		return err
+	}
+	r.CDC = cdc
+	return nil
+}
+
+// SearchRecorder exposes the engine-facing change recorder (nil when CDC off).
+func (r *Runtime) SearchRecorder() *search.LogRecorder {
+	if r == nil {
+		return nil
+	}
+	return r.searchRecorder
+}
+
+func (r *Runtime) SearchInterval() time.Duration {
+	if r == nil || r.cfg.Search.Interval <= 0 {
+		return 5 * time.Second
+	}
+	return r.cfg.Search.Interval
+}
+
+func (r *Runtime) SearchRebuildInterval() time.Duration {
+	if r == nil {
+		return 0
+	}
+	return r.cfg.Search.RebuildInterval
 }
 
 func (r *Runtime) InstanceID() string {

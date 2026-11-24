@@ -11,10 +11,12 @@ import (
 	"taskgame/internal/engine"
 	"taskgame/internal/id"
 	"taskgame/internal/middleware"
+	"taskgame/internal/model"
 	"taskgame/internal/notify"
 	"taskgame/internal/plane"
 	"taskgame/internal/projection"
 	"taskgame/internal/scale"
+	"taskgame/internal/search"
 	"taskgame/internal/store"
 	"taskgame/internal/store/cell"
 	"taskgame/internal/store/domain"
@@ -43,6 +45,9 @@ type ServiceContext struct {
 	// projectionWorker is nil unless Scale.Projection is enabled.
 	projectionWorker *projection.Worker
 	projectionCancel context.CancelFunc
+	// searchWorker drains the task-index CDC stream; searchCancel stops it.
+	searchWorker *projection.Worker
+	searchCancel context.CancelFunc
 }
 
 // NewServiceContext opens the store and wires the engine, auth, and webhook worker.
@@ -103,6 +108,14 @@ func NewServiceContext(c config.Config) (*ServiceContext, error) {
 	if rt != nil && rt.Compensation != nil {
 		engineOpts = append(engineOpts, engine.WithCompensation(rt.Compensation))
 	}
+	// P2: when CDC is enabled, task writes append to the search change stream.
+	if rt != nil && rt.SearchRecorder() != nil {
+		engineOpts = append(engineOpts, engine.WithTaskChangeRecorder(rt.SearchRecorder()))
+	}
+	// Simple latest-task listings are answered from the read-side index.
+	if rt != nil && rt.TaskIndex != nil {
+		engineOpts = append(engineOpts, engine.WithTaskIndex(rt.TaskIndex))
+	}
 	// P0: when a persistent control plane is enabled, route registration and
 	// login through global_unique(email -> user_id) + Snowflake ids. When it
 	// is off, account.New keeps the original behavior.
@@ -141,7 +154,37 @@ func NewServiceContext(c config.Config) (*ServiceContext, error) {
 			sc.projectionWorker = projection.NewWorker(db, rt.Bus, rt.ProjectionInterval())
 		}
 	}
+	// P2: the search CDC projector drains task changes using the same worker
+	// (timer + bus wake-up) as message outbox recovery.
+	if rt != nil && rt.CDC != nil {
+		sc.searchWorker = projection.NewWorker(rt.CDC, rt.Bus, rt.SearchInterval())
+	}
 	return sc, nil
+}
+
+// storeTaskLister adapts store.TaskRepo.ListSweep to search.TaskLister so a
+// full re-index can page over live tasks without search depending on store.
+type storeTaskLister struct {
+	tasks interface {
+		ListSweep(ctx context.Context, afterCreated, afterID string, limit int) ([]model.Task, error)
+	}
+}
+
+func (s storeTaskLister) ListSweep(ctx context.Context, afterCreated, afterID string, limit int) ([]search.TaskDoc, error) {
+	rows, err := s.tasks.ListSweep(ctx, afterCreated, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]search.TaskDoc, 0, len(rows))
+	for _, t := range rows {
+		out = append(out, search.TaskDoc{
+			ID: t.ID, Title: t.Title, Description: t.Description,
+			Keywords: append([]string{}, t.Keywords...),
+			Kind:     t.Kind, Status: t.Status,
+			CreatedAt: model.FormatTime(t.CreatedAt),
+		})
+	}
+	return out, nil
 }
 
 func openStore(c config.Config, rt *scale.Runtime) (store.Store, error) {
@@ -248,6 +291,9 @@ func (sc *ServiceContext) Close() error {
 	if sc.projectionCancel != nil {
 		sc.projectionCancel()
 	}
+	if sc.searchCancel != nil {
+		sc.searchCancel()
+	}
 	if sc.Store != nil {
 		err = sc.Store.Close()
 	}
@@ -265,6 +311,22 @@ func (sc *ServiceContext) StartBackground(ctx context.Context) {
 		pctx, cancel := context.WithCancel(ctx)
 		sc.projectionCancel = cancel
 		go sc.projectionWorker.Run(pctx)
+	}
+	if sc.searchWorker != nil {
+		sctx, cancel := context.WithCancel(ctx)
+		sc.searchCancel = cancel
+		go sc.searchWorker.Run(sctx)
+		// One rebuild at startup backfills a fresh index; the periodic loop
+		// repairs any changes the best-effort recorder missed.
+		if sc.Scale != nil && sc.Scale.SearchLog != nil {
+			lister := storeTaskLister{tasks: sc.Store.Tasks()}
+			rebuild := func() error {
+				_, err := search.Rebuild(ctx, lister, sc.Scale.SearchLog)
+				return err
+			}
+			go func() { _ = rebuild() }() // immediate startup backfill
+			sc.loop(ctx, sc.Scale.SearchRebuildInterval(), 5*time.Minute, "search-rebuild", rebuild)
+		}
 	}
 	if sc.Config.AutoSettle.Enabled {
 		sc.loop(ctx, sc.Config.AutoSettle.Interval, 30*time.Second, "auto-settle", func() error {

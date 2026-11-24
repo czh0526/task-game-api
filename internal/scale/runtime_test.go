@@ -194,3 +194,36 @@ func TestModeDomainInheritsCellsAndOverridesOneDomain(t *testing.T) {
 		}
 	}
 }
+
+func TestSearchCDCWiring(t *testing.T) {
+	// CDC off: legacy synchronous projector, no log/recorder/projector stream.
+	off, err := New(config.ScaleConf{
+		Enabled: true, PubSub: "shared", InstanceID: "api-cdc-off",
+		Search: config.SearchScaleConf{Enabled: true},
+	}, config.StoreConf{Shards: 2, ShardDSNs: []string{"db0", "db1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer off.Close()
+	if off.TaskIndex == nil || off.Projector == nil || off.CDC != nil || off.SearchLog != nil {
+		t.Fatalf("cdc-off wiring: index=%v projector=%v cdc=%v log=%v",
+			off.TaskIndex != nil, off.Projector != nil, off.CDC != nil, off.SearchLog != nil)
+	}
+
+	// CDC on without a persistent directory: process-local log + projector.
+	on, err := New(config.ScaleConf{
+		Enabled: true, PubSub: "shared", InstanceID: "api-cdc-on",
+		Search: config.SearchScaleConf{Enabled: true, CDC: true, Interval: 2 * time.Second},
+	}, config.StoreConf{Shards: 2, ShardDSNs: []string{"db0", "db1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer on.Close()
+	if on.TaskIndex == nil || on.CDC == nil || on.SearchLog == nil || on.SearchRecorder() == nil {
+		t.Fatalf("cdc-on wiring incomplete: index=%v cdc=%v log=%v rec=%v",
+			on.TaskIndex != nil, on.CDC != nil, on.SearchLog != nil, on.SearchRecorder() != nil)
+	}
+	if got := on.SearchInterval(); got != 2*time.Second {
+		t.Fatalf("search interval: %v", got)
+	}
+}

@@ -191,9 +191,23 @@ type ArchiveScaleConf struct {
 	HotWindow time.Duration `json:",optional"`
 }
 
+// SearchScaleConf configures the read-side task index. Driver "memory" keeps
+// the in-process index (default, tests); "elasticsearch" / "opensearch" use
+// the HTTP index. CDC makes task writes append to a durable change stream
+// which a background projector drains; RebuildInterval periodically re-enqueues
+// every live task as a safety net (full re-index / repair).
 type SearchScaleConf struct {
-	Enabled bool   `json:",optional"`
-	Driver  string `json:",optional"` // memory (default)
+	Enabled         bool          `json:",optional"`
+	Driver          string        `json:",optional"` // memory | elasticsearch | opensearch
+	URL             string        `json:",optional"` // ES/OS base URL, e.g. http://localhost:9200
+	Index           string        `json:",optional"` // index name; default taskgame_tasks
+	Username        string        `json:",optional"`
+	Password        string        `json:",optional"`
+	APIKey          string        `json:",optional"`
+	Refresh         bool          `json:",optional"` // wait_for refresh on writes
+	CDC             bool          `json:",optional"` // record task writes into the change stream
+	Interval        time.Duration `json:",optional,default=5s"`
+	RebuildInterval time.Duration `json:",optional,default=0"` // 0 disables periodic rebuild
 }
 
 func (c ScaleConf) Validate() error {
@@ -236,9 +250,20 @@ func (c ScaleConf) Validate() error {
 		return fmt.Errorf("Scale.Archive.HotWindow cannot be negative")
 	}
 	switch c.Search.Driver {
-	case "", "memory":
+	case "", "memory", "elasticsearch", "opensearch":
 	default:
-		return fmt.Errorf("Scale.Search.Driver %q is not implemented in the skeleton", c.Search.Driver)
+		return fmt.Errorf("Scale.Search.Driver must be memory, elasticsearch or opensearch, got %q", c.Search.Driver)
+	}
+	if c.Search.Driver == "elasticsearch" || c.Search.Driver == "opensearch" {
+		if c.Search.URL == "" {
+			return fmt.Errorf("Scale.Search.URL is required for %s", c.Search.Driver)
+		}
+		if c.Search.Interval < 0 || c.Search.RebuildInterval < 0 {
+			return fmt.Errorf("Scale.Search durations cannot be negative")
+		}
+	}
+	if c.Search.Username != "" && c.Search.APIKey != "" {
+		return fmt.Errorf("Scale.Search.Username and APIKey are mutually exclusive")
 	}
 	if c.Compensation.Interval < 0 || c.Compensation.LeaseTTL < 0 {
 		return fmt.Errorf("Scale.Compensation durations cannot be negative")
