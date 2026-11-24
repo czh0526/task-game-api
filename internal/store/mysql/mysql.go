@@ -260,28 +260,53 @@ type execer interface {
 }
 
 func execScript(ctx context.Context, db execer, script string) error {
-	for _, stmt := range strings.Split(script, ";") {
-		stmt = strings.TrimSpace(stmt)
-		if stmt == "" {
-			continue
-		}
-		// Drop leading comment lines so a block that starts with a comment still runs.
-		lines := strings.Split(stmt, "\n")
-		var kept []string
-		for _, line := range lines {
-			trim := strings.TrimSpace(line)
-			if trim == "" || strings.HasPrefix(trim, "--") {
-				continue
-			}
-			kept = append(kept, line)
-		}
-		stmt = strings.TrimSpace(strings.Join(kept, "\n"))
-		if stmt == "" {
-			continue
-		}
+	for _, stmt := range splitSQLStatements(script) {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("mysql schema: %w", err)
 		}
 	}
 	return nil
+}
+
+// splitSQLStatements strips -- line comments before splitting on semicolons.
+// The schema keeps comments inside CREATE TABLE blocks; a semicolon in one of
+// those comments used to split a table definition in half and produce a
+// confusing MySQL syntax error at execution time.
+func splitSQLStatements(script string) []string {
+	var cleaned strings.Builder
+	for _, line := range strings.Split(script, "\n") {
+		if i := sqlLineCommentStart(line); i >= 0 {
+			line = line[:i]
+		}
+		cleaned.WriteString(line)
+		cleaned.WriteByte('\n')
+	}
+	var out []string
+	for _, stmt := range strings.Split(cleaned.String(), ";") {
+		stmt = strings.TrimSpace(stmt)
+		if stmt != "" {
+			out = append(out, stmt)
+		}
+	}
+	return out
+}
+
+// sqlLineCommentStart returns the index of a MySQL -- comment marker on a
+// line, or -1. MySQL only treats -- as a comment when followed by whitespace;
+// requiring whitespace before it keeps things like a--b inside identifiers or
+// literals untouched.
+func sqlLineCommentStart(line string) int {
+	for i := 0; i+1 < len(line); i++ {
+		if line[i] != '-' || line[i+1] != '-' {
+			continue
+		}
+		if i > 0 && line[i-1] != ' ' && line[i-1] != '\t' {
+			continue
+		}
+		if i+2 < len(line) && line[i+2] != ' ' && line[i+2] != '\t' {
+			continue
+		}
+		return i
+	}
+	return -1
 }

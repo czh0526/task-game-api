@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -257,5 +258,38 @@ func TestShardTablesOnUpgradedSchema(t *testing.T) {
 	}
 	if n != 2 {
 		t.Fatalf("upgraded database has %d shard tables, want 2", n)
+	}
+}
+
+// TestSchemaScriptSplitting guards against semicolons inside -- comments: they
+// must not split a CREATE TABLE into two invalid statements. This runs without
+// a MySQL server, so it catches the regression in CI even when isolated MySQL
+// tests are skipped.
+func TestSchemaScriptSplitting(t *testing.T) {
+	script, err := schemaFS.ReadFile("schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stmts := splitSQLStatements(string(script))
+	if len(stmts) == 0 {
+		t.Fatal("schema script produced no statements")
+	}
+	var submissions string
+	for _, stmt := range stmts {
+		lower := strings.ToLower(stmt)
+		if strings.HasPrefix(lower, "payload keeps") {
+			t.Fatalf("comment semicolon leaked into a statement: %q", stmt)
+		}
+		if strings.Contains(stmt, "CREATE TABLE IF NOT EXISTS submissions") {
+			submissions = stmt
+		}
+	}
+	if submissions == "" {
+		t.Fatal("submissions CREATE TABLE statement is missing")
+	}
+	for _, want := range []string{"payload_ref VARCHAR(128)", "PRIMARY KEY (id)", "ENGINE=InnoDB"} {
+		if !strings.Contains(submissions, want) {
+			t.Fatalf("submissions statement lost %q after comment splitting:\n%s", want, submissions)
+		}
 	}
 }
