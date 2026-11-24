@@ -127,9 +127,20 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	return ensureShardTables(ctx, conn)
 }
 
-// ensureShardTables repairs MySQL databases created before message sharding
-// existed. SQLite re-runs its whole schema on every Open and needs no repair.
+// ensureDeliveryBodyRef adds the de-amplified body reference column to databases
+// that predate webhook body externalization. An upgraded v1 database may not
+// have the webhook_deliveries table at all (only users/schema_migrations), so
+// check for the table before altering it and skip when it is absent.
 func ensureDeliveryBodyRef(ctx context.Context, conn *sql.Conn) error {
+	var hasTable int
+	if err := conn.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM information_schema.TABLES
+		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'webhook_deliveries'`).Scan(&hasTable); err != nil {
+		return err
+	}
+	if hasTable == 0 {
+		return nil
+	}
 	var n int
 	if err := conn.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM information_schema.COLUMNS
@@ -147,6 +158,8 @@ func ensureDeliveryBodyRef(ctx context.Context, conn *sql.Conn) error {
 	return nil
 }
 
+// ensureShardTables repairs MySQL databases created before message sharding
+// existed. SQLite re-runs its whole schema on every Open and needs no repair.
 func ensureShardTables(ctx context.Context, conn *sql.Conn) error {
 	const ddl = `
 CREATE TABLE IF NOT EXISTS chat_shards (
