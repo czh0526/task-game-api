@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createIdempotencyKey, type Chat, type Message } from "taskgame-client";
 import { Avatar } from "../Avatar";
+import { centerMessageScrollTop, messageTopInContent } from "../chatView";
 import { useApp } from "../context";
 import { asStickerChar, EMOJI_STICKERS, insertAtCaret, stickerLabel } from "../emojis";
 import { subscribeSignal } from "../eventStream";
@@ -40,6 +41,10 @@ export function Conversation({
   const [loading, setLoading] = useState(true);
   const seenCursor = useRef<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const messagesRef = useRef<HTMLDivElement | null>(null);
+  const newestRef = useRef<HTMLElement | null>(null);
+  /** Only re-center when a genuinely new message shows up, not on unrelated re-renders. */
+  const centeredIdRef = useRef<string | null>(null);
 
   const load = useCallback(
     async (signal?: AbortSignal) => {
@@ -112,6 +117,29 @@ export function Conversation({
       stop();
     };
   }, [client, error, load]);
+
+  // A newly displayed message should land with its first line at the vertical
+  // middle of the panel, so it is easy to spot regardless of scroll position.
+  // Key on the newest id: a re-render or a refresh with no new message must not
+  // yank the reader away from older messages they are looking at.
+  const newestId = messages.length > 0 ? messages[messages.length - 1]?.id : null;
+  useLayoutEffect(() => {
+    if (!newestId || newestId === centeredIdRef.current) return;
+    const panel = messagesRef.current;
+    const newest = newestRef.current;
+    if (!panel || !newest) return;
+    centeredIdRef.current = newestId;
+    const top = messageTopInContent({
+      messageViewportTop: newest.getBoundingClientRect().top,
+      panelViewportTop: panel.getBoundingClientRect().top,
+      panelScrollTop: panel.scrollTop,
+    });
+    panel.scrollTop = centerMessageScrollTop({
+      messageTopInContent: top,
+      panelHeight: panel.clientHeight,
+      maxScrollTop: panel.scrollHeight - panel.clientHeight,
+    });
+  }, [newestId]);
 
   async function post(body: string, type: "text" | "sticker") {
     body = body.trim();
@@ -199,10 +227,14 @@ export function Conversation({
               刷新
             </Button>
           </div>
-          <div className="messages">
+          <div className="messages" ref={messagesRef}>
             {messages.length === 0 ? <p className="empty">还没有消息。写一句发给对方。</p> : null}
-            {messages.map((message) => (
-              <article key={message.id} className={message.sender_id === settings.userId ? "bubble mine" : "bubble"}>
+            {messages.map((message, index) => (
+              <article
+                key={message.id}
+                ref={index === messages.length - 1 ? newestRef : undefined}
+                className={message.sender_id === settings.userId ? "bubble mine" : "bubble"}
+              >
                 <header>
                   <span className="bubble-sender">
                     <Avatar userId={message.sender_id} className="bubble-avatar" />

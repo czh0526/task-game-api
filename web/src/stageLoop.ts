@@ -46,6 +46,18 @@ export function canInviteSeat(me: string | undefined, task: SeatInviteTask, role
   );
 }
 
+/** A publisher may remove an empty seat of a live task. */
+export function canRemoveSeat(me: string | undefined, task: SeatInviteTask, roleStatus: string | undefined, assignee?: string | null): boolean {
+  return (
+    !!me &&
+    me === task.publisher_id &&
+    task.kind === "collaborative" &&
+    (task.status === "open" || task.status === "active") &&
+    ((roleStatus ?? "open") === "open" || (roleStatus ?? "open") === "dropped") &&
+    !assignee
+  );
+}
+
 /** Same comma/whitespace splitting used by the invite forms. */
 export function inviteUserIds(raw: string): string[] {
   return [...new Set(raw.split(/[\s,]+/).map((item) => item.trim()).filter(Boolean))];

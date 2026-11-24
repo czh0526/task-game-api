@@ -67,6 +67,7 @@ describe("OpenAPI parity", () => {
       "/tasks/{taskId}/invites",
       "/tasks/{taskId}/resolve",
       "/tasks/{taskId}/revise",
+      "/tasks/{taskId}/seats/{roleId}/remove",
       "/tasks/{taskId}/start",
       "/tasks/{taskId}/submit",
       "/users/{userId}/avatar",

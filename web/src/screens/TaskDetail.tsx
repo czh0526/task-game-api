@@ -23,6 +23,7 @@ import { SenderName, UserRef } from "../names";
 import { href } from "../route";
 import {
   canInviteSeat,
+  canRemoveSeat,
   confirmTaskBody,
   currentSubmissionsForMilestone,
   inReviewMilestoneSubmissionId,
@@ -193,6 +194,21 @@ export function TaskDetail({ id }: { id: string }) {
         { idempotencyKey: createIdempotencyKey(`invite-${roleId}`) },
       );
       setSeatInviteUsers((current) => ({ ...current, [roleId]: "" }));
+      setTask(await client.getTask(taskId));
+    } catch (err) {
+      setError(formatError(err));
+    } finally {
+      setPending(null);
+    }
+  }
+
+  async function removeSeat(roleId: string) {
+    if (!client) return;
+    if (!window.confirm(`删除席位 ${roleId}？该席位托管的份额会退回发布者，绑定在该席位上的邀请会被删除。`)) return;
+    setPending(`seat-remove-${roleId}`);
+    setError(null);
+    try {
+      await client.removeSeat(taskId, roleId, { idempotencyKey: createIdempotencyKey(`remove-${roleId}`) });
       setTask(await client.getTask(taskId));
     } catch (err) {
       setError(formatError(err));
@@ -377,7 +393,7 @@ export function TaskDetail({ id }: { id: string }) {
         <section className="card">
           <h2>席位 roles</h2>
           <p className="hint">
-            表里是服务端展开后的席位。share_bps 是这一席结算用的基点。空席可以直接邀请指定用户，邀请会绑定该席位；接受后自动落到这一席。
+            表里是服务端展开后的席位。share_bps 是这一席结算用的基点。空席可以直接邀请指定用户，邀请会绑定该席位；接受后自动落到这一席。发布者还可以删除空席，删除后该席位的份额退回发布者、绑定邀请一并删除。
             {mode === "per_seat"
               ? " 分别结算：拨付和退回在这一席上。已提交的席位可以确认拨付；空席或已退出的席位可以把份额退回发布者。全部席位拨付或退回后任务才 settled。"
               : " 统一结算：坐满后由发布者开始。每一席都提交、且没有空席时才能一次确认。开始后退出会重开该席，任务保持 active。"}
@@ -392,7 +408,7 @@ export function TaskDetail({ id }: { id: string }) {
                 <th>状态</th>
                 <th>席位退回截止</th>
                 <th>assignee_user_id</th>
-                <th>邀请</th>
+                <th>邀请 / 删除席位</th>
                 {mode === "per_seat" ? <th>操作</th> : null}
               </tr>
             </thead>
@@ -414,31 +430,42 @@ export function TaskDetail({ id }: { id: string }) {
                     <td>{role.assignee_user_id ? <UserRef userId={role.assignee_user_id} /> : "—"}</td>
                     <td className="seat-invite">
                       {canInviteSeat(me, task, role.status) ? (
-                        <>
-                          <input
-                            aria-label={`邀请 ${role.id}`}
-                            value={seatInviteUsers[role.id] ?? ""}
-                            spellCheck={false}
-                            placeholder="usr_..."
-                            disabled={pending !== null}
-                            onChange={(event) =>
-                              setSeatInviteUsers((current) => ({ ...current, [role.id]: event.target.value }))
-                            }
-                          />
-                          <Button
-                            type="button"
-                            kind="primary"
-                            className="compact"
-                            pending={pending === `seat-invite-${role.id}`}
-                            disabled={pending !== null || inviteUserIds(seatInviteUsers[role.id] ?? "").length === 0}
-                            onClick={() => void inviteSeat(role.id)}
-                          >
-                            邀请
-                          </Button>
-                        </>
-                      ) : (
-                        "—"
-                      )}
+                        <input
+                          aria-label={`邀请 ${role.id}`}
+                          value={seatInviteUsers[role.id] ?? ""}
+                          spellCheck={false}
+                          placeholder="usr_..."
+                          disabled={pending !== null}
+                          onChange={(event) =>
+                            setSeatInviteUsers((current) => ({ ...current, [role.id]: event.target.value }))
+                          }
+                        />
+                      ) : null}
+                      {canInviteSeat(me, task, role.status) ? (
+                        <Button
+                          type="button"
+                          kind="primary"
+                          className="compact"
+                          pending={pending === `seat-invite-${role.id}`}
+                          disabled={pending !== null || inviteUserIds(seatInviteUsers[role.id] ?? "").length === 0}
+                          onClick={() => void inviteSeat(role.id)}
+                        >
+                          邀请
+                        </Button>
+                      ) : null}
+                      {canRemoveSeat(me, task, role.status, role.assignee_user_id) ? (
+                        <Button
+                          type="button"
+                          kind="danger"
+                          className="compact"
+                          pending={pending === `seat-remove-${role.id}`}
+                          disabled={pending !== null}
+                          onClick={() => void removeSeat(role.id)}
+                        >
+                          删除席位
+                        </Button>
+                      ) : null}
+                      {!canInviteSeat(me, task, role.status) && !canRemoveSeat(me, task, role.status, role.assignee_user_id) ? "—" : null}
                     </td>
                     {mode === "per_seat" ? (
                       <td className="seat-action">

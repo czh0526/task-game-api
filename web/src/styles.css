@@ -496,6 +496,17 @@ th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line
 .chat-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; align-content: start; }
 .chat-pick { width: 100%; text-align: left; border-radius: 12px; display: grid; gap: 4px; }
 .messages { display: grid; gap: 10px; }
+/* Leave room below the last message so it can be scrolled up to the vertical
+   middle; without a tail the newest (last) message is clamped near the bottom. */
+.messages { padding-bottom: 50vh; }
+/* Full-page conversation: keep the message list scrollable so a newly
+   displayed message can be positioned at the panel's vertical middle. */
+.thread:not(.thread-embedded) .messages {
+  max-height: 65vh;
+  overflow-y: auto;
+  align-content: start;
+  padding-right: 4px;
+}
 .bubble { padding: 10px 12px; max-width: min(100%, 42rem); }
 .bubble header, .bubble footer { display: flex; justify-content: space-between; gap: 8px; color: var(--ink-soft); font-size: 0.8rem; }
 .bubble p { margin: 6px 0; white-space: pre-wrap; }
@@ -1138,7 +1149,7 @@ button.portal-cat-name:hover, .portal-cat.on .portal-cat-name { color: var(--p-o
 .chat-embedded .thread-embedded { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .chat-embedded .thread-embedded > .hint:first-child,
 .chat-embedded .thread-embedded > .toolbar { display: none; }
-.chat-embedded .messages { flex: 1; min-height: 0; overflow-y: auto; align-content: start; padding: 16px 18px; }
+.chat-embedded .messages { flex: 1; min-height: 0; overflow-y: auto; align-content: start; padding: 16px 18px 50vh; }
 .chat-embedded .bubble { max-width: min(88%, 42rem); }
 .chat-embedded .composer {
   flex: none; margin: 0; padding: 10px 18px 14px;

@@ -115,6 +115,12 @@ type DropoutTaskReq struct {
 	IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
 }
 
+type RemoveSeatReq struct {
+	TaskId         string `path:"taskId" json:"-"`
+	RoleId         string `path:"roleId" json:"-"`
+	IdempotencyKey string `header:"Idempotency-Key,optional" json:"-"`
+}
+
 type EscrowAccount struct {
 	Id       string        `json:"id"`
 	Held     int64         `json:"held"`

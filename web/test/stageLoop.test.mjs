@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   canInviteSeat,
+  canRemoveSeat,
   confirmTaskBody,
   inReviewMilestoneSubmissionId,
   inviteUserIds,
@@ -117,6 +118,20 @@ test("seat invite is offered only to the publisher for an open collaborative sea
   assert.equal(canInviteSeat("usr_publisher", { ...live, status: "settled" }, "open"), false);
   assert.equal(canInviteSeat("usr_publisher", live, "filled"), false);
   assert.equal(canInviteSeat("usr_publisher", live, "submitted"), false);
+});
+
+test("only the publisher can remove an empty seat of a live collaborative task", () => {
+  const live = { kind: "collaborative", status: "open", publisher_id: "usr_publisher" };
+  assert.equal(canRemoveSeat("usr_publisher", live, "open"), true);
+  assert.equal(canRemoveSeat("usr_publisher", { ...live, status: "active" }, "dropped"), true);
+  assert.equal(canRemoveSeat("usr_publisher", live, "open", "usr_someone"), false);
+  assert.equal(canRemoveSeat("usr_other", live, "open"), false);
+  assert.equal(canRemoveSeat(undefined, live, "open"), false);
+  assert.equal(canRemoveSeat("usr_publisher", { ...live, kind: "exclusive" }, "open"), false);
+  assert.equal(canRemoveSeat("usr_publisher", { ...live, status: "settled" }, "open"), false);
+  assert.equal(canRemoveSeat("usr_publisher", live, "filled"), false);
+  assert.equal(canRemoveSeat("usr_publisher", live, "submitted"), false);
+  assert.equal(canRemoveSeat("usr_publisher", live, "removed"), false);
 });
 
 test("seat invite input splits ids on commas and whitespace and deduplicates", () => {
