@@ -105,7 +105,10 @@ AutoSettle:
 # but MUST be unique (never reuse the same value in two processes), otherwise
 # the echo filter drops the other process's signals.
 # The other Scale sub-systems (Projection / Directory / Domains / Archive /
-# Search) stay disabled: they belong to the legacy message-sharding prototype.
+# Search / Compensation) stay disabled by default: they are implemented
+# production features but need extra databases or external services. See
+# docs/remaining-work-backlog.md for per-feature status and etc/taskgame.yaml
+# comments below for opt-in examples.
 Scale:
   Enabled: true
   PubSub: redis

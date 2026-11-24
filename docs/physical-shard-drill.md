@@ -2,6 +2,8 @@
 
 这是 `docs/per-domain-sharding-plan.md` 第 7 节和第 4 阶段的可执行 runbook。它覆盖 message、user、task 三个域的物理搬迁，每次只切一个域，不改任何 API 语义。工具在 `cmd/shardctl`，库实现在 `internal/shardmigrate`。
 
+状态：SQLite 自动化演练与生产化护栏（冻结写、资金 saga、控制面缓存/副本、`/metrics`、游标世代）均已落地；真机 MySQL + 双进程回归脚本已编写但未在作者环境实测，详见第 9 节。逐项完成状态见 `docs/remaining-work-backlog.md`。
+
 ## 1. 演练目标
 
 - 给一个已经运行的老系统（没有目录行、三库共置）回填权威目录；
@@ -155,7 +157,7 @@ shardctl rollback -driver mysql -entity user -control "<control-dsn>" \
 
 ### 6.3 事务边界的现实
 
-共置部署下，“发布任务扣发布者余额”是一次本地事务。user 与 task 分置到不同物理库后，这类跨 user/task 操作会退化为最终一致（非严格模式），或返回 `ErrCrossShard`（严格模式）。**资金相关操作建议保持 user/task 共置**，先只切 message 域；确需切分时必须有对账与补偿，这属于方案文档第 6 节的范围，不是本演练自动解决的内容。
+共置部署下，“发布任务扣发布者余额”是一次本地事务。user 与 task 分置到不同物理库后，这类跨 user/task 操作会退化为最终一致（非严格模式），或返回 `ErrCrossShard`（严格模式）。**资金相关操作建议保持 user/task 共置**，先只切 message 域；确需切分时启用 `Scale.Compensation.Enabled`，由 `internal/compensation` 的持久化 saga 与后台 reconciler 处理单边账（方案文档第 6 节）。补偿链路已有自动化测试，真机 MySQL 上的崩溃重放尚未实测。
 
 同理，新任务创建时若请求带路由 key（发布者 user id），`createPlacement` 仍按 pinned 片数定位，新物理片主要承接迁移过来的任务，而不是自动接收所有新任务。
 
@@ -175,7 +177,7 @@ shardctl rollback -driver mysql -entity user -control "<control-dsn>" \
 - **跨 user/task 事务补偿**：`internal/compensation` 的持久化 saga + 后台 reconciler，FundTask 在扣款前记录 intent，崩溃后按 escrow 权威金额重放或退款；通过 `Scale.Compensation.Enabled` 开启（需 `Scale.Directory.Enabled`）。
 - **控制面高可用**：`SQLDirectory` 增加读缓存与可选 `Scale.Directory.ReplicaDSN`（读走副本、故障自动回落主库）；目录行与业务行在共置时可经 `AssignInTx` 同事务写入。
 - **监控**：`/metrics` 暴露目录命中率、控制面 QPS、跨域事务数、冻结写、补偿次数。
-- **auto_increment 与游标（仅 message 域）**：`last_read_rowid` 已重写，但任何外部保存的 rowid/seq（如客户端游标）都需要同步失效。
+- **auto_increment 与游标（仅 message 域）**：`last_read_rowid` 已重写；外部保存的 rowid/seq 由 `plane.CursorEpoch` + `shardctl cursor-bump` 失效，客户端传 legacy bare-offset 时按 epoch 0 兼容，传 v2 `v2|<epoch>|<offset>` 时遇到世代变化自动从 offset 0 重新拉取。
 - **部分索引/生成列**：MySQL `chats.direct_pair`、`friend_requests.pending_pair` 是生成列，copy 不显式写它们；SQLite 无此列。两边 schema 差异已在工具中处理。
 
 ## 8. 本次演练已经验证的事实
@@ -203,3 +205,29 @@ bash scripts/drill-mysql.sh --keep    # 保留容器与进程，便于人工核�
 ```
 
 脚本phase 2 会打印提示；真机上需把创建出的 chat id 传给 phase 3/5 的 `shardctl -chats <id>`（这部分保留为显式手工步骤，避免自动选取错误的会话）。跨进程 SSE 订阅 `/v1/events/stream` 的断言同样保留为人工核对项。
+
+## 10. 配套运维命令
+
+除切分主流程外，`shardctl` 还提供以下生产化操作：
+
+```bash
+# 迁移窗口冻结/解冻写入，key 可用 * 表示整个域
+shardctl fence-lock   -control "<control-dsn>" -domain message -key "chat_a"
+shardctl fence-unlock -control "<control-dsn>" -domain message -key "chat_a"
+shardctl fence-list   -control "<control-dsn>"
+
+# 消息游标世代：物理切流后让客户端旧 cursor 失效
+shardctl cursor-bump -control "<control-dsn>" -chats "chat_a,chat_b"
+
+# webhook delivery body 外置：一份正文 + N 个 body_ref
+shardctl externalize-bodies -source "<dsn>" -blob-dir "/var/lib/taskgame/blobs"
+
+# 冷归档与恢复：把旧行搬到 blob 冷库，按 checksum 校验
+shardctl archive-run -source "<dsn>" -blob-dir "/var/lib/taskgame/cold" -table messages
+
+# archive-run 会打印 ref；恢复时把该 ref 传回
+shardctl archive-restore -source "<dsn>" -blob-dir "/var/lib/taskgame/cold" \
+  -table messages -ref "<archive-ref>"
+```
+
+`externalize-bodies` 只处理 webhook delivery body；头像与 submission payload 的 `*_ref` 迁移仍未做，保留在 `internal/scale.TODOs`。
