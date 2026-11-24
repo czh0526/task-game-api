@@ -5,27 +5,25 @@ export function idSuffix(userId: string): string {
 }
 
 /**
- * One line: `昵称(...后6位)`, for example `阿宁同学(...a1b2c3)`.
- * A missing nickname is `...后6位`, never a blank and never a second line.
+ * One line, nickname only — for example `阿宁同学`. The user id suffix used to
+ * be appended as `昵称(...后6位)` but is no longer shown when a nickname exists.
+ * A user without a nickname still falls back to `...后6位`, so they remain
+ * distinguishable; never blank and never a second line.
  */
 export function personLabel(nickname: string | null | undefined, userId: string): string {
-  const name = nickname?.trim();
-  const suffix = idSuffix(userId);
-  if (name && suffix) return `${name}(...${suffix})`;
-  if (name) return name;
-  if (suffix) return `...${suffix}`;
-  return "未命名";
-}
-
-/**
- * Sender name inside a chat bubble: the nickname on its own (no id suffix),
- * falling back to the short id when no nickname is known yet.
- */
-export function senderDisplayName(nickname: string | null | undefined, userId: string): string {
   const name = nickname?.trim();
   if (name) return name;
   const suffix = idSuffix(userId);
   return suffix ? `...${suffix}` : "未命名";
+}
+
+/**
+ * Sender name inside a chat bubble: the nickname on its own (no id suffix),
+ * falling back to the short id when no nickname is known yet. Same display
+ * rule as everywhere else in the UI.
+ */
+export function senderDisplayName(nickname: string | null | undefined, userId: string): string {
+  return personLabel(nickname, userId);
 }
 
 /** Client-side check matching the server: trimmed, 1–32 characters, no control characters. */

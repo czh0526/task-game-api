@@ -43,7 +43,7 @@ export function PersonName({
   userId: string;
   /** When false, the name is plain text. Use that inside a control that already opens or selects the user. */
   chat?: boolean;
-  /** Optional display override, e.g. a nickname without the id suffix in a contact list. */
+  /** Optional display override. By default every label shows the nickname only. */
   label?: string;
 }) {
   const { client, settings } = useApp();
