@@ -16,6 +16,12 @@ export const KIND_LABEL: Record<TaskKind, string> = {
   collaborative: "协作",
 };
 
+export const ASSIGNEE_POLICY_LABEL: Record<string, string> = {
+  specific: "指定执行人",
+  criteria: "按条件接单",
+  open: "开放接单",
+};
+
 export const ROLE_STATUS_LABEL: Record<string, string> = {
   open: "空席",
   filled: "已入席",
