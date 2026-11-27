@@ -741,38 +741,42 @@ export function TaskDetail({ id }: { id: string }) {
                       )}
                     </div>
                   ) : null}
-                  <InvitePicker
-                    value={inviteUser}
-                    onChange={setInviteUser}
-                    disabled={pending !== null}
-                    label="邀请对象"
-                  />
-                  <Button
-                    type="button"
-                    pending={pending === "invite"}
-                    disabled={pending !== null || !inviteUser.trim()}
-                    onClick={() =>
-                      void (async () => {
-                        setPending("invite");
-                        setError(null);
-                        try {
-                          await client.createTaskInvites(
-                            task.id,
-                            { user_ids: inviteUser.split(/[\s,]+/).map((item) => item.trim()).filter(Boolean) },
-                            { idempotencyKey: createIdempotencyKey("invite") },
-                          );
-                          setInviteUser("");
-                          setTask(await client.getTask(task.id));
-                        } catch (err) {
-                          setError(formatError(err));
-                        } finally {
-                          setPending(null);
+                  {!editingAssignees ? (
+                    <>
+                      <InvitePicker
+                        value={inviteUser}
+                        onChange={setInviteUser}
+                        disabled={pending !== null}
+                        label="邀请对象"
+                      />
+                      <Button
+                        type="button"
+                        pending={pending === "invite"}
+                        disabled={pending !== null || !inviteUser.trim()}
+                        onClick={() =>
+                          void (async () => {
+                            setPending("invite");
+                            setError(null);
+                            try {
+                              await client.createTaskInvites(
+                                task.id,
+                                { user_ids: inviteUser.split(/[\s,]+/).map((item) => item.trim()).filter(Boolean) },
+                                { idempotencyKey: createIdempotencyKey("invite") },
+                              );
+                              setInviteUser("");
+                              setTask(await client.getTask(task.id));
+                            } catch (err) {
+                              setError(formatError(err));
+                            } finally {
+                              setPending(null);
+                            }
+                          })()
                         }
-                      })()
-                    }
-                  >
-                    发送邀请
-                  </Button>
+                      >
+                        发送邀请
+                      </Button>
+                    </>
+                  ) : null}
                 </Operation>
               ) : null}
             </div>
