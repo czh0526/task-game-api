@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"taskgame/internal/biz"
@@ -70,6 +71,28 @@ func (e *Engine) SetAssignees(ctx context.Context, userID string, req *types.Set
 			// Invite the newly designated users.
 			if len(added) > 0 {
 				if err := e.addInvites(ctx, r, t, added, ""); err != nil {
+					return nil, err
+				}
+			}
+			// Re-invite anyone still on the list who had declined. addInvites
+			// upserts, which flips a declined invite back to pending and emits
+			// task.invited again — the publisher's way to re-invite without a
+			// separate invite entry point on specific tasks.
+			var reinvited []string
+			for _, uid := range next {
+				inv, err := r.Invites().Find(ctx, t.ID, uid)
+				if errors.Is(err, store.ErrNotFound) {
+					continue
+				}
+				if err != nil {
+					return nil, err
+				}
+				if inv.Status == model.InviteDeclined {
+					reinvited = append(reinvited, uid)
+				}
+			}
+			if len(reinvited) > 0 {
+				if err := e.addInvites(ctx, r, t, reinvited, ""); err != nil {
 					return nil, err
 				}
 			}

@@ -95,3 +95,33 @@ func TestSetAssigneesRejectsNonOpenTask(t *testing.T) {
 		t.Fatalf("expected conflict on active task, got %v", err)
 	}
 }
+
+// Saving the list re-invites someone who had declined, so the publisher can
+// bring them back without a separate invite entry point.
+func TestSetAssigneesReinvitesDeclinedUser(t *testing.T) {
+	ctx := context.Background()
+	eng, st, taskID := newSpecificTask(t)
+
+	inv, err := st.Invites().Find(ctx, taskID, "usr_a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.DeclineInvite(ctx, "usr_a", &types.DeclineInviteReq{InviteId: inv.ID}); err != nil {
+		t.Fatal(err)
+	}
+	declined, err := st.Invites().Find(ctx, taskID, "usr_a")
+	if err != nil || declined.Status != model.InviteDeclined {
+		t.Fatalf("expected declined, got %+v err %v", declined, err)
+	}
+
+	// Saving the unchanged list still re-invites the declined user.
+	if _, err := eng.SetAssignees(ctx, "usr_publisher", &types.SetAssigneesReq{
+		TaskId: taskID, UserIds: []string{"usr_a", "usr_b"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reinvited, err := st.Invites().Find(ctx, taskID, "usr_a")
+	if err != nil || reinvited.Status != model.InvitePending {
+		t.Fatalf("expected pending after re-invite, got %+v err %v", reinvited, err)
+	}
+}

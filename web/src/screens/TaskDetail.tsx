@@ -254,6 +254,8 @@ export function TaskDetail({ id }: { id: string }) {
   const canArbitrate = disputed && isArbiter;
   const canInvite = canInviteTask(me, task);
   const canEdit = canEditAssignees(me, task);
+  const hasSpecificAssignees =
+    task.assignee_policy?.type === "specific" && (task.assignee_policy.user_ids ?? []).length > 0;
   const operationCount =
     Number(canFund) + Number(canStart) + Number(canConfirm) + Number(canRevise) + Number(canCancel) +
     Number(canDispute) + Number(canAccept) + Number(canSubmit) + Number(canDropout) +
@@ -668,7 +670,7 @@ export function TaskDetail({ id }: { id: string }) {
 
               {canInvite ? (
                 <Operation title="邀请执行者" description="邀请指定用户参与，按昵称选择。">
-                  {task.assignee_policy?.type === "specific" && (task.assignee_policy.user_ids ?? []).length > 0 ? (
+                  {hasSpecificAssignees ? (
                     <div className="invite-existing">
                       <span className="field-label">已指定执行人</span>
                       {editingAssignees ? (
@@ -741,7 +743,7 @@ export function TaskDetail({ id }: { id: string }) {
                       )}
                     </div>
                   ) : null}
-                  {!editingAssignees ? (
+                  {!hasSpecificAssignees ? (
                     <>
                       <InvitePicker
                         value={inviteUser}
