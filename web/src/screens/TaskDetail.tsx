@@ -4,6 +4,7 @@ import { Avatar } from "../Avatar";
 import { isSignedIn } from "../client";
 import { useApp } from "../context";
 import {
+  ASSIGNEE_POLICY_LABEL,
   ENTRY_LABEL,
   MILESTONE_STATUS_LABEL,
   PAYMENT_MODE_LABEL,
@@ -725,6 +726,18 @@ export function TaskDetail({ id }: { id: string }) {
                 )
               }
             />
+            {task.assignee_policy?.type === "specific" && (task.assignee_policy.user_ids ?? []).length > 0 ? (
+              <Fact
+                label="指定执行人"
+                value={
+                  <span className="person-list">
+                    {(task.assignee_policy.user_ids ?? []).map((userId) => (
+                      <UserRef key={userId} userId={userId} nameOnly />
+                    ))}
+                  </span>
+                }
+              />
+            ) : null}
             <Fact label="位置" value={task.attributes?.location || "—"} />
             <Fact label="时限" value={URGENCY_LABEL[task.attributes?.urgency ?? "other"] ?? "—"} />
             <Fact
@@ -1037,6 +1050,10 @@ export function TaskDetail({ id }: { id: string }) {
             <Fact label="坐标" value={`${task.attributes.latitude}, ${task.attributes.longitude}`} />
           ) : null}
           <Fact label="周期" value={RECURRENCE_LABEL[task.attributes?.recurrence ?? "one_time"] ?? "—"} />
+          <Fact
+            label="接单方式"
+            value={ASSIGNEE_POLICY_LABEL[task.assignee_policy?.type ?? "open"] ?? task.assignee_policy?.type ?? "—"}
+          />
           {(task.attributes?.executor_requirements ?? []).length > 0 ? (
             <Fact
               label="完成者条件"
