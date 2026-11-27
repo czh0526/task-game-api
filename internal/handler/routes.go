@@ -162,6 +162,11 @@ func RegisterHandlers(server *rest.Server, serverCtx *svc.ServiceContext) {
 				},
 				{
 					Method:  http.MethodPost,
+					Path:    "/tasks/:taskId/seats/:roleId/remove",
+					Handler: task.RemoveSeatHandler(serverCtx),
+				},
+				{
+					Method:  http.MethodPost,
 					Path:    "/tasks/:taskId/resolve",
 					Handler: task.ResolveTaskHandler(serverCtx),
 				},

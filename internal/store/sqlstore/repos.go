@@ -1510,6 +1510,11 @@ func (r *inviteRepo) ListByUser(ctx context.Context, userID, status string) ([]m
 	return r.listInvites(ctx, `SELECT id, task_id, user_id, COALESCE(role_id, ''), status, created_at, updated_at FROM invites WHERE user_id = ? AND status = ? ORDER BY created_at DESC, id DESC`, userID, status)
 }
 
+func (r *inviteRepo) DeleteByRole(ctx context.Context, taskID, roleID string) error {
+	_, err := r.q.ExecContext(ctx, `DELETE FROM invites WHERE task_id = ? AND role_id = ?`, taskID, roleID)
+	return err
+}
+
 func (r *inviteRepo) listInvites(ctx context.Context, query string, args ...any) ([]model.Invite, error) {
 	rows, err := r.q.QueryContext(ctx, query, args...)
 	if err != nil {

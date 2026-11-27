@@ -25,6 +25,7 @@ export const protocolOperations = [
   "listTaskInvites",
   "createTaskInvites",
   "dropoutTask",
+  "removeSeat",
   "createWebhook",
   "listMyInvites",
   "declineInvite",

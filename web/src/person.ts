@@ -26,6 +26,17 @@ export function senderDisplayName(nickname: string | null | undefined, userId: s
   return personLabel(nickname, userId);
 }
 
+/**
+ * Nickname only, never an id suffix. Used where the page must show a person by
+ * name and must not leak an id (e.g. the task detail screen). A user without a
+ * nickname gets a neutral placeholder; the id stays available via the tooltip
+ * on the wrapping element.
+ */
+export function nicknameOnly(nickname: string | null | undefined, placeholder = "用户"): string {
+  const name = nickname?.trim();
+  return name || placeholder;
+}
+
 /** Client-side check matching the server: trimmed, 1–32 characters, no control characters. */
 export function nicknameError(raw: string): string | null {
   const name = raw.trim();

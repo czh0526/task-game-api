@@ -2,9 +2,9 @@ import { isTaskGameError, submissionIdsFromConfirmError, type TaskKind, type Tas
 
 export const STATUS_LABEL: Record<TaskStatus, string> = {
   draft: "草稿",
-  open: "待接受",
+  open: "待接单",
   active: "进行中",
-  in_review: "待确认",
+  in_review: "待结算",
   disputed: "争议中",
   settled: "已结算",
   cancelled: "已取消",
@@ -20,7 +20,7 @@ export const ROLE_STATUS_LABEL: Record<string, string> = {
   open: "空席",
   filled: "已入席",
   dropped: "已退出",
-  submitted: "已提交",
+  submitted: "已通知完成",
   settled: "已拨付",
   refunded: "已退回",
   disputed: "争议中",
@@ -72,8 +72,8 @@ export function executorRequirementLabel(value: string): string {
 }
 
 export const MILESTONE_STATUS_LABEL: Record<string, string> = {
-  pending: "待提交",
-  submitted: "待确认",
+  pending: "待完成",
+  submitted: "待结算",
   released: "已拨付",
   disputed: "争议中",
 };
