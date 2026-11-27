@@ -24,6 +24,7 @@ import type {
   MessageList,
   ResolutionBody,
   ReviseTaskBody,
+  SetAssigneesBody,
   SubmissionCreate,
   Task,
   TaskCreate,
@@ -322,6 +323,18 @@ export class TaskGameClient {
     return this.send(
       "POST",
       `${this.apiBase}/tasks/${segment(taskId, "taskId")}/invites`,
+      options,
+      body,
+      true,
+      "header",
+    );
+  }
+
+  /** `PUT /v1/tasks/{taskId}/assignees` — replace the designated executors (open tasks only). */
+  setAssignees(taskId: string, body: SetAssigneesBody, options?: CallOptions): Promise<Task> {
+    return this.send(
+      "PUT",
+      `${this.apiBase}/tasks/${segment(taskId, "taskId")}/assignees`,
       options,
       body,
       true,

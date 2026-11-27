@@ -59,6 +59,7 @@ export type {
   InviteList,
   InviteStatus,
   InviteUsersBody,
+  SetAssigneesBody,
   DropoutRule,
   EscrowAccount,
   EscrowEntry,

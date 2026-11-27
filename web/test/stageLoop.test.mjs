@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  canEditAssignees,
   canInviteSeat,
   canInviteTask,
   canRemoveSeat,
@@ -216,5 +217,27 @@ test("revise targets the in-review milestone when an earlier stage submission is
       "sub_old",
     ),
     undefined,
+  );
+});
+
+test("assignee list is editable only by the publisher on an open specific task", () => {
+  const base = {
+    kind: "exclusive",
+    status: "open",
+    publisher_id: "usr_pub",
+    assignee_policy: { type: "specific", user_ids: ["usr_a"] },
+  };
+  assert.equal(canEditAssignees("usr_pub", base), true);
+  assert.equal(canEditAssignees("usr_other", base), false);
+  assert.equal(canEditAssignees(undefined, base), false);
+  assert.equal(canEditAssignees("usr_pub", { ...base, status: "active" }), false);
+  assert.equal(canEditAssignees("usr_pub", { ...base, status: "in_review" }), false);
+  assert.equal(
+    canEditAssignees("usr_pub", { ...base, assignee_policy: { type: "open" } }),
+    false,
+  );
+  assert.equal(
+    canEditAssignees("usr_pub", { ...base, kind: "collaborative" }),
+    false,
   );
 });

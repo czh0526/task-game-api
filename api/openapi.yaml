@@ -660,6 +660,38 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/InviteList'
+  /tasks/{taskId}/assignees:
+    put:
+      tags: [Tasks]
+      summary: Replace the designated executors
+      operationId: setAssignees
+      description: |
+        Publisher only, and only while the task is still open (before anyone accepts).
+        The whole specific-policy assignee list is replaced by user_ids: users left out
+        are removed (their invites are deleted), new users get a pending invite.
+        Emits task.assignees_changed with added and removed ids.
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_ids]
+              properties:
+                user_ids:
+                  type: array
+                  minItems: 1
+                  items: { type: string }
+      responses:
+        '200':
+          description: Task after the assignee list was replaced
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
   /tasks/{taskId}/seats/{roleId}/remove:
     post:
       tags: [Tasks]
@@ -1475,6 +1507,7 @@ components:
         - task.arbitrated
         - task.invited
         - task.invite_declined
+        - task.assignees_changed
         - escrow.hold
         - escrow.release
         - escrow.refund

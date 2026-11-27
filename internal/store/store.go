@@ -158,6 +158,9 @@ type InviteRepo interface {
 	// DeleteByRole removes every invite bound to a collaborative seat. Used when
 	// the publisher removes that seat. Returns nil when no rows match.
 	DeleteByRole(ctx context.Context, taskID, roleID string) error
+	// DeleteByUser removes one user's invite from a task. Used when the publisher
+	// removes a user from the specific assignee list. Returns nil when no row matches.
+	DeleteByUser(ctx context.Context, taskID, userID string) error
 }
 
 // FriendRepo stores mutual friendships, directed requests, and personal groups.

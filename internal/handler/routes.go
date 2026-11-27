@@ -161,6 +161,11 @@ func RegisterHandlers(server *rest.Server, serverCtx *svc.ServiceContext) {
 					Handler: task.InviteTaskHandler(serverCtx),
 				},
 				{
+					Method:  http.MethodPut,
+					Path:    "/tasks/:taskId/assignees",
+					Handler: task.SetAssigneesHandler(serverCtx),
+				},
+				{
 					Method:  http.MethodPost,
 					Path:    "/tasks/:taskId/seats/:roleId/remove",
 					Handler: task.RemoveSeatHandler(serverCtx),

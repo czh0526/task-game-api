@@ -350,6 +350,11 @@ export interface InviteUsersBody {
   role_id?: string;
 }
 
+/** Replaces the whole specific-policy assignee list. Open tasks only. */
+export interface SetAssigneesBody {
+  user_ids: string[];
+}
+
 export interface Invite {
   id: string;
   task_id: string;

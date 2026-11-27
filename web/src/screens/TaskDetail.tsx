@@ -25,6 +25,7 @@ import { SenderName, UserRef } from "../names";
 import { href } from "../route";
 import {
   canInviteSeat,
+  canEditAssignees,
   canInviteTask,
   canRemoveSeat,
   cancelReason,
@@ -56,6 +57,8 @@ export function TaskDetail({ id }: { id: string }) {
   const [reviseReason, setReviseReason] = useState("");
   const [outcome, setOutcome] = useState<ResolutionOutcome>("pay_executor");
   const [inviteUser, setInviteUser] = useState("");
+  const [editingAssignees, setEditingAssignees] = useState(false);
+  const [assigneeDraft, setAssigneeDraft] = useState("");
   const [seatInviteUsers, setSeatInviteUsers] = useState<Record<string, string>>({});
   const [chatText, setChatText] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
@@ -250,10 +253,11 @@ export function TaskDetail({ id }: { id: string }) {
   const canResolve = disputed && resolveReason(task, me) === null;
   const canArbitrate = disputed && isArbiter;
   const canInvite = canInviteTask(me, task);
+  const canEdit = canEditAssignees(me, task);
   const operationCount =
     Number(canFund) + Number(canStart) + Number(canConfirm) + Number(canRevise) + Number(canCancel) +
     Number(canDispute) + Number(canAccept) + Number(canSubmit) + Number(canDropout) +
-    Number(canResolve) + Number(canArbitrate) + Number(canInvite);
+    Number(canResolve) + Number(canArbitrate) + Number(canInvite) + Number(canEdit);
   const role = viewerRole(task, me);
   const tone = stageTone(task.status);
 
@@ -667,11 +671,74 @@ export function TaskDetail({ id }: { id: string }) {
                   {task.assignee_policy?.type === "specific" && (task.assignee_policy.user_ids ?? []).length > 0 ? (
                     <div className="invite-existing">
                       <span className="field-label">已指定执行人</span>
-                      <div className="person-list">
-                        {(task.assignee_policy.user_ids ?? []).map((userId) => (
-                          <UserRef key={userId} userId={userId} nameOnly />
-                        ))}
-                      </div>
+                      {editingAssignees ? (
+                        <>
+                          <InvitePicker
+                            value={assigneeDraft}
+                            onChange={setAssigneeDraft}
+                            disabled={pending !== null}
+                            label="指定执行人（修改后保存）"
+                          />
+                          <div className="invite-edit-actions">
+                            <Button
+                              type="button"
+                              pending={pending === "assignees"}
+                              disabled={pending !== null || inviteUserIds(assigneeDraft).length === 0}
+                              onClick={() =>
+                                void (async () => {
+                                  setPending("assignees");
+                                  setError(null);
+                                  try {
+                                    const updated = await client.setAssignees(
+                                      task.id,
+                                      { user_ids: inviteUserIds(assigneeDraft) },
+                                      { idempotencyKey: createIdempotencyKey("assignees") },
+                                    );
+                                    setTask(updated);
+                                    setEditingAssignees(false);
+                                  } catch (err) {
+                                    setError(formatError(err));
+                                  } finally {
+                                    setPending(null);
+                                  }
+                                })()
+                              }
+                            >
+                              保存指定执行人
+                            </Button>
+                            <Button
+                              type="button"
+                              kind="secondary"
+                              disabled={pending !== null}
+                              onClick={() => setEditingAssignees(false)}
+                            >
+                              取消
+                            </Button>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="person-list">
+                            {(task.assignee_policy.user_ids ?? []).map((userId) => (
+                              <UserRef key={userId} userId={userId} nameOnly />
+                            ))}
+                          </div>
+                          {canEdit ? (
+                            <Button
+                              type="button"
+                              kind="secondary"
+                              className="compact"
+                              disabled={pending !== null}
+                              onClick={() => {
+                                setAssigneeDraft((task.assignee_policy.user_ids ?? []).join(", "));
+                                setEditingAssignees(true);
+                              }}
+                            >
+                              修改指定执行人
+                            </Button>
+                          ) : null}
+                        </>
+                      )}
                     </div>
                   ) : null}
                   <InvitePicker

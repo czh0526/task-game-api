@@ -177,6 +177,11 @@ type (
 		IdempotencyKey string   `header:"Idempotency-Key,optional" json:"-"`
 		UserIds        []string `json:"user_ids"`
 	}
+	SetAssigneesReq {
+		TaskId         string   `path:"taskId" json:"-"`
+		IdempotencyKey string   `header:"Idempotency-Key,optional" json:"-"`
+		UserIds        []string `json:"user_ids"`
+	}
 	ListTaskInvitesReq {
 		TaskId string `path:"taskId" json:"-"`
 	}
@@ -478,6 +483,9 @@ service taskgame {
 
 	@handler inviteTask
 	post /tasks/:taskId/invites (InviteUsersReq) returns (InviteList)
+
+	@handler setAssignees
+	put /tasks/:taskId/assignees (SetAssigneesReq) returns (Task)
 
 	@handler dropoutTask
 	post /tasks/:taskId/dropout (DropoutTaskReq) returns (Task)

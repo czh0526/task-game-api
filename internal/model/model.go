@@ -134,6 +134,7 @@ const (
 	EventTaskArbitrated        = "task.arbitrated"
 	EventTaskInvited           = "task.invited"
 	EventTaskInviteDeclined    = "task.invite_declined"
+	EventTaskAssigneesChanged  = "task.assignees_changed"
 	EventEscrowHold            = "escrow.hold"
 	EventEscrowRelease         = "escrow.release"
 	EventEscrowRefund          = "escrow.refund"
@@ -166,6 +167,7 @@ var WebhookEventTypes = map[string]struct{}{
 	EventTaskArbitrated:        {},
 	EventTaskInvited:           {},
 	EventTaskInviteDeclined:    {},
+	EventTaskAssigneesChanged:  {},
 	EventEscrowHold:            {},
 	EventEscrowRelease:         {},
 	EventEscrowRefund:          {},

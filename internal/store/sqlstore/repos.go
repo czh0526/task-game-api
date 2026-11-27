@@ -1515,6 +1515,11 @@ func (r *inviteRepo) DeleteByRole(ctx context.Context, taskID, roleID string) er
 	return err
 }
 
+func (r *inviteRepo) DeleteByUser(ctx context.Context, taskID, userID string) error {
+	_, err := r.q.ExecContext(ctx, `DELETE FROM invites WHERE task_id = ? AND user_id = ?`, taskID, userID)
+	return err
+}
+
 func (r *inviteRepo) listInvites(ctx context.Context, query string, args ...any) ([]model.Invite, error) {
 	rows, err := r.q.QueryContext(ctx, query, args...)
 	if err != nil {

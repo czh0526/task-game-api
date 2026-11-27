@@ -41,6 +41,22 @@ export interface InviteTask {
   publisher_id: string;
   executor_ids?: string[];
   competitive?: { slots?: number };
+  assignee_policy?: { type?: string; user_ids?: string[] };
+}
+
+/**
+ * The assignee list can be replaced only by the publisher, on a specific-policy
+ * task that is still open. Collaborative tasks use per-seat invites instead.
+ * Mirrors the server's SetAssignees guard.
+ */
+export function canEditAssignees(me: string | undefined, task: InviteTask): boolean {
+  return (
+    !!me &&
+    me === task.publisher_id &&
+    task.kind !== "collaborative" &&
+    task.status === "open" &&
+    task.assignee_policy?.type === "specific"
+  );
 }
 
 /**

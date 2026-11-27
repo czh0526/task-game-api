@@ -171,6 +171,12 @@ func (r *routingInviteRepo) DeleteByRole(ctx context.Context, taskID, roleID str
 	})
 }
 
+func (r *routingInviteRepo) DeleteByUser(ctx context.Context, taskID, userID string) error {
+	return broadcast(r.s, func(c store.Store) error {
+		return c.Invites().DeleteByUser(ctx, taskID, userID)
+	})
+}
+
 // --------------------------------------------------------------- friend ----
 
 // Friend rows are written in the caller's cell and may be queried by the peer,

@@ -385,6 +385,14 @@ type InviteUsersReq struct {
 	RoleId         string   `json:"role_id,optional"`
 }
 
+// SetAssigneesReq replaces the whole specific-policy assignee list. Only the
+// publisher may call it, and only while the task is still open.
+type SetAssigneesReq struct {
+	TaskId         string   `path:"taskId" json:"-"`
+	IdempotencyKey string   `header:"Idempotency-Key,optional" json:"-"`
+	UserIds        []string `json:"user_ids"`
+}
+
 type ListTaskInvitesReq struct {
 	TaskId string `path:"taskId" json:"-"`
 }
