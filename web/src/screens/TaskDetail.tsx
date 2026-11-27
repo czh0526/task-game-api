@@ -664,6 +664,16 @@ export function TaskDetail({ id }: { id: string }) {
 
               {canInvite ? (
                 <Operation title="邀请执行者" description="邀请指定用户参与，按昵称选择。">
+                  {task.assignee_policy?.type === "specific" && (task.assignee_policy.user_ids ?? []).length > 0 ? (
+                    <div className="invite-existing">
+                      <span className="field-label">已指定执行人</span>
+                      <div className="person-list">
+                        {(task.assignee_policy.user_ids ?? []).map((userId) => (
+                          <UserRef key={userId} userId={userId} nameOnly />
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                   <InvitePicker
                     value={inviteUser}
                     onChange={setInviteUser}

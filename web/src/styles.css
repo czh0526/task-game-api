@@ -766,6 +766,10 @@ th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line
 .pick-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
 .pick-block { margin-top: 8px; }
 
+/* Already-designated executors shown above the invite picker in the action panel. */
+.invite-existing { display: grid; gap: 6px; width: 100%; }
+.invite-existing .field-label { font-weight: 650; }
+
 /* Invite picker: selected users show as nickname chips, never raw ids. */
 .invite-picker { display: grid; gap: 8px; width: 100%; }
 .invite-picker .field-label { font-weight: 650; }
