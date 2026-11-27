@@ -21,7 +21,7 @@ import {
   parseIntStrict,
   validUserId,
 } from "../format";
-import { FriendPicker, appendUserId } from "../friends";
+import { InvitePicker } from "../friends";
 import {
   EXAMPLE_MILESTONES,
   MAX_MILESTONES,
@@ -454,15 +454,12 @@ export function CreateTask() {
         </fieldset>
         {form.policy === "specific" ? (
           <>
-            <Field label="指定用户 user_ids" hint="用逗号或空格分隔，也可以从好友列表点选。注资后会给他们发邀请。">
-              <input
-                value={form.policyUsers}
-                spellCheck={false}
-                placeholder="usr_executor"
-                onChange={(event) => patch({ policyUsers: event.target.value })}
-              />
-            </Field>
-            <FriendPicker onPick={(id) => patch({ policyUsers: appendUserId(form.policyUsers, id) })} />
+            <InvitePicker
+              value={form.policyUsers}
+              onChange={(next) => patch({ policyUsers: next })}
+              label="指定用户"
+            />
+            <p className="hint">按昵称选择，注资后会给他们发邀请。</p>
           </>
         ) : null}
         {form.policy === "criteria" ? (

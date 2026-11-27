@@ -124,6 +124,9 @@ func unifiedReadyToStart(t model.Task) bool {
 		return false
 	}
 	for _, role := range t.Collaborative.Roles {
+		if role.Status == model.RoleRemoved {
+			continue
+		}
 		if role.Status != model.RoleFilled || role.AssigneeUserID == "" {
 			return false
 		}

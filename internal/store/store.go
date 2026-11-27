@@ -155,6 +155,9 @@ type InviteRepo interface {
 	Find(ctx context.Context, taskID, userID string) (model.Invite, error)
 	ListByTask(ctx context.Context, taskID string) ([]model.Invite, error)
 	ListByUser(ctx context.Context, userID, status string) ([]model.Invite, error)
+	// DeleteByRole removes every invite bound to a collaborative seat. Used when
+	// the publisher removes that seat. Returns nil when no rows match.
+	DeleteByRole(ctx context.Context, taskID, roleID string) error
 }
 
 // FriendRepo stores mutual friendships, directed requests, and personal groups.

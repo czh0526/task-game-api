@@ -37,6 +37,9 @@ func (e *Engine) StartTask(ctx context.Context, userID string, req *types.StartT
 		}
 		var openIDs []string
 		for _, role := range t.Collaborative.Roles {
+			if role.Status == model.RoleRemoved {
+				continue
+			}
 			if role.Status == model.RoleFilled && role.AssigneeUserID != "" {
 				continue
 			}
@@ -113,7 +116,7 @@ func perSeatTaskStatus(t model.Task) string {
 			submittedN++
 		case model.RoleSettled:
 			paidN++
-		case model.RoleRefunded:
+		case model.RoleRefunded, model.RoleRemoved:
 			refundN++
 		case model.RoleDisputed:
 			disputedN++
@@ -144,6 +147,9 @@ func collaborativeUnifiedReady(t model.Task) bool {
 		return false
 	}
 	for _, role := range t.Collaborative.Roles {
+		if role.Status == model.RoleRemoved {
+			continue
+		}
 		if role.Status != model.RoleSubmitted && role.Status != model.RoleSettled {
 			return false
 		}
@@ -239,7 +245,7 @@ func ensureUnifiedReady(t model.Task, subs []model.Submission, milestoneID strin
 	var openIDs, missing []string
 	for _, role := range t.Collaborative.Roles {
 		switch role.Status {
-		case model.RoleSettled, model.RoleRefunded:
+		case model.RoleSettled, model.RoleRefunded, model.RoleRemoved:
 			continue
 		case model.RoleFilled, model.RoleSubmitted:
 			if role.AssigneeUserID == "" || findSubmission(subs, milestoneID, role.AssigneeUserID) == nil {
@@ -470,7 +476,7 @@ func perSeatActions(t model.Task, roleID string, auto bool) ([]seatAction, error
 			switch role.Status {
 			case model.RoleSubmitted:
 				actions = append(actions, seatAction{index: i, pay: true})
-			case model.RoleSettled, model.RoleRefunded, model.RoleDisputed:
+			case model.RoleSettled, model.RoleRefunded, model.RoleRemoved, model.RoleDisputed:
 			default:
 				return nil, errAutoDeferred
 			}
@@ -496,6 +502,8 @@ func perSeatActions(t model.Task, roleID string, auto bool) ([]seatAction, error
 			return nil, biz.Conflict("seat is already settled")
 		case model.RoleRefunded:
 			return nil, biz.Conflict("seat is already refunded")
+		case model.RoleRemoved:
+			return nil, biz.Conflict("seat was removed")
 		default:
 			return nil, biz.Conflict("seat cannot be confirmed")
 		}
