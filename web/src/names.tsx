@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import type { TaskGameClient } from "taskgame-client";
 import { isSignedIn } from "./client";
 import { useApp } from "./context";
-import { personLabel, senderDisplayName } from "./person";
+import { nicknameOnly, personLabel, senderDisplayName } from "./person";
 import { openUserCard } from "./userCard";
 
 const nicknames = new Map<string, string>();
@@ -73,8 +73,11 @@ export function PersonName({
   );
 }
 
-export function UserRef({ userId }: { userId: string }): ReactNode {
+export function UserRef({ userId, nameOnly = false }: { userId: string; nameOnly?: boolean }): ReactNode {
   const nickname = useNickname(userId);
+  if (nameOnly) {
+    return <PersonName nickname={nickname} userId={userId} label={nicknameOnly(nickname)} />;
+  }
   return <PersonName nickname={nickname} userId={userId} />;
 }
 
@@ -83,9 +86,10 @@ export function UserRef({ userId }: { userId: string }): ReactNode {
  * with a short-id fallback while the nickname is unknown. Clicking it still
  * opens the user's public profile card.
  */
-export function SenderName({ userId }: { userId: string }): ReactNode {
+export function SenderName({ userId, nameOnly = false }: { userId: string; nameOnly?: boolean }): ReactNode {
   const nickname = useNickname(userId);
-  return <PersonName nickname={nickname} userId={userId} label={senderDisplayName(nickname, userId)} />;
+  const label = nameOnly ? nicknameOnly(nickname) : senderDisplayName(nickname, userId);
+  return <PersonName nickname={nickname} userId={userId} label={label} />;
 }
 
 export function useNickname(userId: string): string | undefined {
@@ -108,6 +112,33 @@ export function useNickname(userId: string): string | undefined {
   }, [client, userId, signedIn]);
 
   return value;
+}
+
+/** Resolve a batch of ids to nicknames, loading any that are still unknown. */
+export function useNicknames(userIds: string[]): Record<string, string | undefined> {
+  const { client, settings } = useApp();
+  const signedIn = isSignedIn(settings);
+  const [, force] = useState(0);
+  const key = userIds.join("\u0000");
+
+  useEffect(() => {
+    const listener = () => force((n) => n + 1);
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!client) return;
+    for (const id of key.split("\u0000")) {
+      if (id && !nicknames.has(id)) schedule(client, id, signedIn);
+    }
+  }, [client, key, signedIn]);
+
+  const out: Record<string, string | undefined> = {};
+  for (const id of userIds) out[id] = nicknames.get(id);
+  return out;
 }
 
 function schedule(client: TaskGameClient, userId: string, signedIn: boolean): void {

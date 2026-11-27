@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { idSuffix, nicknameError, personLabel, senderDisplayName } from "../src/person.ts";
+import { idSuffix, nicknameError, nicknameOnly, personLabel, senderDisplayName } from "../src/person.ts";
 
 test("a nickname is shown on its own, without an id suffix", () => {
   const id = "usr_ab12cd34ef56ab12cda1b2c3";
@@ -28,6 +28,17 @@ test("chat bubble sender names show the nickname without an id suffix", () => {
   assert.equal(senderDisplayName(undefined, id), "...a1b2c3");
   assert.equal(senderDisplayName(null, ""), "未命名");
   assert.equal(senderDisplayName("张伟", ""), "张伟");
+});
+
+test("name-only mode never leaks an id suffix", () => {
+  const id = "usr_ab12cd34ef56ab12cda1b2c3";
+  assert.equal(nicknameOnly("阿宁同学", undefined), "阿宁同学");
+  assert.equal(nicknameOnly("  阿宁同学  ", undefined), "阿宁同学");
+  assert.equal(nicknameOnly("", undefined), "用户");
+  assert.equal(nicknameOnly("   ", undefined), "用户");
+  assert.equal(nicknameOnly(undefined, undefined), "用户");
+  assert.equal(nicknameOnly(null, undefined), "用户");
+  assert.equal(nicknameOnly("", "匿名"), "匿名");
 });
 
 test("nickname validation is visible in Chinese", () => {

@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import type { FriendList } from "taskgame-client";
 import { useApp } from "./context";
 import { formatError, isAbort } from "./format";
-import { PersonName } from "./names";
+import { PersonName, useNicknames } from "./names";
+import { nicknameOnly } from "./person";
+import { inviteUserIds } from "./stageLoop";
 
 export function appendUserId(current: string, id: string): string {
   const parts = current
@@ -55,6 +57,94 @@ export function FriendPicker({ onPick, disabled }: { onPick: (userId: string) =>
         </div>
       ))}
     </details>
+  );
+}
+
+/**
+ * Invite editor that shows selected users by nickname instead of raw ids.
+ * The value stays the same comma/space-separated id string used by existing
+ * submit logic, so callers only swap the input UI and keep their payload code.
+ */
+export function InvitePicker({
+  value,
+  onChange,
+  disabled,
+  label = "邀请对象",
+  placeholder = "输入用户 id，或从下方好友列表点选",
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  disabled?: boolean;
+  label?: string;
+  placeholder?: string;
+}) {
+  const ids = inviteUserIds(value);
+  const names = useNicknames(ids);
+  const [draft, setDraft] = useState("");
+
+  function addIds(incoming: string[]) {
+    const merged = inviteUserIds([...ids, ...incoming].join(", "));
+    onChange(merged.join(", "));
+    setDraft("");
+  }
+
+  function remove(id: string) {
+    onChange(
+      ids
+        .filter((item) => item !== id)
+        .join(", "),
+    );
+  }
+
+  return (
+    <div className="invite-picker">
+      <span className="field-label">{label}</span>
+      <div className="invite-chips">
+        {ids.length === 0 ? <span className="hint">还没有选择</span> : null}
+        {ids.map((id) => (
+          <span className="invite-chip" key={id} title={nicknameOnly(names[id])}>
+            <PersonName nickname={names[id]} userId={id} chat={false} label={nicknameOnly(names[id])} />
+            <button
+              type="button"
+              className="invite-chip-remove"
+              aria-label={`移除 ${nicknameOnly(names[id])}`}
+              disabled={disabled}
+              onClick={() => remove(id)}
+            >
+              ×
+            </button>
+          </span>
+        ))}
+      </div>
+      <details className="friend-pick invite-manual">
+        <summary>手动添加用户</summary>
+        <div className="invite-manual-row">
+          <input
+            value={draft}
+            spellCheck={false}
+            placeholder={placeholder}
+            disabled={disabled}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                const parts = inviteUserIds(draft);
+                if (parts.length > 0) addIds(parts);
+              }
+            }}
+          />
+          <button
+            type="button"
+            className="btn secondary compact"
+            disabled={disabled || inviteUserIds(draft).length === 0}
+            onClick={() => addIds(inviteUserIds(draft))}
+          >
+            添加
+          </button>
+        </div>
+      </details>
+      <FriendPicker disabled={disabled} onPick={(userId) => addIds([userId])} />
+    </div>
   );
 }
 
